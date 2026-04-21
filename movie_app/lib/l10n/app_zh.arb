@@ -1,0 +1,150 @@
+{
+  "@@locale": "zh",
+  "appTitle": "高清影视",
+  "appInitLoading": "正在初始化…",
+  "appInitRetry": "重试",
+  "appInitErrorTitle": "启动失败",
+  "navHome": "首页",
+  "toolbarBrandGoHome": "回到首页",
+  "navFollow": "追剧",
+  "navProfile": "我的",
+  "detailIntro": "简介",
+  "detailPlayRoutes": "播放线路",
+  "detailMagnetSearch": "磁力搜索",
+  "detailMagnetSearchHint": "以下为多源聚合结果：优先按 IMDb/片名/年份匹配；英文资源旁显示本片中文名标签。",
+  "detailOpenMagnetSearch": "打开磁力搜索",
+  "detailRelated": "相关推荐",
+  "detailRelatedHint": "相关推荐功能",
+  "detailDesktopEpisodes": "选集",
+  "detailDesktopTabMagnet": "磁力",
+  "detailDesktopTabRecommend": "推荐",
+  "detailDesktopNoEpisodes": "该线路暂无分集",
+  "detailMagnetOpenInSearch": "用片名打开搜索",
+  "detailMagnetRefreshStrict": "精准搜索",
+  "detailMagnetRefreshLoose": "扩大范围",
+  "detailMagnetSearching": "正在检索磁力…",
+  "detailMagnetPlay": "播放",
+  "detailMagnetOpenDetail": "磁力详情",
+  "detailMagnetZhLabelHint": "对应本片",
+  "designV3MovieTitle": "星际穿越",
+  "designV3DoubanLabel": "豆瓣",
+  "designV3MetaLine": "2014 | 科幻 冒险 | 169分钟",
+  "designV3SynopsisCollapsed": "影片讲述了一队探险家利用对虫洞的新发现…",
+  "designV3SynopsisFull": "影片讲述了一队探险家利用对虫洞的新发现，超越人类对太空旅行的极限，在广袤的宇宙中进行星际航行。",
+  "designV3ExpandIntro": "展开简介",
+  "designV3CollapseIntro": "收起简介",
+  "designV3BufferDemo": "缓冲 1.8 MB/s",
+  "designV3TimeDemo": "34:12 / 2:49:05",
+  "designV3EpisodeChip1": "星际穿越 主集 1",
+  "designV3EpisodeChip2": "星际穿越 2",
+  "designV3RouteLine1": "线路 1（主线路）",
+  "designV3RouteLine2": "线路 2（备用）",
+  "designV3RelatedMartian": "火星救援",
+  "designV3RelatedArrival": "降临",
+  "designV3RelatedInception": "盗梦空间",
+  "designV3RelatedGravity": "地心引力",
+  "designV3MagnetRowTitle": "星际穿越.2160p.4K.HDR…",
+  "designV3MagnetRowMeta": "22.5 GB · 磁力",
+  "designV3TooltipPlayPause": "播放或暂停",
+  "designV3TooltipSpeed": "播放速度",
+  "designV3TooltipVolume": "音量",
+  "designV3TooltipCast": "投屏",
+  "designV3TooltipFullscreen": "全屏",
+  "designV3TooltipDownload": "下载",
+  "designV3TooltipFavorite": "收藏",
+  "designV3TooltipShare": "分享",
+  "detailPlayerPrevEpisode": "上一集",
+  "detailPlayerNextEpisode": "下一集",
+  "detailPlayerTooltipCache": "缓存",
+  "detailPlayerFullscreenEnter": "全屏",
+  "detailPlayerFullscreenExit": "退出全屏",
+  "detailPlayerSubtitleMenu": "字幕（自动匹配 / 选择）",
+  "detailPlayerSubtitleSheetTitle": "字幕",
+  "detailPlayerSubtitleAutoMatch": "在线自动匹配",
+  "detailPlayerSubtitleAutoMatchSubtitle": "磁力等无内嵌字幕时，按片名尝试匹配（需 OpenSubtitles API Key）",
+  "detailPlayerSubtitlePickFile": "选择本地字幕文件…",
+  "detailPlayerSubtitleOff": "恢复内嵌轨 / 关闭外挂",
+  "detailPlayerSubtitleBrowseOnline": "浏览在线字幕…",
+  "detailPlayerSubtitleLoading": "正在搜索字幕…",
+  "detailPlayerSubtitleNone": "未找到字幕",
+  "detailPlayerSubtitleNoApiKey": "请先在设置中填写 OpenSubtitles API Key",
+  "detailPlayerSubtitleApplyFailed": "加载字幕失败",
+  "detailPlayerSubtitleApplied": "已加载字幕",
+  "homeTitleRecommend": "推荐",
+  "homeEndOfListHint": "没有更多了",
+  "toolbarSearch": "搜索",
+  "toolbarFollow": "追剧",
+  "toolbarProfile": "我的",
+  "toolbarSettings": "设置",
+  "toolbarViewComfort": "切换为舒适视图",
+  "toolbarViewCompact": "切换为紧凑视图",
+  "toolbarTheme": "切换主题",
+  "toolbarThemeSwitched": "已切换为：{name}",
+  "@toolbarThemeSwitched": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "toolbarSearchPlaceholderHome": "搜索影片、剧集…",
+  "toolbarSearchPlaceholderInChannel": "搜索{channelLabel}…",
+  "@toolbarSearchPlaceholderInChannel": {
+    "placeholders": {
+      "channelLabel": {
+        "type": "String"
+      }
+    }
+  },
+  "filterLabelGenre": "类型",
+  "filterLabelRegion": "地区",
+  "navChannelMovies": "电影",
+  "navChannelTv": "连续剧",
+  "navChannelVariety": "综艺",
+  "navChannelAnime": "动漫",
+  "navChannelShort": "短剧",
+  "homePortalChipLatest": "最新",
+  "homePortalRankSectionTitle": "{label}热播榜",
+  "@homePortalRankSectionTitle": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "searchWideAggregateHint": "以下为多源聚合结果与搜索历史；与静态演示稿一致为功能说明。",
+  "categoryPortalHotRankTitle": "热播榜",
+  "categoryPortalModuleHighlights": "精选",
+  "categoryPortalModuleMorePicks": "更多推荐",
+  "categoryPortalModuleKeepGoing": "继续浏览",
+  "categoryPortalModuleMore": "更多",
+  "categoryPortalModuleMoreTooltip": "在首页浏览该分类",
+  "categoryPortalModuleTagged": "{genre} · 精选",
+  "@categoryPortalModuleTagged": {
+    "placeholders": {
+      "genre": {
+        "type": "String"
+      }
+    }
+  },
+  "categoryPortalModuleEmpty": "暂无该片单",
+  "categoryPortalScrollForMore": "继续滑动可加载更多",
+  "categoryPortalRankEmpty": "暂无榜单数据",
+  "categoryPortalRankScore": "{score} 分",
+  "@categoryPortalRankScore": {
+    "placeholders": {
+      "score": {
+        "type": "String"
+      }
+    }
+  },
+  "categoryPortalEmptyHint": "暂无本频道数据，请检查网络或播放源。",
+  "homeOpenDedicatedChannel": "宽屏频道页",
+  "homeOpenDedicatedChannelTooltip": "打开与静态稿一致的宽屏频道布局",
+  "homeTabRecommend": "推荐",
+  "homeScrollToTopTooltip": "回到顶部",
+  "homeSnackbarRetry": "重试",
+  "homeLoadFailedTapRetry": "加载失败，点击重试",
+  "homeSectionSeeMore": "查看更多",
+  "homeSectionCollapse": "收起"
+}

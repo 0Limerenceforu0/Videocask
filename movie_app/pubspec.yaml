@@ -1,0 +1,132 @@
+name: movie_app
+description: 跨端影视播放应用 - 覆盖Android、PC、Web三端
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # 状态管理
+  provider: ^6.1.1
+
+  # 路由
+  go_router: ^13.1.0
+
+  # Android / iOS 前台深度链接（与 argv 桌面方案互补）
+  app_links: ^6.3.3
+
+  # 本地存储
+  shared_preferences: ^2.2.2
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+  # 网络请求
+  dio: ^5.4.0
+
+  # 视频播放
+  media_kit: ^1.2.5
+  media_kit_video: ^1.2.5
+  media_kit_libs_video: ^1.0.7
+
+  # 轮播
+  carousel_slider: ^5.0.0
+
+  # 图片缓存
+  cached_network_image: ^3.3.1
+
+  # JSON序列化
+  json_annotation: ^4.8.1
+
+  # 加密
+  encrypt: ^5.0.3
+
+  # WebDAV
+  webdav_client: ^1.2.1
+
+  # DLNA投屏
+  dlna_dart: ^0.1.0
+
+  # 字幕
+  subtitle_wrapper_package: ^2.2.0
+
+  # 图标和字体
+  cupertino_icons: ^1.0.6
+  google_fonts: ^6.1.0
+
+  # 平台检测
+  universal_platform: ^1.0.0+1
+
+  # PWA支持
+  flutter_launcher_icons: ^0.13.1
+
+  # 路径处理
+  path_provider: ^2.1.2
+
+  # 权限管理
+  permission_handler: ^11.3.0
+
+  # 设备信息
+  device_info_plus: ^9.1.2
+
+  # URL启动器
+  url_launcher: ^6.2.4
+
+  # 国际化
+  intl: ^0.20.2
+
+  # 动画
+  flutter_staggered_animations: ^1.1.1
+
+  # 骨架屏加载动画
+  shimmer: ^3.0.0
+
+  # 网络状态检测
+  connectivity_plus: ^5.0.2
+
+  # 二维码生成
+  qr_flutter: ^4.1.0
+
+  # 系统分享
+  share_plus: ^7.2.1
+
+  # 消息提示
+  overlay_support: ^2.1.0
+
+  # P2P 磁力链接流式播放
+  libtorrent_flutter: ^1.7.8
+
+  # 桌面窗口管理（全屏等）
+  window_manager: ^0.4.3
+
+  # 文件选择（≥8 兼容 Flutter 已移除的 v1 嵌入 API）
+  file_picker: ^10.3.8
+  screen_brightness: ^2.1.7
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+  build_runner: ^2.4.8
+  json_serializable: ^6.7.1
+  hive_generator: ^2.0.1
+
+flutter:
+  generate: true
+  uses-material-design: true
+
+  assets:
+    - assets/images/
+    - assets/icons/
+
+  fonts:
+    - family: AppIcons
+      fonts:
+        - asset: assets/fonts/AppIcons.ttf

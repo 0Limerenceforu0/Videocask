@@ -1,0 +1,31 @@
+---
+description: movie_app 代码规范与提交流程（必须与 CI 一致）
+alwaysApply: true
+---
+
+# movie_app 工程规范
+
+对本仓库的**任何**增删改（含由 Agent 生成的代码）须遵守下列约束；与 [docs/code_standards.md](docs/code_standards.md) 及 CI 保持一致。
+
+## 提交前必过
+
+1. `dart format lib test tool`（或全仓 `dart format .`）
+2. `dart format --output=none --set-exit-if-changed lib test tool` 退出码 0
+3. `flutter analyze` 无问题
+4. `flutter test` 通过
+5. 修改/新增文案时：`lib/l10n/app_zh.arb` + `app_en.arb` 同步，并执行 `flutter gen-l10n`
+
+Windows 开发：使用 **LF** 行尾；勿提交与 `.gitattributes` 冲突的 CRLF-only 变更。
+
+## 代码习惯
+
+- **用户可见字符串**：走 `AppLocalizations.of(context)!`，禁止在 UI 中新增硬编码中文/英文句子。
+- **`async` + `BuildContext`**：`await` 后使用 `context` 前必须 `if (!context.mounted) return;`。
+- **未 await 的 Future**：使用 `unawaited(...)`（`import 'dart:async' show unawaited;`）。
+- **导航/图标按钮**：提供 `tooltip` 或 `Semantics`，保证读屏可理解。
+- **大页面**：新增 UI 优先抽到独立 `Widget` 文件（参考 `detail_movie_info_section.dart`），避免单文件无限膨胀。
+
+## 禁止
+
+- 使用 `print`（使用 `debugPrint` 或日志方案；分析器已启用 `avoid_print`）。
+- 从 `lib` 外部用相对路径绕进 `lib`（分析器 `avoid_relative_lib_imports`）；`lib` 内部 import 风格与相邻文件保持一致，新建跨目录模块可优先 `package:movie_app/...`。

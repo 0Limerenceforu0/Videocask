@@ -1,0 +1,150 @@
+{
+  "@@locale": "en",
+  "appTitle": "Movie App",
+  "appInitLoading": "Initializing…",
+  "appInitRetry": "Retry",
+  "appInitErrorTitle": "Startup failed",
+  "navHome": "Home",
+  "toolbarBrandGoHome": "Back to home",
+  "navFollow": "Following",
+  "navProfile": "Profile",
+  "detailIntro": "Synopsis",
+  "detailPlayRoutes": "Play sources",
+  "detailMagnetSearch": "Magnet search",
+  "detailMagnetSearchHint": "Multi-source magnet results: IMDb/title/year match; Chinese title tag on English-named torrents.",
+  "detailOpenMagnetSearch": "Open magnet search",
+  "detailRelated": "Related",
+  "detailRelatedHint": "Related recommendations",
+  "detailDesktopEpisodes": "Episodes",
+  "detailDesktopTabMagnet": "Magnet",
+  "detailDesktopTabRecommend": "Related",
+  "detailDesktopNoEpisodes": "No episodes for this source",
+  "detailMagnetOpenInSearch": "Search by title",
+  "detailMagnetRefreshStrict": "Strict search",
+  "detailMagnetRefreshLoose": "Broaden",
+  "detailMagnetSearching": "Searching magnets…",
+  "detailMagnetPlay": "Play",
+  "detailMagnetOpenDetail": "Torrent detail",
+  "detailMagnetZhLabelHint": "This title",
+  "designV3MovieTitle": "Interstellar",
+  "designV3DoubanLabel": "Douban",
+  "designV3MetaLine": "2014 · Sci‑Fi Adventure · 169 min",
+  "designV3SynopsisCollapsed": "Explorers use a newly discovered wormhole…",
+  "designV3SynopsisFull": "Explorers use a newly discovered wormhole to push beyond the limits of human space travel and journey across the galaxy.",
+  "designV3ExpandIntro": "Expand synopsis",
+  "designV3CollapseIntro": "Collapse synopsis",
+  "designV3BufferDemo": "Buffer 1.8 MB/s",
+  "designV3TimeDemo": "34:12 / 2:49:05",
+  "designV3EpisodeChip1": "Interstellar · Part 1",
+  "designV3EpisodeChip2": "Interstellar · Part 2",
+  "designV3RouteLine1": "Source 1 (primary)",
+  "designV3RouteLine2": "Source 2 (backup)",
+  "designV3RelatedMartian": "The Martian",
+  "designV3RelatedArrival": "Arrival",
+  "designV3RelatedInception": "Inception",
+  "designV3RelatedGravity": "Gravity",
+  "designV3MagnetRowTitle": "Interstellar.2160p.4K.HDR…",
+  "designV3MagnetRowMeta": "22.5 GB · magnet",
+  "designV3TooltipPlayPause": "Play or pause",
+  "designV3TooltipSpeed": "Playback speed",
+  "designV3TooltipVolume": "Volume",
+  "designV3TooltipCast": "Cast",
+  "designV3TooltipFullscreen": "Fullscreen",
+  "designV3TooltipDownload": "Download",
+  "designV3TooltipFavorite": "Favorite",
+  "designV3TooltipShare": "Share",
+  "detailPlayerPrevEpisode": "Previous episode",
+  "detailPlayerNextEpisode": "Next episode",
+  "detailPlayerTooltipCache": "Cache / downloads",
+  "detailPlayerFullscreenEnter": "Full screen",
+  "detailPlayerFullscreenExit": "Exit full screen",
+  "detailPlayerSubtitleMenu": "Subtitles (auto-match / pick)",
+  "detailPlayerSubtitleSheetTitle": "Subtitles",
+  "detailPlayerSubtitleAutoMatch": "Match online",
+  "detailPlayerSubtitleAutoMatchSubtitle": "When magnets have no embedded subs, try by title (needs OpenSubtitles API key)",
+  "detailPlayerSubtitlePickFile": "Choose local subtitle file…",
+  "detailPlayerSubtitleOff": "Use embedded / turn off external",
+  "detailPlayerSubtitleBrowseOnline": "Browse online subtitles…",
+  "detailPlayerSubtitleLoading": "Searching subtitles…",
+  "detailPlayerSubtitleNone": "No subtitles found",
+  "detailPlayerSubtitleNoApiKey": "Add an OpenSubtitles API key in Settings first",
+  "detailPlayerSubtitleApplyFailed": "Could not load subtitles",
+  "detailPlayerSubtitleApplied": "Subtitles loaded",
+  "homeTitleRecommend": "Recommendations",
+  "homeEndOfListHint": "No more",
+  "toolbarSearch": "Search",
+  "toolbarFollow": "Following",
+  "toolbarProfile": "Profile",
+  "toolbarSettings": "Settings",
+  "toolbarViewComfort": "Comfortable grid",
+  "toolbarViewCompact": "Compact grid",
+  "toolbarTheme": "Theme",
+  "toolbarThemeSwitched": "Switched to: {name}",
+  "@toolbarThemeSwitched": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "toolbarSearchPlaceholderHome": "Search movies and shows…",
+  "toolbarSearchPlaceholderInChannel": "Search {channelLabel}…",
+  "@toolbarSearchPlaceholderInChannel": {
+    "placeholders": {
+      "channelLabel": {
+        "type": "String"
+      }
+    }
+  },
+  "filterLabelGenre": "Genre",
+  "filterLabelRegion": "Region",
+  "navChannelMovies": "Movies",
+  "navChannelTv": "TV Series",
+  "navChannelVariety": "Variety",
+  "navChannelAnime": "Anime",
+  "navChannelShort": "Short drama",
+  "homePortalChipLatest": "Latest",
+  "homePortalRankSectionTitle": "{label} trending",
+  "@homePortalRankSectionTitle": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "searchWideAggregateHint": "Results combine enabled CMS sources, magnets, and history—same role as the static demo note.",
+  "categoryPortalHotRankTitle": "Trending",
+  "categoryPortalModuleHighlights": "Featured",
+  "categoryPortalModuleMorePicks": "More picks",
+  "categoryPortalModuleKeepGoing": "Keep exploring",
+  "categoryPortalModuleMore": "More",
+  "categoryPortalModuleMoreTooltip": "Browse this category on the home screen",
+  "categoryPortalModuleTagged": "{genre} · Picks",
+  "@categoryPortalModuleTagged": {
+    "placeholders": {
+      "genre": {
+        "type": "String"
+      }
+    }
+  },
+  "categoryPortalModuleEmpty": "Nothing in this row yet",
+  "categoryPortalScrollForMore": "Scroll down to load more",
+  "categoryPortalRankEmpty": "No ranking data yet",
+  "categoryPortalRankScore": "{score} pts",
+  "@categoryPortalRankScore": {
+    "placeholders": {
+      "score": {
+        "type": "String"
+      }
+    }
+  },
+  "categoryPortalEmptyHint": "No titles in this channel. Check your network or sources.",
+  "homeOpenDedicatedChannel": "Channel layout",
+  "homeOpenDedicatedChannelTooltip": "Open the wide-screen channel layout (hi-fi spec)",
+  "homeTabRecommend": "For you",
+  "homeScrollToTopTooltip": "Back to top",
+  "homeSnackbarRetry": "Retry",
+  "homeLoadFailedTapRetry": "Load failed, tap to retry",
+  "homeSectionSeeMore": "Show more",
+  "homeSectionCollapse": "Show less"
+}
