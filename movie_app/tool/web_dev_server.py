@@ -343,6 +343,13 @@ class WebHandler(ProxyMixin, SimpleHTTPRequestHandler):
         if not self._is_proxy_path():
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Cross-Origin-Resource-Policy", "cross-origin")
+            # 入口文件不缓存：index.html 里的启动占位层移除逻辑改动后，
+            # 若浏览器复用旧副本会继续黑屏/灰屏，误导排查方向。
+            path = urllib.parse.urlparse(self.path or "").path.rstrip("/")
+            if path.endswith(("index.html", "flutter_bootstrap.js")) or path == "":
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Expires", "0")
         super().end_headers()
 
     def log_message(self, fmt, *args):

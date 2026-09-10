@@ -9,6 +9,8 @@ import 'package:window_manager/window_manager.dart';
 import 'app.dart';
 import 'config/pending_deep_link.dart';
 import 'services/error_handler.dart';
+import 'utils/web_splash_stub.dart'
+    if (dart.library.js_interop) 'utils/web_splash_web.dart' as web_splash;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,6 +30,15 @@ void main() async {
   }
 
   runApp(const MovieApp());
+
+  // Web 端：首帧渲染完成后移除 index.html 里的启动占位层（"正在加载..."）。
+  // 该占位层若不摘除会一直盖在 Flutter 视图上方，表现为永久灰屏
+  // （body 背景色 #121212 透出来），并且吞掉所有指针事件。
+  if (kIsWeb) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      web_splash.removeWebSplash();
+    });
+  }
 }
 
 Future<void> _prepareDesktopWindow() async {

@@ -52,3 +52,6 @@ app.*.map.json
 !/build/release/
 !/build/release/*.bat
 !/build/release/*.md
+
+# CDP 调试截图（诊断产物，不入库）
+tool/*.png

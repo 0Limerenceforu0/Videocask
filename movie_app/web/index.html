@@ -18,14 +18,27 @@
       margin: 0;
       padding: 0;
     }
+    /* 启动占位层：必须在 Flutter 首帧后移除。
+       旧版是普通 static 的 div，会撑开 body 高度把 flutter-view 挤到下方，
+       用户看到的就是一片 #121212 深灰底（"灰屏"）。这里改为绝对定位 + 首帧淡出。 */
     .loading {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      height: 100vh;
       color: #ffffff;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      transition: opacity 0.25s ease;
+    }
+    .loading.is-hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .loading.is-removed {
+      display: none;
     }
     .loading .spinner {
       width: 40px;
@@ -52,6 +65,25 @@
       'https://corsproxy.io/?',
     ];
 
+    // Flutter 首帧就绪后立即移除启动占位层。
+    // 兜底：无论首帧回调是否触发，最多 3 秒后也强制移除，避免永久遮挡。
+    window.__removeFlutterSplash = function() {
+      var el = document.getElementById('flutter-splash');
+      if (!el || el.dataset.removing === '1') return;
+      el.dataset.removing = '1';
+      el.classList.add('is-hidden');
+      setTimeout(function() { el.classList.add('is-removed'); }, 300);
+      console.log('[splash] removed');
+    };
+    // 检测到 flutter-view 出现（引擎已挂载）即尝试移除
+    window.__watchFlutterReady = function() {
+      if (document.querySelector('flutter-view, flt-glass-pane')) {
+        window.__removeFlutterSplash();
+        return;
+      }
+      requestAnimationFrame(window.__watchFlutterReady);
+    };
+
     // 全局CORS代理函数，供Dart调用
     // 返回Promise<string>，成功时返回响应文本，失败时返回空字符串
     window.corsFetch = async function(url) {
@@ -74,10 +106,15 @@
   </script>
 </head>
 <body>
-  <div class="loading">
+  <div class="loading" id="flutter-splash">
     <div class="spinner"></div>
     <p>正在加载...</p>
   </div>
+  <script>
+    // 引擎挂载后移除占位层；同时设 3 秒硬兜底。
+    window.__watchFlutterReady();
+    setTimeout(window.__removeFlutterSplash, 3000);
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
