@@ -75,7 +75,8 @@ class TorrentPlayerService with ChangeNotifier {
   String? get cloudProxyBase => _cloudProxyBase;
 
   void setCloudProxyBase(String? base) {
-    _cloudProxyBase = (base != null && base.trim().isNotEmpty) ? base.trim() : null;
+    _cloudProxyBase =
+        (base != null && base.trim().isNotEmpty) ? base.trim() : null;
   }
 
   /// Web 端「用云端代理试播」：把 magnet 拼到代理 URL 上，由代理服务器做种子解析与转码。

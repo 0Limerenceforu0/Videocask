@@ -11,7 +11,6 @@ import '../models/watch_history.dart';
 import '../models/favorite.dart';
 import '../models/cache_item.dart';
 import '../models/playlist.dart';
-import 'subtitle_ai_backend.dart';
 
 /// 本地存储服务 - 基于Hive
 class StorageService {
@@ -325,62 +324,6 @@ class StorageService {
   }
 
   // ==================== 通用设置 ====================
-
-  /// AI 字幕配置项
-  String get subtitleAiApiUrl =>
-      getSetting('subtitle_ai_api_url') ??
-      'http://localhost:8000/v1/audio/transcriptions';
-  Future<void> setSubtitleAiApiUrl(String v) =>
-      saveSetting('subtitle_ai_api_url', v);
-
-  String get subtitleAiApiKey => getSetting('subtitle_ai_api_key') ?? '';
-  Future<void> setSubtitleAiApiKey(String v) =>
-      saveSetting('subtitle_ai_api_key', v);
-
-  String get subtitleAiModel => getSetting('subtitle_ai_model') ?? 'base';
-  Future<void> setSubtitleAiModel(String v) =>
-      saveSetting('subtitle_ai_model', v);
-
-  String get subtitleAiLanguage => getSetting('subtitle_ai_language') ?? 'zh';
-  Future<void> setSubtitleAiLanguage(String v) =>
-      saveSetting('subtitle_ai_language', v);
-
-  int get subtitleAiMaxMinutes =>
-      getIntSetting('subtitle_ai_max_minutes', defaultValue: 10);
-  Future<void> setSubtitleAiMaxMinutes(int v) =>
-      saveIntSetting('subtitle_ai_max_minutes', v);
-
-  bool get subtitleAiSendAsUrl =>
-      getBoolSetting('subtitle_ai_send_as_url', defaultValue: false);
-  Future<void> setSubtitleAiSendAsUrl(bool v) =>
-      saveBoolSetting('subtitle_ai_send_as_url', v);
-
-  String get subtitleAiInitialPrompt =>
-      getSetting('subtitle_ai_initial_prompt') ?? '';
-  Future<void> setSubtitleAiInitialPrompt(String v) =>
-      saveSetting('subtitle_ai_initial_prompt', v);
-
-  // ==================== 离线后端设置 ====================
-
-  /// 字幕 AI 后端类型
-  SubtitleAiBackendKind get subtitleAiBackend {
-    final raw = getSetting('subtitle_ai_backend');
-    if (raw == null) return SubtitleAiBackendKind.onlineApi;
-    return SubtitleAiBackendKind.values.firstWhere(
-      (v) => v.name == raw,
-      orElse: () => SubtitleAiBackendKind.onlineApi,
-    );
-  }
-
-  Future<void> setSubtitleAiBackend(SubtitleAiBackendKind v) =>
-      saveSetting('subtitle_ai_backend', v.name);
-
-  /// 选中的离线模型 ID
-  String get subtitleAiOfflineModel =>
-      getSetting('subtitle_ai_offline_model') ?? '';
-  Future<void> setSubtitleAiOfflineModel(String v) =>
-      saveSetting('subtitle_ai_offline_model', v);
-
   // ==================== 通用设置方法 ====================
 
   /// 获取设置值

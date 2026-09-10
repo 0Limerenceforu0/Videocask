@@ -913,8 +913,7 @@ class OpenElapsedTicker {
     _timer = Timer.periodic(const Duration(milliseconds: 200), (_) {
       final s = _startedAt;
       if (s == null) return;
-      _notifier.value =
-          DateTime.now().difference(s).inMilliseconds / 1000.0;
+      _notifier.value = DateTime.now().difference(s).inMilliseconds / 1000.0;
     });
   }
 

@@ -230,8 +230,9 @@ class _DetailEpisodeGridState extends State<DetailEpisodeGrid> {
                   selected ? widget.colors.onAccent : widget.colors.muted;
               // 集数多时允许 2 行避免标题被裁；行数根据总数动态决定。
               final titleMaxLines = widget.episodes.length > 24 ? 2 : 1;
-              final double titleFontSize =
-                  display.secondary != null ? 13 : (titleMaxLines == 2 ? 12 : 13);
+              final double titleFontSize = display.secondary != null
+                  ? 13
+                  : (titleMaxLines == 2 ? 12 : 13);
               return Semantics(
                 button: true,
                 label: display.full,

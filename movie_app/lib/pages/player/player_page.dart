@@ -958,16 +958,7 @@ class _PlayerPageState extends State<PlayerPage> {
                     context: context,
                     currentIndex: -1,
                     subtitleTracks: const [],
-                    currentVideoSource: widget.url,
-                    videoTitle: widget.title,
-                    onAiSubtitleReady: (srtOrPath) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('AI 字幕生成完成，可在外挂字幕设置中加载'),
-                        ),
-                      );
-                    },
-                    onSelected: (index) {},
+                    onSelected: (_) {},
                   ),
                 ),
 

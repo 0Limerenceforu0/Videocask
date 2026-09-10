@@ -7,9 +7,6 @@ import '../../config/constants.dart';
 import '../../config/routes.dart';
 import '../../config/themes.dart';
 import '../../l10n/app_localizations.dart';
-import '../../services/storage_service.dart';
-import '../../services/subtitle_ai_backend.dart';
-import '../../widgets/ai_subtitle_settings_panel.dart';
 import 'magnet_sources_page.dart';
 import '../../providers/theme_provider.dart';
 import '../../providers/settings_provider.dart';
@@ -203,16 +200,6 @@ class SettingsPage extends StatelessWidget {
                     ? l10n.settingsTmdbApiKeyConfigured
                     : l10n.settingsTmdbApiKeyNotConfigured,
                 onTap: () => _showTmdbApiKeyDialog(context),
-              ),
-              _buildBiliDivider(colors),
-              _buildBiliSettingItem(
-                context,
-                colors,
-                icon: Icons.auto_awesome_outlined,
-                iconBgColor: const Color(0xFF7E57C2),
-                title: 'AI 字幕生成',
-                value: _aiSubtitleStatusText(context),
-                onTap: () => showAiSubtitleSettings(context),
               ),
             ],
           ),
@@ -1360,26 +1347,6 @@ class SettingsPage extends StatelessWidget {
         ],
       ),
     );
-  }
-
-  String _aiSubtitleStatusText(BuildContext context) {
-    final s = StorageService();
-    final minutes = s.subtitleAiMaxMinutes <= 0 ? 10 : s.subtitleAiMaxMinutes;
-    switch (s.subtitleAiBackend) {
-      case SubtitleAiBackendKind.onlineApi:
-        if (s.subtitleAiApiUrl.trim().isEmpty) {
-          return '在线 API 未配置 · $minutes 分钟';
-        }
-        final model = s.subtitleAiModel.isEmpty ? 'base' : s.subtitleAiModel;
-        return '在线 API · $model · $minutes 分钟';
-      case SubtitleAiBackendKind.sherpaNative:
-        if (s.subtitleAiOfflineModel.isEmpty) {
-          return '本地离线 · 未选模型 · $minutes 分钟';
-        }
-        return '本地离线 · $minutes 分钟';
-      case SubtitleAiBackendKind.transformersWeb:
-        return '浏览器 Whisper · $minutes 分钟';
-    }
   }
 
   void _showOpensubtitlesApiKeyDialog(BuildContext context) {

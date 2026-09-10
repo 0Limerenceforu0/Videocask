@@ -1767,8 +1767,7 @@ class _DetailPageState extends State<DetailPage> with RouteAware {
                             width: 36,
                             height: 36,
                             child: ValueListenableBuilder<double>(
-                              valueListenable:
-                                  _playerModule.openElapsedSeconds,
+                              valueListenable: _playerModule.openElapsedSeconds,
                               builder: (context, elapsed, _) {
                                 // 5s 之内给一个基础圆环；之后切换到缓冲进度反馈。
                                 if (elapsed < 5.0) {
@@ -1797,8 +1796,7 @@ class _DetailPageState extends State<DetailPage> with RouteAware {
                             ),
                           ),
                           if (_playerModule
-                              .openElapsedSeconds.value
-                              .isFinite) ...[
+                              .openElapsedSeconds.value.isFinite) ...[
                             const SizedBox(height: 4),
                             Text(
                               '已等待 ${_playerModule.openElapsedSeconds.value.toStringAsFixed(0)}s',
