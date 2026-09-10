@@ -47,3 +47,8 @@ app.*.map.json
 .edge_profile/
 .edge_profile2/
 %SystemDrive%/
+
+# 启动脚本（不要被 build/ 兜底忽略）
+!/build/release/
+!/build/release/*.bat
+!/build/release/*.md
