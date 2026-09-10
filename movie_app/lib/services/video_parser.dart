@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
+import 'media_fetch_headers.dart';
 import 'network/dio_factory.dart';
 
 /// 视频URL解析服务
@@ -44,7 +45,10 @@ class VideoParser {
       debugPrint('找到 m3u8 索引: $m3u8IndexUrl');
 
       // 第二步：请求 m3u8 主列表，获取真实播放地址
-      final realUrl = await _resolveM3u8Url(m3u8IndexUrl);
+      final realUrl = await _resolveM3u8Url(
+        m3u8IndexUrl,
+        referer: playPageUrl,
+      );
       if (realUrl == null) {
         debugPrint('解析真实播放地址失败');
         // 返回 index.m3u8 本身，有些播放器也能直接播放
@@ -63,7 +67,10 @@ class VideoParser {
   Future<String?> _extractM3u8IndexUrl(String pageUrl) async {
     try {
       final dio = await _getDio();
-      final response = await dio.get(pageUrl);
+      final response = await dio.get(
+        pageUrl,
+        options: Options(headers: MediaFetchHeaders.forUrl(pageUrl)),
+      );
       final html = response.data.toString();
 
       // 方法1：正则匹配 m3u8 链接
@@ -94,10 +101,21 @@ class VideoParser {
   }
 
   /// 解析 m3u8 主列表，获取真实播放地址
-  Future<String?> _resolveM3u8Url(String m3u8IndexUrl) async {
+  Future<String?> _resolveM3u8Url(
+    String m3u8IndexUrl, {
+    String? referer,
+  }) async {
     try {
       final dio = await _getDio();
-      final response = await dio.get(m3u8IndexUrl);
+      final response = await dio.get(
+        m3u8IndexUrl,
+        options: Options(
+          headers: MediaFetchHeaders.forUrl(
+            m3u8IndexUrl,
+            referer: referer ?? m3u8IndexUrl,
+          ),
+        ),
+      );
       final content = response.data.toString();
 
       final lines = content.split('\n');

@@ -323,10 +323,32 @@ class SyncService {
         AppConstants.keyAutoPlayNext,
         defaultValue: true,
       ),
+      'autoPlayOnDetailEnter': _storage.getBoolSetting(
+        AppConstants.keyAutoPlayOnDetailEnter,
+        defaultValue: true,
+      ),
       'onlyWifiCache': _storage.getBoolSetting(
         AppConstants.keyOnlyWifiCache,
         defaultValue: true,
       ),
+      'playbackStrategy':
+          _storage.getSetting(AppConstants.keyPlaybackStrategy) ?? 'balanced',
+      'preloadNextEpisode': _storage.getBoolSetting(
+        AppConstants.keyPreloadNextEpisode,
+        defaultValue: true,
+      ),
+      'playbackPrefetch': _storage.getSetting(
+                AppConstants.keyPlaybackPrefetch,
+              ) !=
+              null
+          ? _storage.getBoolSetting(
+              AppConstants.keyPlaybackPrefetch,
+              defaultValue: true,
+            )
+          : _storage.getBoolSetting(
+              AppConstants.keyWifiPlaybackPrefetch,
+              defaultValue: true,
+            ),
     };
   }
 
@@ -362,10 +384,39 @@ class SyncService {
         settings['autoPlayNext'] as bool,
       );
     }
+    if (settings['autoPlayOnDetailEnter'] != null) {
+      await _storage.saveBoolSetting(
+        AppConstants.keyAutoPlayOnDetailEnter,
+        settings['autoPlayOnDetailEnter'] as bool,
+      );
+    }
     if (settings['onlyWifiCache'] != null) {
       await _storage.saveBoolSetting(
         AppConstants.keyOnlyWifiCache,
         settings['onlyWifiCache'] as bool,
+      );
+    }
+    if (settings['playbackStrategy'] != null) {
+      await _storage.saveSetting(
+        AppConstants.keyPlaybackStrategy,
+        settings['playbackStrategy'] as String,
+      );
+    }
+    if (settings['preloadNextEpisode'] != null) {
+      await _storage.saveBoolSetting(
+        AppConstants.keyPreloadNextEpisode,
+        settings['preloadNextEpisode'] as bool,
+      );
+    }
+    if (settings['playbackPrefetch'] != null) {
+      await _storage.saveBoolSetting(
+        AppConstants.keyPlaybackPrefetch,
+        settings['playbackPrefetch'] as bool,
+      );
+    } else if (settings['wifiPlaybackPrefetch'] != null) {
+      await _storage.saveBoolSetting(
+        AppConstants.keyPlaybackPrefetch,
+        settings['wifiPlaybackPrefetch'] as bool,
       );
     }
   }

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -18,6 +19,15 @@ class SubtitleInfo {
   final int downloadsCount;
   final String releaseName;
 
+  /// 从文件名/release 名解析出的季号（0 表示未识别）。
+  final int season;
+
+  /// 从文件名/release 名解析出的集号（0 表示未识别）。
+  final int episode;
+
+  /// 与当前资源的匹配得分（越高越可信，仅 [SubtitleService.searchBest] 会填）。
+  final int score;
+
   const SubtitleInfo({
     required this.fileName,
     required this.downloadUrl,
@@ -25,7 +35,169 @@ class SubtitleInfo {
     required this.language,
     required this.downloadsCount,
     required this.releaseName,
+    this.season = 0,
+    this.episode = 0,
+    this.score = 0,
   });
+
+  SubtitleInfo copyWith({int? season, int? episode, int? score}) {
+    return SubtitleInfo(
+      fileName: fileName,
+      downloadUrl: downloadUrl,
+      fileId: fileId,
+      language: language,
+      downloadsCount: downloadsCount,
+      releaseName: releaseName,
+      season: season ?? this.season,
+      episode: episode ?? this.episode,
+      score: score ?? this.score,
+    );
+  }
+}
+
+/// 从字幕文件名 / release 名中解析季集号。
+///
+/// 支持 `S01E02`、`s1e2`、`1x02`、`第2集` 等常见写法；识别不到返回 (0, 0)。
+({int season, int episode}) parseSeasonEpisode(String source) {
+  final s = source.toLowerCase();
+  final m1 = RegExp(r's(\d{1,2})[ ._-]*e(\d{1,3})').firstMatch(s);
+  if (m1 != null) {
+    return (
+      season: int.tryParse(m1.group(1) ?? '') ?? 0,
+      episode: int.tryParse(m1.group(2) ?? '') ?? 0,
+    );
+  }
+  final m2 =
+      RegExp(r'(?:^|[^0-9])(\d{1,2})x(\d{2,3})(?:[^0-9]|$)').firstMatch(s);
+  if (m2 != null) {
+    return (
+      season: int.tryParse(m2.group(1) ?? '') ?? 0,
+      episode: int.tryParse(m2.group(2) ?? '') ?? 0,
+    );
+  }
+  final cnEp = RegExp(r'第\s*(\d{1,3})\s*集').firstMatch(source);
+  if (cnEp != null) {
+    final cnSeason = RegExp(r'第\s*(\d{1,2})\s*季').firstMatch(source);
+    return (
+      season: int.tryParse(cnSeason?.group(1) ?? '') ?? 0,
+      episode: int.tryParse(cnEp.group(1) ?? '') ?? 0,
+    );
+  }
+  return (season: 0, episode: 0);
+}
+
+/// 归一化名称：小写、分隔符统一为空格，便于做 token 重合比较。
+String normalizeName(String source) {
+  return source
+      .toLowerCase()
+      .replaceAll(RegExp(r'[._\[\](){}]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+}
+
+/// 计算名称 token 集合（去掉分辨率/编码/压制组等噪声词）。
+Set<String> nameTokens(String source) {
+  const noise = <String>{
+    '1080p',
+    '720p',
+    '480p',
+    '2160p',
+    '4k',
+    '8k',
+    'web',
+    'webrip',
+    'webdl',
+    'web-dl',
+    'bluray',
+    'blueray',
+    'bdrip',
+    'brrip',
+    'dvdrip',
+    'hdrip',
+    'remux',
+    'hdtv',
+    'x264',
+    'x265',
+    'h264',
+    'h265',
+    'hevc',
+    'avc',
+    '10bit',
+    '8bit',
+    'hdr',
+    'hdr10',
+    'dv',
+    'dolby',
+    'atmos',
+    'aac',
+    'ac3',
+    'eac3',
+    'dts',
+    'truehd',
+    'mp3',
+    'flac',
+    'mp4',
+    'mkv',
+    'avi',
+    'mov',
+    'ts',
+    'srt',
+    'ass',
+    'ssa',
+    'sub',
+    'idx',
+    'eng',
+    'chs',
+    'cht',
+    'chi',
+    'zho',
+    'gb',
+    'big5',
+    '简',
+    '繁',
+    '中字',
+    '双语',
+    'subbed',
+    'proper',
+    'repack',
+    'internal',
+    'limited',
+    'complete',
+    'season',
+    'episode',
+    'the',
+    'a',
+    'an',
+    'amzn',
+    'nf',
+    'dsnp',
+    'hmax',
+    'atvp',
+    'hulu',
+    'pcok',
+    'stan',
+    'itunes',
+    'ntb',
+    'flux',
+    'rarbg',
+    'yify',
+    'yts',
+    'eztv',
+    'rartv',
+  };
+  return normalizeName(source)
+      .split(' ')
+      .where((t) => t.length >= 2 && !noise.contains(t))
+      .toSet();
+}
+
+/// 两个名称的 token 重合度（0~1）。
+double tokenOverlap(String a, String b) {
+  final ta = nameTokens(a);
+  final tb = nameTokens(b);
+  if (ta.isEmpty || tb.isEmpty) return 0;
+  final inter = ta.intersection(tb).length;
+  return inter / (ta.length < tb.length ? ta.length : tb.length);
 }
 
 /// 字幕服务（OpenSubtitles.com API v1）
@@ -126,6 +298,11 @@ class SubtitleService {
             fidRaw is int ? fidRaw : int.tryParse(fidRaw?.toString() ?? '');
         if (id == null || id <= 0) continue;
         final fn = f['file_name']?.toString() ?? 'subtitle.srt';
+        // 季集号优先从字幕文件名取，取不到再看 release 名（整季包常只在 release 上有）。
+        var se = parseSeasonEpisode(fn);
+        if (se.episode == 0 && releaseName.isNotEmpty) {
+          se = parseSeasonEpisode(releaseName);
+        }
         out.add(
           SubtitleInfo(
             fileName: fn,
@@ -134,6 +311,8 @@ class SubtitleService {
             language: lang,
             downloadsCount: downloads,
             releaseName: releaseName,
+            season: se.season,
+            episode: se.episode,
           ),
         );
       }
@@ -185,6 +364,187 @@ class SubtitleService {
     }
   }
 
+  /// 磁力/无内嵌资源的多级字幕匹配（结果按得分降序，已按 fileId 去重）。
+  ///
+  /// 查询优先级（命中即按 [goodEnoughScore] 提前返回，避免浪费免费下载额度）：
+  /// 1. IMDb ID（最准，配合季集号）
+  /// 2. 种子内视频文件名（release 名，如 `Show.S01E02.1080p.WEB-DL`）
+  /// 3. 片名 + 季集号
+  /// 4. 片名 + 年份
+  /// 5. 片名（兜底）
+  Future<List<SubtitleInfo>> searchBest({
+    required String title,
+    String? releaseName,
+    String? imdbId,
+    int? year,
+  }) async {
+    if (_userToken == null && !await init()) return [];
+    final t = title.trim();
+    if (t.isEmpty && (releaseName?.trim().isEmpty ?? true)) return [];
+
+    final se = parseSeasonEpisode(releaseName ?? '');
+    final targetSeason = se.season;
+    final targetEpisode = se.episode;
+
+    final queries = <String>[];
+    void addQuery(String? q) {
+      final v = q?.trim() ?? '';
+      if (v.isEmpty) return;
+      if (queries.any((e) => e.toLowerCase() == v.toLowerCase())) return;
+      queries.add(v);
+    }
+
+    final imdb = imdbId?.trim() ?? '';
+    if (imdb.startsWith('tt')) {
+      addQuery(imdb);
+    }
+    addQuery(releaseName == null ? null : _cleanReleaseName(releaseName));
+    if (targetEpisode > 0) {
+      addQuery('$t S${_pad2(targetSeason)}E${_pad2(targetEpisode)}');
+    }
+    if (year != null && year > 1900) addQuery('$t $year');
+    addQuery(t);
+
+    final merged = <int, SubtitleInfo>{};
+    for (final q in queries) {
+      List<SubtitleInfo> list;
+      if (q.startsWith('tt')) {
+        list = await _searchRaw({'imdb_id': q, 'languages': chineseLanguages});
+        // IMDb 查询不带季集号时结果可能跨季，补一次带季集号的。
+        if (targetEpisode > 0) {
+          final withEp = await _searchRaw({
+            'imdb_id': q,
+            'languages': chineseLanguages,
+            'season_number': '$targetSeason',
+            'episode_number': '$targetEpisode',
+          });
+          list = [...withEp, ...list];
+        }
+      } else {
+        list = await searchByName(q);
+      }
+
+      for (final s in list) {
+        final score = _scoreFor(
+          s,
+          title: t,
+          releaseName: releaseName,
+          targetSeason: targetSeason,
+          targetEpisode: targetEpisode,
+          matchedByImdb: q.startsWith('tt'),
+        );
+        final id = s.fileId;
+        if (id == null) continue;
+        final old = merged[id];
+        if (old == null || score > old.score) {
+          merged[id] = s.copyWith(score: score);
+        }
+      }
+
+      if (merged.values.any((s) => s.score >= goodEnoughScore)) break;
+    }
+
+    final out = merged.values.toList()
+      ..sort((a, b) => b.score.compareTo(a.score));
+    return out;
+  }
+
+  /// 得分达到该值视为「够准」，不再继续打后续查询（省额度）。
+  static const int goodEnoughScore = 150;
+
+  static String _pad2(int v) => v.toString().padLeft(2, '0');
+
+  /// 去掉扩展名与路径，把 `Show.S01E02.1080p` 变成 `Show S01E02 1080p`。
+  static String _cleanReleaseName(String raw) {
+    var s = raw.replaceAll('\\', '/');
+    if (s.contains('/')) s = s.split('/').last;
+    s = s.replaceAll(
+      RegExp(
+        r'\.(mp4|mkv|avi|mov|ts|m2ts|rmvb|wmv|flv)$',
+        caseSensitive: false,
+      ),
+      '',
+    );
+    return s.replaceAll(RegExp(r'[._]'), ' ').trim();
+  }
+
+  Future<List<SubtitleInfo>> _searchRaw(Map<String, String> query) async {
+    try {
+      final dio = await _getDio();
+      final resp = await dio.get(
+        '$_baseUrl/subtitles',
+        queryParameters: query,
+        options: Options(
+          headers: {
+            'Api-Key': _apiKey,
+            'Authorization': 'Bearer $_userToken',
+          },
+        ),
+      );
+      return _parseSubtitlesSearchResponse(resp.data);
+    } catch (e) {
+      debugPrint('字幕查询失败($query): $e');
+      return [];
+    }
+  }
+
+  /// 单条字幕与当前资源的匹配得分。
+  int _scoreFor(
+    SubtitleInfo s, {
+    required String title,
+    String? releaseName,
+    required int targetSeason,
+    required int targetEpisode,
+    required bool matchedByImdb,
+  }) {
+    var score = 0;
+
+    // 语言：简中优先，其次繁中/通用中文
+    final lang = s.language.toLowerCase();
+    if (lang.contains('zh-cn') || lang.contains('zho') || lang == 'zh') {
+      score += 100;
+    } else if (lang.contains('zh-tw')) {
+      score += 80;
+    } else if (lang.contains('zh')) {
+      score += 65;
+    }
+
+    // release 名 / 字幕文件名 与种子文件名的 token 重合度
+    if (releaseName != null && releaseName.trim().isNotEmpty) {
+      final byRelease = tokenOverlap(s.releaseName, releaseName);
+      final byFile = tokenOverlap(s.fileName, releaseName);
+      final overlap = byRelease > byFile ? byRelease : byFile;
+      score += (overlap * 60).round();
+    }
+
+    // 片名命中（兜底查询时尤其重要）
+    final titleOverlap = tokenOverlap('${s.releaseName} ${s.fileName}', title);
+    score += (titleOverlap * 25).round();
+
+    // 季集号：对齐加分、错位重罚
+    if (targetEpisode > 0) {
+      if (s.episode == targetEpisode &&
+          (targetSeason == 0 || s.season == 0 || s.season == targetSeason)) {
+        score += 60;
+      } else if (s.episode > 0 && s.episode != targetEpisode) {
+        score -= 60;
+      } else if (s.season > 0 && targetSeason > 0 && s.season != targetSeason) {
+        score -= 30;
+      }
+    } else if (s.episode > 0) {
+      // 目标是电影却拿到分集字幕，轻微扣分
+      score -= 10;
+    }
+
+    if (matchedByImdb) score += 30;
+
+    // 下载量（对数缩放，最多 +15）
+    if (s.downloadsCount > 0) {
+      score += (log(s.downloadsCount + 1) / ln10 * 7).round().clamp(0, 15);
+    }
+    return score;
+  }
+
   /// 搜索字幕（按文件 Hash）
   Future<List<SubtitleInfo>> searchByHash(
     String fileHash, {
@@ -219,6 +579,13 @@ class SubtitleService {
   Future<String?> downloadSubtitle(int fileId) async {
     if (_userToken == null && !await init()) return null;
 
+    // Web 端无本地文件系统（path_provider 不支持），外挂字幕文件下载不可用；
+    // 走 [downloadAndParse] 的直取文本分支仍可工作。
+    if (kIsWeb) {
+      debugPrint('Web 端暂不支持字幕文件下载到本地');
+      return null;
+    }
+
     try {
       final dio = await _getDio();
       final resp = await dio.post(
@@ -245,7 +612,18 @@ class SubtitleService {
       await Directory(subtitleDir).create(recursive: true);
       final filePath = '$subtitleDir/subtitle_$fileId.srt';
 
+      // 同一 fileId 已下载过则直接复用，避免重复消耗免费额度。
+      final cached = File(filePath);
+      if (await cached.exists() && await cached.length() > 0) {
+        return filePath;
+      }
+
       await dio.download(downloadUrl, filePath);
+      if (!await File(filePath).exists() ||
+          await File(filePath).length() == 0) {
+        debugPrint('字幕下载: 文件为空 $filePath');
+        return null;
+      }
       return filePath;
     } catch (e) {
       debugPrint('字幕下载失败: $e');
@@ -309,6 +687,8 @@ class SubtitleService {
   }
 
   Future<String> getSubtitleCacheDir() async {
+    // Web 端无本地文件系统，返回空路径
+    if (kIsWeb) return '';
     // 使用临时目录来存储字幕文件，避免权限问题
     final tempDir = await getTemporaryDirectory();
     final dir = '${tempDir.path}/movie_app/subtitles';

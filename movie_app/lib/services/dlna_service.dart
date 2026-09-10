@@ -1,6 +1,8 @@
 import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:dlna_dart/dlna.dart';
+import 'package:dlna_dart/xmlParser.dart';
 
 /// DLNA设备信息
 class DlnaDevice {
@@ -11,7 +13,7 @@ class DlnaDevice {
   final String manufacturer;
 
   /// 底层DLNA设备实例
-  final dynamic nativeDevice;
+  final DLNADevice nativeDevice;
 
   DlnaDevice({
     required this.name,
@@ -19,95 +21,80 @@ class DlnaDevice {
     required this.uuid,
     this.model = '',
     this.manufacturer = '',
-    this.nativeDevice,
+    required this.nativeDevice,
   });
 }
 
-/// DLNA投屏服务
-/// 使用 dlna_dart 包实现设备发现与控制
+/// DLNA投屏服务（Android 局域网 DLNA Push URL）
 class DlnaService {
   DlnaService._();
   static final DlnaService _instance = DlnaService._();
   factory DlnaService() => _instance;
 
-  /// 发现的设备列表
   final List<DlnaDevice> _devices = [];
-
-  /// 发现的设备列表（只读）
   List<DlnaDevice> get devices => List.unmodifiable(_devices);
 
-  /// 当前连接的设备
   DlnaDevice? _currentDevice;
-
-  /// 当前连接的设备
   DlnaDevice? get currentDevice => _currentDevice;
 
-  /// 是否正在搜索
-  bool _isSearching = false;
+  String? _castingUrl;
+  String? get castingUrl => _castingUrl;
 
-  /// 是否正在搜索
+  bool _isSearching = false;
   bool get isSearching => _isSearching;
 
-  /// 是否正在投屏
   bool _isCasting = false;
-
-  /// 是否正在投屏
   bool get isCasting => _isCasting;
 
-  /// DLNA管理器
   DLNAManager? _manager;
+  DeviceManager? _deviceManager;
+  StreamSubscription<Map<String, DLNADevice>>? _deviceSub;
 
-  /// 设备管理器
-  dynamic _deviceManager;
+  static const int searchTimeoutSec = 12;
 
-  /// 搜索超时时间（秒）
-  static const int searchTimeout = 10;
-
-  /// 搜索DLNA设备
-  Future<List<DlnaDevice>> searchDevices() async {
+  Future<List<DlnaDevice>> searchDevices({
+    Duration timeout = const Duration(seconds: searchTimeoutSec),
+  }) async {
     if (_isSearching) return _devices;
 
     _isSearching = true;
     _devices.clear();
 
     try {
+      stopSearch();
       _manager = DLNAManager();
       _deviceManager = await _manager!.start();
 
-      // 等待设备发现
       final completer = Completer<List<DlnaDevice>>();
+      void syncDevices(Map<String, DLNADevice> map) {
+        _devices
+          ..clear()
+          ..addAll(
+            map.entries.map((entry) {
+              final native = entry.value;
+              final info = native.info;
+              return DlnaDevice(
+                name: info.friendlyName.trim().isNotEmpty
+                    ? info.friendlyName
+                    : 'DLNA 设备',
+                location: info.URLBase,
+                uuid: entry.key,
+                model: info.deviceType,
+                nativeDevice: native,
+              );
+            }),
+          );
+      }
 
-      // 设置超时
-      Timer(const Duration(seconds: searchTimeout), () {
+      syncDevices(_deviceManager!.deviceList);
+
+      _deviceSub = _deviceManager!.devices.stream.listen(syncDevices);
+
+      Timer(timeout, () {
         if (!completer.isCompleted) {
-          _isSearching = false;
-          completer.complete(_devices);
+          completer.complete(List<DlnaDevice>.from(_devices));
         }
       });
-
-      // 从DeviceManager中获取已发现的设备
-      if (_deviceManager != null) {
-        final deviceMap = _deviceManager.deviceList as Map<String, dynamic>;
-        for (final entry in deviceMap.entries) {
-          final nativeDevice = entry.value;
-          final deviceInfo = nativeDevice.info;
-          final dlnaDevice = DlnaDevice(
-            name: deviceInfo?.friendlyName?.toString() ?? '未知设备',
-            location: deviceInfo?.URLBase?.toString() ?? '',
-            uuid: entry.key,
-            model: deviceInfo?.deviceType?.toString() ?? '',
-            manufacturer: '',
-            nativeDevice: nativeDevice,
-          );
-          if (!_devices.any((d) => d.uuid == dlnaDevice.uuid)) {
-            _devices.add(dlnaDevice);
-          }
-        }
-      }
-
-      if (!completer.isCompleted) {
-        completer.complete(_devices);
-      }
 
       return completer.future;
     } catch (e) {
@@ -118,17 +105,17 @@ class DlnaService {
     }
   }
 
-  /// 停止搜索
   void stopSearch() {
+    _deviceSub?.cancel();
+    _deviceSub = null;
     _manager?.stop();
-    _isSearching = false;
+    _manager = null;
+    _deviceManager = null;
   }
 
-  /// 连接设备
   Future<bool> connectDevice(DlnaDevice device) async {
     try {
       _currentDevice = device;
-      debugPrint('已连接DLNA设备: ${device.name}');
       return true;
     } catch (e) {
       debugPrint('连接DLNA设备失败: $e');
@@ -136,7 +123,6 @@ class DlnaService {
     }
   }
 
-  /// 投屏播放
   Future<bool> castPlay(String url, {String title = ''}) async {
     if (_currentDevice == null) {
       debugPrint('未连接DLNA设备');
@@ -144,29 +130,59 @@ class DlnaService {
     }
 
     try {
-      _isCasting = true;
-      final nativeDevice = _currentDevice!.nativeDevice;
-      if (nativeDevice != null) {
-        await nativeDevice.setUrl(url, title: title);
-        await nativeDevice.play();
+      if (_isCasting) {
+        await _currentDevice!.nativeDevice.stop();
       }
+      await _currentDevice!.nativeDevice.setUrl(
+        url,
+        title: title.isNotEmpty ? title : url,
+        type: VideoMime.any,
+      );
+      await _currentDevice!.nativeDevice.play();
+      final started = await _waitForCastPlayback();
+      if (!started) {
+        debugPrint('投屏未进入播放状态: $url');
+        await _currentDevice!.nativeDevice.stop();
+        _isCasting = false;
+        _castingUrl = null;
+        return false;
+      }
+      _isCasting = true;
+      _castingUrl = url;
       debugPrint('投屏播放成功: $url');
       return true;
     } catch (e) {
       debugPrint('投屏播放失败: $e');
+      _isCasting = false;
+      _castingUrl = null;
       return false;
     }
   }
 
-  /// 投屏暂停
+  Future<bool> _waitForCastPlayback() async {
+    for (var i = 0; i < 5; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      try {
+        final raw = await _currentDevice!.nativeDevice.getTransportInfo();
+        if (raw.contains('CurrentTransportState>PLAYING') ||
+            raw.contains('CurrentTransportState>TRANSITIONING')) {
+          return true;
+        }
+        if (raw.contains('CurrentTransportState>PAUSED_PLAYBACK')) {
+          await _currentDevice!.nativeDevice.play();
+          return true;
+        }
+      } catch (e) {
+        debugPrint('读取投屏状态失败: $e');
+      }
+    }
+    return false;
+  }
+
   Future<bool> castPause() async {
     if (_currentDevice == null) return false;
-
     try {
-      final nativeDevice = _currentDevice!.nativeDevice;
-      if (nativeDevice != null) {
-        await nativeDevice.pause();
-      }
+      await _currentDevice!.nativeDevice.pause();
       return true;
     } catch (e) {
       debugPrint('投屏暂停失败: $e');
@@ -174,15 +190,10 @@ class DlnaService {
     }
   }
 
-  /// 投屏继续播放
   Future<bool> castResume() async {
     if (_currentDevice == null) return false;
-
     try {
-      final nativeDevice = _currentDevice!.nativeDevice;
-      if (nativeDevice != null) {
-        await nativeDevice.play();
-      }
+      await _currentDevice!.nativeDevice.play();
       return true;
     } catch (e) {
       debugPrint('投屏继续播放失败: $e');
@@ -190,16 +201,12 @@ class DlnaService {
     }
   }
 
-  /// 投屏停止
   Future<bool> castStop() async {
     if (_currentDevice == null) return false;
-
     try {
-      final nativeDevice = _currentDevice!.nativeDevice;
-      if (nativeDevice != null) {
-        await nativeDevice.stop();
-      }
+      await _currentDevice!.nativeDevice.stop();
       _isCasting = false;
+      _castingUrl = null;
       return true;
     } catch (e) {
       debugPrint('投屏停止失败: $e');
@@ -207,21 +214,15 @@ class DlnaService {
     }
   }
 
-  /// 投屏 seek
   Future<bool> castSeek(Duration position) async {
     if (_currentDevice == null) return false;
-
     try {
-      final nativeDevice = _currentDevice!.nativeDevice;
-      if (nativeDevice != null) {
-        // 格式化时间为HH:MM:SS
-        final hours = position.inHours;
-        final minutes = position.inMinutes.remainder(60);
-        final seconds = position.inSeconds.remainder(60);
-        final target =
-            '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-        await nativeDevice.seek(target);
-      }
+      final hours = position.inHours;
+      final minutes = position.inMinutes.remainder(60);
+      final seconds = position.inSeconds.remainder(60);
+      final target =
+          '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+      await _currentDevice!.nativeDevice.seek(target);
       return true;
     } catch (e) {
       debugPrint('投屏跳转失败: $e');
@@ -229,15 +230,10 @@ class DlnaService {
     }
   }
 
-  /// 设置音量
   Future<bool> castSetVolume(int volume) async {
     if (_currentDevice == null) return false;
-
     try {
-      final nativeDevice = _currentDevice!.nativeDevice;
-      if (nativeDevice != null) {
-        await nativeDevice.volume(volume.clamp(0, 100));
-      }
+      await _currentDevice!.nativeDevice.volume(volume.clamp(0, 100));
       return true;
     } catch (e) {
       debugPrint('设置投屏音量失败: $e');
@@ -245,16 +241,17 @@ class DlnaService {
     }
   }
 
-  /// 断开设备
-  void disconnectDevice() {
-    castStop();
+  Future<void> disconnectDevice() async {
+    if (_isCasting) {
+      await castStop();
+    }
     _currentDevice = null;
     _isCasting = false;
+    _castingUrl = null;
   }
 
-  /// 释放资源
   void dispose() {
     stopSearch();
-    disconnectDevice();
+    unawaited(disconnectDevice());
   }
 }

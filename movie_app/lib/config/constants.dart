@@ -57,14 +57,23 @@ class AppConstants {
   static const String keyDefaultQuality = 'default_quality';
   static const String keyHardwareDecode = 'hardware_decode';
   static const String keyAutoPlayNext = 'auto_play_next';
+  static const String keyAutoPlayOnDetailEnter = 'auto_play_on_detail_enter';
   static const String keyOnlyWifiCache = 'only_wifi_cache';
   static const String keyWebdavConfig = 'webdav_config';
   static const String keyLastSyncTime = 'last_sync_time';
   static const String keySearchHistory = 'search_history';
   static const String keyPlaybackStrategy = 'playback_strategy';
+  static const String keyPreloadNextEpisode = 'preload_next_episode';
+  static const String keyPlaybackPrefetch = 'playback_prefetch';
+
+  /// 旧键名，仅用于读取迁移
+  static const String keyWifiPlaybackPrefetch = 'wifi_playback_prefetch';
 
   /// OpenSubtitles.com REST API Key（在线搜索字幕）
   static const String keyOpensubtitlesApiKey = 'opensubtitles_api_key';
+
+  /// TMDB API Key（中文片名 → IMDb / 英文片名，磁力搜索）
+  static const String keyTmdbApiKey = 'tmdb_api_key';
 
   /// 磁力搜索源配置（JSON 数组）
   static const String keyMagnetSources = 'magnet_sources_json';

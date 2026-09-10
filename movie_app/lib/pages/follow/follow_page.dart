@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'dart:io';
+
+import '../../utils/web_http_stub.dart'
+    if (dart.library.html) '../../utils/web_http.dart' as web_http;
+import 'dart:async' show unawaited;
+import '../../l10n/app_localizations.dart';
 import '../../providers/favorite_provider.dart';
 import '../../providers/history_provider.dart';
 import '../../providers/cache_provider.dart';
 import '../../models/cache_item.dart';
+import '../../utils/cache_playback_helper.dart';
 import '../../models/favorite.dart';
 import '../../models/watch_history.dart';
 import '../../models/movie.dart';
@@ -273,7 +278,9 @@ class _FollowPageState extends State<FollowPage>
                   clipBehavior: Clip.antiAlias,
                   child: fav.movieCover.isNotEmpty
                       ? CachedNetworkImage(
-                          imageUrl: fav.movieCover,
+                          imageUrl: web_http.webProxiedImageUrl(
+                            fav.movieCover,
+                          ),
                           fit: BoxFit.cover,
                           errorWidget: (_, __, ___) => const Icon(
                             Icons.movie_outlined,
@@ -454,7 +461,9 @@ class _FollowPageState extends State<FollowPage>
                   clipBehavior: Clip.antiAlias,
                   child: history.movieCover.isNotEmpty
                       ? CachedNetworkImage(
-                          imageUrl: history.movieCover,
+                          imageUrl: web_http.webProxiedImageUrl(
+                            history.movieCover,
+                          ),
                           fit: BoxFit.cover,
                           errorWidget: (_, __, ___) => const Icon(
                             Icons.movie_outlined,
@@ -531,6 +540,7 @@ class _FollowPageState extends State<FollowPage>
   Widget _buildCacheTab(ThemeData theme) {
     return Consumer<CacheProvider>(
       builder: (context, cacheProvider, _) {
+        final l10n = AppLocalizations.of(context)!;
         return Column(
           children: [
             // 缓存信息栏
@@ -597,17 +607,20 @@ class _FollowPageState extends State<FollowPage>
             // 缓存列表
             Expanded(
               child: cacheProvider.cacheItems.isEmpty
-                  ? const Center(
+                  ? Center(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(
+                          const Icon(
                             Icons.download_outlined,
                             size: 64,
                             color: Colors.grey,
                           ),
-                          SizedBox(height: 16),
-                          Text('暂无缓存', style: TextStyle(color: Colors.grey)),
+                          const SizedBox(height: 16),
+                          Text(
+                            l10n.followCacheTabEmpty,
+                            style: const TextStyle(color: Colors.grey),
+                          ),
                         ],
                       ),
                     )
@@ -742,28 +755,8 @@ class _FollowPageState extends State<FollowPage>
     } else if (item.isCompleted) {
       return IconButton(
         icon: const Icon(Icons.play_circle, size: 20, color: Colors.green),
-        onPressed: () async {
-          final file = File(item.localPath);
-          if (await file.exists()) {
-            if (!context.mounted) return;
-            // 桌面平台使用默认播放器打开
-            if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-              if (Platform.isWindows) {
-                await Process.run('cmd', ['/c', 'start', '', item.localPath]);
-              } else if (Platform.isMacOS) {
-                await Process.run('open', [item.localPath]);
-              } else if (Platform.isLinux) {
-                await Process.run('xdg-open', [item.localPath]);
-              }
-              if (!context.mounted) return;
-            }
-          } else {
-            if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('缓存文件不存在')),
-            );
-          }
-        },
+        onPressed: () =>
+            unawaited(CachePlaybackHelper.playCachedItem(context, item)),
       );
     }
     return const SizedBox.shrink();

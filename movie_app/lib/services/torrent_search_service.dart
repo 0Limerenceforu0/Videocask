@@ -5,8 +5,10 @@ import '../config/constants.dart';
 import '../config/magnet_source_catalog.dart';
 import '../models/magnet_source_config.dart';
 import '../models/torrent_info.dart';
+import '../utils/commentary_content_filter.dart';
 import 'imdb_lookup_service.dart';
 import 'storage_service.dart';
+import 'video_title_resolve_service.dart';
 
 /// 磁力链接搜索服务
 ///
@@ -19,6 +21,8 @@ class TorrentSearchService {
 
   static final RegExp _btihPattern =
       RegExp(r'btih:([0-9a-fA-F]{40})', caseSensitive: false);
+
+  static final RegExp _cjkPattern = RegExp(r'[\u4e00-\u9fff]');
 
   static final Map<String, String> _browserHeaders = {
     'User-Agent':
@@ -133,7 +137,7 @@ class TorrentSearchService {
     );
   }
 
-  /// 先解析 IMDb ID 并用 `tt` 串搜磁力（Apibay 等会按 imdb 字段对齐），无结果再回退为片名搜索。
+  /// 先解析 IMDb ID（豆瓣 / TMDB / IMDb 联想）并用 `tt` 搜磁力，无结果再回退片名搜索。
   Future<List<TorrentInfo>> searchPreferringImdb({
     required String displayTitle,
     String? year,
@@ -141,42 +145,76 @@ class TorrentSearchService {
     int? refineEpisodeIndexZeroBased,
     bool strictMatchForDetailPage = false,
   }) async {
+    final resolved = await VideoTitleResolveService.instance.resolve(
+      displayTitle,
+      year: year,
+      alias: alias,
+    );
+    final effectiveYear = resolved?.year ?? year;
+    final relevanceTitle = _relevanceTitleForResolved(
+      displayTitle,
+      alias,
+      resolved,
+    );
+
     final direct = ImdbLookupService.parseImdbIdFromText(displayTitle);
-    final imdb = direct ??
-        await ImdbLookupService.instance.resolveForVideoTitle(
-          displayTitle,
-          year: year,
-          alias: alias,
-        );
+    final imdb = direct ?? resolved?.imdbId;
     if (imdb != null) {
       final narrowed = await search(
         imdb,
         refineTitle: displayTitle,
-        refineYear: year,
+        refineYear: effectiveYear,
         refineAlias: alias,
         refineEpisodeIndexZeroBased: refineEpisodeIndexZeroBased,
         strictMatchForDetailPage: strictMatchForDetailPage,
         refineImdbId: imdb,
       );
-      // 只有当搜索结果与显示标题相关时才返回
-      if (narrowed.isNotEmpty && _areResultsRelevant(narrowed, displayTitle)) {
+      final trustedImdb = resolved?.imdbId != null && resolved!.imdbId == imdb;
+      if (narrowed.isNotEmpty &&
+          (trustedImdb || _areResultsRelevant(narrowed, relevanceTitle))) {
         return narrowed;
       }
     }
-    final q = _buildFallbackTitleQuery(displayTitle, year, alias);
+    final q = _buildFallbackTitleQuery(
+      displayTitle,
+      effectiveYear,
+      alias,
+      resolved: resolved,
+    );
     final results = await search(
       q,
       refineTitle: displayTitle,
-      refineYear: year,
+      refineYear: effectiveYear,
       refineAlias: alias,
       refineEpisodeIndexZeroBased: refineEpisodeIndexZeroBased,
       strictMatchForDetailPage: strictMatchForDetailPage,
-      refineImdbId: null,
+      refineImdbId: imdb,
     );
-    // 过滤结果，确保与显示标题相关
     return results
-        .where((result) => _isResultRelevant(result, displayTitle))
+        .where((result) => _isResultRelevant(result, relevanceTitle))
         .toList();
+  }
+
+  /// 优先用 TMDB/豆瓣解析出的英文名，否则别名或显示标题。
+  String _relevanceTitleForResolved(
+    String displayTitle,
+    String? alias,
+    VideoTitleResolveResult? resolved,
+  ) {
+    final en = resolved?.englishTitle?.trim() ?? '';
+    if (en.isNotEmpty) return en;
+    return _relevanceTitleFor(displayTitle, alias);
+  }
+
+  /// 中文主标题时用 CMS 英文别名与磁力发布名比对；否则用显示标题。
+  String _relevanceTitleFor(String displayTitle, String? alias) {
+    final a = alias?.trim() ?? '';
+    if (a.isNotEmpty &&
+        _cjkPattern.hasMatch(displayTitle) &&
+        !_cjkPattern.hasMatch(a)) {
+      return a;
+    }
+    return displayTitle;
   }
 
   /// 检查搜索结果是否与显示标题相关
@@ -224,17 +262,31 @@ class TorrentSearchService {
     return matchCount >= titleTokens.length / 2;
   }
 
-  String _buildFallbackTitleQuery(String title, String? year, String? alias) {
-    var q = title.trim();
+  String _buildFallbackTitleQuery(
+    String title,
+    String? year,
+    String? alias, {
+    VideoTitleResolveResult? resolved,
+  }) {
+    final en = resolved?.englishTitle?.trim() ?? '';
+    if (en.isNotEmpty && _cjkPattern.hasMatch(title.trim())) {
+      return _buildFallbackTitleQuery(en, resolved?.year ?? year, null);
+    }
+    final t = title.trim();
+    final a = alias?.trim() ?? '';
+    var base = t;
+    if (a.isNotEmpty && _cjkPattern.hasMatch(t) && !_cjkPattern.hasMatch(a)) {
+      base = a;
+    }
+    var q = base;
     final y = year?.trim();
     if (y != null && y.isNotEmpty && y != '0') {
       q = '$q $y';
     }
-    final a = alias?.trim();
-    if (a != null &&
-        a.isNotEmpty &&
-        a.toLowerCase() != title.toLowerCase().trim() &&
-        a.length > 1) {
+    if (a.isNotEmpty &&
+        a.toLowerCase() != t.toLowerCase() &&
+        a.length > 1 &&
+        base != a) {
       q = '$q $a';
     }
     return q;
@@ -751,6 +803,7 @@ class TorrentSearchService {
     final imdbNeedle = refineImdbId?.trim().toLowerCase();
     final byHash = <String, TorrentInfo>{};
     for (final t in raw) {
+      if (CommentaryContentFilter.isTorrent(t)) continue;
       if (!magnetHasValidBtih(t.magnetUri)) continue;
       final h = extractBtih(t.magnetUri);
       if (h == null) continue;

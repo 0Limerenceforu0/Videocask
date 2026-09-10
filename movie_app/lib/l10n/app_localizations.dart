@@ -254,6 +254,66 @@ abstract class AppLocalizations {
   /// **'对应本片'**
   String get detailMagnetZhLabelHint;
 
+  /// No description provided for @detailMagnetPlayingBadge.
+  ///
+  /// In zh, this message translates to:
+  /// **'磁力播放'**
+  String get detailMagnetPlayingBadge;
+
+  /// No description provided for @detailMagnetMetaDirector.
+  ///
+  /// In zh, this message translates to:
+  /// **'导演'**
+  String get detailMagnetMetaDirector;
+
+  /// No description provided for @detailMagnetMetaActors.
+  ///
+  /// In zh, this message translates to:
+  /// **'主演'**
+  String get detailMagnetMetaActors;
+
+  /// No description provided for @detailMagnetMetaRegion.
+  ///
+  /// In zh, this message translates to:
+  /// **'地区'**
+  String get detailMagnetMetaRegion;
+
+  /// No description provided for @detailMagnetResourceSection.
+  ///
+  /// In zh, this message translates to:
+  /// **'资源信息'**
+  String get detailMagnetResourceSection;
+
+  /// No description provided for @detailMagnetMetaResourceTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'资源标题'**
+  String get detailMagnetMetaResourceTitle;
+
+  /// No description provided for @detailMagnetMetaSource.
+  ///
+  /// In zh, this message translates to:
+  /// **'来源 {source}'**
+  String detailMagnetMetaSource(String source);
+
+  /// No description provided for @detailMagnetMetaSize.
+  ///
+  /// In zh, this message translates to:
+  /// **'大小 {size}'**
+  String detailMagnetMetaSize(String size);
+
+  /// No description provided for @detailMagnetMetaSeeders.
+  ///
+  /// In zh, this message translates to:
+  /// **'做种 {count}'**
+  String detailMagnetMetaSeeders(String count);
+
+  /// No description provided for @detailMagnetMetaLeechers.
+  ///
+  /// In zh, this message translates to:
+  /// **'下载 {count}'**
+  String detailMagnetMetaLeechers(String count);
+
   /// No description provided for @designV3MovieTitle.
   ///
   /// In zh, this message translates to:
@@ -380,6 +440,12 @@ abstract class AppLocalizations {
   /// **'播放速度'**
   String get designV3TooltipSpeed;
 
+  /// No description provided for @speedSelectorNormal.
+  ///
+  /// In zh, this message translates to:
+  /// **'正常'**
+  String get speedSelectorNormal;
+
   /// No description provided for @designV3TooltipVolume.
   ///
   /// In zh, this message translates to:
@@ -433,6 +499,12 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'缓存'**
   String get detailPlayerTooltipCache;
+
+  /// No description provided for @detailPlayerTooltipRouteQuality.
+  ///
+  /// In zh, this message translates to:
+  /// **'线路 / 清晰度'**
+  String get detailPlayerTooltipRouteQuality;
 
   /// No description provided for @detailPlayerFullscreenEnter.
   ///
@@ -517,6 +589,24 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'已加载字幕'**
   String get detailPlayerSubtitleApplied;
+
+  /// No description provided for @detailPlayerSubtitleNoApiKeyHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'磁力资源可自动匹配字幕，需先在「设置 → OpenSubtitles API Key」填写 Key'**
+  String get detailPlayerSubtitleNoApiKeyHint;
+
+  /// No description provided for @detailPlayerSubtitleDelay.
+  ///
+  /// In zh, this message translates to:
+  /// **'字幕时间轴'**
+  String get detailPlayerSubtitleDelay;
+
+  /// No description provided for @detailPlayerSubtitleDelayReset.
+  ///
+  /// In zh, this message translates to:
+  /// **'重置偏移'**
+  String get detailPlayerSubtitleDelayReset;
 
   /// No description provided for @homeTitleRecommend.
   ///
@@ -769,6 +859,696 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'收起'**
   String get homeSectionCollapse;
+
+  /// No description provided for @settingsAutoPlayOnDetailEnter.
+  ///
+  /// In zh, this message translates to:
+  /// **'进入详情自动播放'**
+  String get settingsAutoPlayOnDetailEnter;
+
+  /// No description provided for @settingsAutoPlayOnDetailEnterSubtitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'打开影片或磁力详情时自动开始播放'**
+  String get settingsAutoPlayOnDetailEnterSubtitle;
+
+  /// No description provided for @settingsPreloadNextEpisode.
+  ///
+  /// In zh, this message translates to:
+  /// **'预加载下一集'**
+  String get settingsPreloadNextEpisode;
+
+  /// No description provided for @settingsPreloadNextEpisodeSubtitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'当前集播放到 80% 时后台解析下一集地址'**
+  String get settingsPreloadNextEpisodeSubtitle;
+
+  /// No description provided for @settingsPlaybackPrefetch.
+  ///
+  /// In zh, this message translates to:
+  /// **'播放预缓冲'**
+  String get settingsPlaybackPrefetch;
+
+  /// No description provided for @settingsPlaybackPrefetchSubtitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'任意网络下预拉下一集前几 MB，加快切集'**
+  String get settingsPlaybackPrefetchSubtitle;
+
+  /// No description provided for @settingsTmdbApiKey.
+  ///
+  /// In zh, this message translates to:
+  /// **'TMDB API Key'**
+  String get settingsTmdbApiKey;
+
+  /// No description provided for @settingsTmdbApiKeyConfigured.
+  ///
+  /// In zh, this message translates to:
+  /// **'已配置'**
+  String get settingsTmdbApiKeyConfigured;
+
+  /// No description provided for @settingsTmdbApiKeyNotConfigured.
+  ///
+  /// In zh, this message translates to:
+  /// **'未配置（仍可用豆瓣解析）'**
+  String get settingsTmdbApiKeyNotConfigured;
+
+  /// No description provided for @settingsTmdbApiKeyDialogBody.
+  ///
+  /// In zh, this message translates to:
+  /// **'在 themoviedb.org 注册并申请 API Key，用于中文片名解析为 IMDb 编号与英文片名，提升磁力搜索命中率。留空时仍会通过豆瓣联想 + IMDb 解析。'**
+  String get settingsTmdbApiKeyDialogBody;
+
+  /// No description provided for @settingsTmdbApiKeySaved.
+  ///
+  /// In zh, this message translates to:
+  /// **'已保存 TMDB API 配置'**
+  String get settingsTmdbApiKeySaved;
+
+  /// No description provided for @detailRouteFallbackSnack.
+  ///
+  /// In zh, this message translates to:
+  /// **'缓冲较慢，已尝试切换线路'**
+  String get detailRouteFallbackSnack;
+
+  /// No description provided for @detailPlayerLockControls.
+  ///
+  /// In zh, this message translates to:
+  /// **'锁定播放控件'**
+  String get detailPlayerLockControls;
+
+  /// No description provided for @detailPlayerUnlockControls.
+  ///
+  /// In zh, this message translates to:
+  /// **'解锁播放控件'**
+  String get detailPlayerUnlockControls;
+
+  /// No description provided for @homeContinueWatching.
+  ///
+  /// In zh, this message translates to:
+  /// **'继续观看'**
+  String get homeContinueWatching;
+
+  /// No description provided for @homeContinueWatchingSeeAll.
+  ///
+  /// In zh, this message translates to:
+  /// **'查看全部'**
+  String get homeContinueWatchingSeeAll;
+
+  /// No description provided for @searchActionSearch.
+  ///
+  /// In zh, this message translates to:
+  /// **'搜索'**
+  String get searchActionSearch;
+
+  /// No description provided for @searchClearFilters.
+  ///
+  /// In zh, this message translates to:
+  /// **'清除筛选'**
+  String get searchClearFilters;
+
+  /// No description provided for @searchPlay.
+  ///
+  /// In zh, this message translates to:
+  /// **'播放'**
+  String get searchPlay;
+
+  /// No description provided for @searchOpenDetail.
+  ///
+  /// In zh, this message translates to:
+  /// **'进入详情'**
+  String get searchOpenDetail;
+
+  /// No description provided for @detailReplay.
+  ///
+  /// In zh, this message translates to:
+  /// **'重播'**
+  String get detailReplay;
+
+  /// No description provided for @detailEpisodeFinished.
+  ///
+  /// In zh, this message translates to:
+  /// **'本集已播放完毕'**
+  String get detailEpisodeFinished;
+
+  /// No description provided for @detailHistoryOverlay.
+  ///
+  /// In zh, this message translates to:
+  /// **'上次看到 第{episode}集 {percent}%'**
+  String detailHistoryOverlay(int episode, String percent);
+
+  /// No description provided for @detailLoadError.
+  ///
+  /// In zh, this message translates to:
+  /// **'无法加载影片信息，请检查网络或在「源管理」中切换采集源后重试。'**
+  String get detailLoadError;
+
+  /// No description provided for @detailBufferingMagnet.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在加载磁力资源…'**
+  String get detailBufferingMagnet;
+
+  /// No description provided for @detailBufferingConnect.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在连接播放资源…'**
+  String get detailBufferingConnect;
+
+  /// No description provided for @detailBuffering.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在缓冲…'**
+  String get detailBuffering;
+
+  /// No description provided for @detailPlaybackFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'播放失败'**
+  String get detailPlaybackFailed;
+
+  /// No description provided for @detailRetry.
+  ///
+  /// In zh, this message translates to:
+  /// **'重试'**
+  String get detailRetry;
+
+  /// No description provided for @detailVolumeTooltip.
+  ///
+  /// In zh, this message translates to:
+  /// **'音量（点击展开）'**
+  String get detailVolumeTooltip;
+
+  /// No description provided for @detailMute.
+  ///
+  /// In zh, this message translates to:
+  /// **'静音'**
+  String get detailMute;
+
+  /// No description provided for @detailUnmute.
+  ///
+  /// In zh, this message translates to:
+  /// **'取消静音'**
+  String get detailUnmute;
+
+  /// No description provided for @detailRouteLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'线路 {index}'**
+  String detailRouteLabel(int index);
+
+  /// No description provided for @detailDlnaSearching.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在搜索局域网设备…'**
+  String get detailDlnaSearching;
+
+  /// No description provided for @detailDlnaTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'DLNA 设备'**
+  String get detailDlnaTitle;
+
+  /// No description provided for @detailDlnaEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'未发现设备，请确认电视与手机连接同一 Wi‑Fi，并已开启电视上的 DLNA/投屏功能'**
+  String get detailDlnaEmpty;
+
+  /// No description provided for @detailDlnaCastOk.
+  ///
+  /// In zh, this message translates to:
+  /// **'已推送播放地址到设备'**
+  String get detailDlnaCastOk;
+
+  /// No description provided for @detailDlnaCastOkNamed.
+  ///
+  /// In zh, this message translates to:
+  /// **'已投屏到 {device}'**
+  String detailDlnaCastOkNamed(String device);
+
+  /// No description provided for @detailDlnaCastFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'投屏失败，请换线路或稍后重试'**
+  String get detailDlnaCastFailed;
+
+  /// No description provided for @detailDlnaHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'请选择要投屏的电视或盒子。CMS、磁力、离线缓存均会转换为电视可访问的地址。'**
+  String get detailDlnaHint;
+
+  /// No description provided for @detailDlnaRefresh.
+  ///
+  /// In zh, this message translates to:
+  /// **'重新搜索'**
+  String get detailDlnaRefresh;
+
+  /// No description provided for @detailDlnaNeedPlayback.
+  ///
+  /// In zh, this message translates to:
+  /// **'请先开始播放，再投屏'**
+  String get detailDlnaNeedPlayback;
+
+  /// No description provided for @detailDlnaNoLanIp.
+  ///
+  /// In zh, this message translates to:
+  /// **'未获取到局域网 IP，请连接 Wi‑Fi 后重试'**
+  String get detailDlnaNoLanIp;
+
+  /// No description provided for @detailDlnaNoActiveStream.
+  ///
+  /// In zh, this message translates to:
+  /// **'磁力流尚未就绪，请稍候再试'**
+  String get detailDlnaNoActiveStream;
+
+  /// No description provided for @detailDlnaUnsupportedSource.
+  ///
+  /// In zh, this message translates to:
+  /// **'当前片源暂不支持投屏'**
+  String get detailDlnaUnsupportedSource;
+
+  /// No description provided for @detailDlnaLocalServeFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'无法在局域网分享本地文件'**
+  String get detailDlnaLocalServeFailed;
+
+  /// No description provided for @detailDlnaResolveEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'无法解析可投屏的播放地址'**
+  String get detailDlnaResolveEmpty;
+
+  /// No description provided for @detailDlnaCastingNamed.
+  ///
+  /// In zh, this message translates to:
+  /// **'投屏中 · {device}'**
+  String detailDlnaCastingNamed(String device);
+
+  /// No description provided for @detailClose.
+  ///
+  /// In zh, this message translates to:
+  /// **'关闭'**
+  String get detailClose;
+
+  /// No description provided for @detailMagnetParsingMeta.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在解析磁力元数据…'**
+  String get detailMagnetParsingMeta;
+
+  /// No description provided for @detailMagnetAddFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'添加磁力链接失败'**
+  String get detailMagnetAddFailed;
+
+  /// No description provided for @detailMagnetNoVideoFile.
+  ///
+  /// In zh, this message translates to:
+  /// **'未找到可播放的视频文件'**
+  String get detailMagnetNoVideoFile;
+
+  /// No description provided for @detailMagnetBuffering.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在缓冲数据…'**
+  String get detailMagnetBuffering;
+
+  /// No description provided for @detailMagnetStreamFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'启动播放流失败'**
+  String get detailMagnetStreamFailed;
+
+  /// No description provided for @detailMagnetConnectingPeers.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在连接节点…'**
+  String get detailMagnetConnectingPeers;
+
+  /// No description provided for @detailPlaybackErrorNoUrl.
+  ///
+  /// In zh, this message translates to:
+  /// **'无可播放地址'**
+  String get detailPlaybackErrorNoUrl;
+
+  /// No description provided for @detailPlaybackErrorParseFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'解析失败'**
+  String get detailPlaybackErrorParseFailed;
+
+  /// No description provided for @detailPlaybackErrorRouteSwitched.
+  ///
+  /// In zh, this message translates to:
+  /// **'已切换线路'**
+  String get detailPlaybackErrorRouteSwitched;
+
+  /// No description provided for @detailPlaybackErrorMultiSourceFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'多源回退失败'**
+  String get detailPlaybackErrorMultiSourceFailed;
+
+  /// No description provided for @detailPlaybackErrorNetwork.
+  ///
+  /// In zh, this message translates to:
+  /// **'网络或播放器错误'**
+  String get detailPlaybackErrorNetwork;
+
+  /// No description provided for @detailPlaybackErrorMagnet.
+  ///
+  /// In zh, this message translates to:
+  /// **'磁力播放失败'**
+  String get detailPlaybackErrorMagnet;
+
+  /// No description provided for @detailEpisodeLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'第{index}集'**
+  String detailEpisodeLabel(int index);
+
+  /// No description provided for @detailEpisodeGridCount.
+  ///
+  /// In zh, this message translates to:
+  /// **'共 {count} 集'**
+  String detailEpisodeGridCount(int count);
+
+  /// No description provided for @detailEpisodeGridPageInfo.
+  ///
+  /// In zh, this message translates to:
+  /// **'第 {current} / {total} 页'**
+  String detailEpisodeGridPageInfo(int current, int total);
+
+  /// No description provided for @detailEpisodeGridPrevPage.
+  ///
+  /// In zh, this message translates to:
+  /// **'上一页'**
+  String get detailEpisodeGridPrevPage;
+
+  /// No description provided for @detailEpisodeGridNextPage.
+  ///
+  /// In zh, this message translates to:
+  /// **'下一页'**
+  String get detailEpisodeGridNextPage;
+
+  /// No description provided for @detailEpisodeGridJumpToEpisode.
+  ///
+  /// In zh, this message translates to:
+  /// **'跳转到集数'**
+  String get detailEpisodeGridJumpToEpisode;
+
+  /// No description provided for @detailEpisodeGridJumpTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'跳转到集数'**
+  String get detailEpisodeGridJumpTitle;
+
+  /// No description provided for @detailEpisodeGridJumpHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'输入集数（1–{max}）'**
+  String detailEpisodeGridJumpHint(int max);
+
+  /// No description provided for @detailEpisodeGridJumpConfirm.
+  ///
+  /// In zh, this message translates to:
+  /// **'跳转'**
+  String get detailEpisodeGridJumpConfirm;
+
+  /// No description provided for @detailCachePanelTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'离线缓存'**
+  String get detailCachePanelTitle;
+
+  /// No description provided for @detailCacheDownloadCurrent.
+  ///
+  /// In zh, this message translates to:
+  /// **'缓存当前集'**
+  String get detailCacheDownloadCurrent;
+
+  /// No description provided for @detailCacheSelectEpisodes.
+  ///
+  /// In zh, this message translates to:
+  /// **'选择集数'**
+  String get detailCacheSelectEpisodes;
+
+  /// No description provided for @detailCacheSelectAll.
+  ///
+  /// In zh, this message translates to:
+  /// **'全选'**
+  String get detailCacheSelectAll;
+
+  /// No description provided for @detailCacheClearSelection.
+  ///
+  /// In zh, this message translates to:
+  /// **'取消'**
+  String get detailCacheClearSelection;
+
+  /// No description provided for @detailCacheDownloadSelected.
+  ///
+  /// In zh, this message translates to:
+  /// **'下载所选 ({count})'**
+  String detailCacheDownloadSelected(int count);
+
+  /// No description provided for @detailCacheBatchQueued.
+  ///
+  /// In zh, this message translates to:
+  /// **'已加入 {count} 个下载任务'**
+  String detailCacheBatchQueued(int count);
+
+  /// No description provided for @detailCacheBatchNone.
+  ///
+  /// In zh, this message translates to:
+  /// **'所选集数均已在队列或已缓存'**
+  String get detailCacheBatchNone;
+
+  /// No description provided for @detailCacheEmptyForMovie.
+  ///
+  /// In zh, this message translates to:
+  /// **'本影片暂无缓存任务'**
+  String get detailCacheEmptyForMovie;
+
+  /// No description provided for @detailCacheAlreadyCompleted.
+  ///
+  /// In zh, this message translates to:
+  /// **'当前集已缓存完成'**
+  String get detailCacheAlreadyCompleted;
+
+  /// No description provided for @detailCacheAlreadyDownloading.
+  ///
+  /// In zh, this message translates to:
+  /// **'当前集已在下载队列中'**
+  String get detailCacheAlreadyDownloading;
+
+  /// No description provided for @detailCacheQueued.
+  ///
+  /// In zh, this message translates to:
+  /// **'已加入下载队列'**
+  String get detailCacheQueued;
+
+  /// No description provided for @detailCacheDownloadStarted.
+  ///
+  /// In zh, this message translates to:
+  /// **'已开始下载'**
+  String get detailCacheDownloadStarted;
+
+  /// No description provided for @detailCacheWebUnsupported.
+  ///
+  /// In zh, this message translates to:
+  /// **'Web 端暂不支持离线缓存'**
+  String get detailCacheWebUnsupported;
+
+  /// No description provided for @detailCacheMagnetUnsupported.
+  ///
+  /// In zh, this message translates to:
+  /// **'磁力资源暂不支持离线缓存'**
+  String get detailCacheMagnetUnsupported;
+
+  /// No description provided for @detailCacheNoEpisode.
+  ///
+  /// In zh, this message translates to:
+  /// **'无可缓存的播放地址'**
+  String get detailCacheNoEpisode;
+
+  /// No description provided for @detailCacheUnsupportedUrl.
+  ///
+  /// In zh, this message translates to:
+  /// **'该地址暂不支持缓存'**
+  String get detailCacheUnsupportedUrl;
+
+  /// No description provided for @detailCacheParseFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'无法解析真实视频地址，暂不能缓存'**
+  String get detailCacheParseFailed;
+
+  /// No description provided for @detailCacheDeleted.
+  ///
+  /// In zh, this message translates to:
+  /// **'已删除缓存'**
+  String get detailCacheDeleted;
+
+  /// No description provided for @detailCacheManageAll.
+  ///
+  /// In zh, this message translates to:
+  /// **'全部缓存'**
+  String get detailCacheManageAll;
+
+  /// No description provided for @detailCacheStatusWaiting.
+  ///
+  /// In zh, this message translates to:
+  /// **'等待中'**
+  String get detailCacheStatusWaiting;
+
+  /// No description provided for @detailCacheStatusDownloading.
+  ///
+  /// In zh, this message translates to:
+  /// **'下载中'**
+  String get detailCacheStatusDownloading;
+
+  /// No description provided for @detailCacheStatusPaused.
+  ///
+  /// In zh, this message translates to:
+  /// **'已暂停'**
+  String get detailCacheStatusPaused;
+
+  /// No description provided for @detailCacheStatusCompleted.
+  ///
+  /// In zh, this message translates to:
+  /// **'已完成'**
+  String get detailCacheStatusCompleted;
+
+  /// No description provided for @detailCacheStatusFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'失败'**
+  String get detailCacheStatusFailed;
+
+  /// No description provided for @detailCachePause.
+  ///
+  /// In zh, this message translates to:
+  /// **'暂停'**
+  String get detailCachePause;
+
+  /// No description provided for @detailCacheResume.
+  ///
+  /// In zh, this message translates to:
+  /// **'继续'**
+  String get detailCacheResume;
+
+  /// No description provided for @detailCacheDelete.
+  ///
+  /// In zh, this message translates to:
+  /// **'删除'**
+  String get detailCacheDelete;
+
+  /// No description provided for @cacheManagerTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'缓存管理'**
+  String get cacheManagerTitle;
+
+  /// No description provided for @cacheManagerOnlyWifi.
+  ///
+  /// In zh, this message translates to:
+  /// **'仅 WiFi 下载'**
+  String get cacheManagerOnlyWifi;
+
+  /// No description provided for @cacheManagerStorageTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'存储空间'**
+  String get cacheManagerStorageTitle;
+
+  /// No description provided for @cacheManagerClearAll.
+  ///
+  /// In zh, this message translates to:
+  /// **'清理全部'**
+  String get cacheManagerClearAll;
+
+  /// No description provided for @cacheManagerClearConfirmTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'清理缓存'**
+  String get cacheManagerClearConfirmTitle;
+
+  /// No description provided for @cacheManagerClearConfirmBody.
+  ///
+  /// In zh, this message translates to:
+  /// **'确定要清理所有缓存吗？'**
+  String get cacheManagerClearConfirmBody;
+
+  /// No description provided for @cacheManagerClearDone.
+  ///
+  /// In zh, this message translates to:
+  /// **'缓存已清理'**
+  String get cacheManagerClearDone;
+
+  /// No description provided for @cacheManagerUsedLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'已用: {used} / {max}'**
+  String cacheManagerUsedLabel(String used, String max);
+
+  /// No description provided for @cacheManagerCompletedCount.
+  ///
+  /// In zh, this message translates to:
+  /// **'已缓存 {count} 个视频'**
+  String cacheManagerCompletedCount(int count);
+
+  /// No description provided for @cacheWebBanner.
+  ///
+  /// In zh, this message translates to:
+  /// **'Web 端不支持视频离线下载；列表为空属正常情况。'**
+  String get cacheWebBanner;
+
+  /// No description provided for @cacheFileMissing.
+  ///
+  /// In zh, this message translates to:
+  /// **'缓存文件不存在'**
+  String get cacheFileMissing;
+
+  /// No description provided for @cacheWebPlayUnsupported.
+  ///
+  /// In zh, this message translates to:
+  /// **'Web 端请从详情页在线播放'**
+  String get cacheWebPlayUnsupported;
+
+  /// No description provided for @cachePlayOffline.
+  ///
+  /// In zh, this message translates to:
+  /// **'离线播放'**
+  String get cachePlayOffline;
+
+  /// No description provided for @cacheDownloadSpeed.
+  ///
+  /// In zh, this message translates to:
+  /// **'{speed}/s'**
+  String cacheDownloadSpeed(String speed);
+
+  /// No description provided for @followCacheTabEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'暂无缓存'**
+  String get followCacheTabEmpty;
+
+  /// No description provided for @settingsOnlyWifiCache.
+  ///
+  /// In zh, this message translates to:
+  /// **'仅 WiFi 下载缓存'**
+  String get settingsOnlyWifiCache;
+
+  /// No description provided for @settingsOnlyWifiCacheSubtitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'移动网络下不自动下载，与缓存管理页开关同步'**
+  String get settingsOnlyWifiCacheSubtitle;
 }
 
 class _AppLocalizationsDelegate

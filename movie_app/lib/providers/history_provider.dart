@@ -47,7 +47,10 @@ class HistoryProvider extends ChangeNotifier {
     int routeIndex = 0,
     String? magnetUri,
   }) async {
-    final existing = _storage.getHistory(movieId, sourceId: sourceId);
+    var existing = _storage.getHistory(movieId, sourceId: sourceId);
+    existing ??= _histories
+        .where((h) => h.movieId == movieId && h.sourceId == sourceId)
+        .firstOrNull;
 
     String resolvedMagnet = '';
     if (sourceId == AppConstants.magnetDetailSourceId) {
@@ -58,16 +61,22 @@ class HistoryProvider extends ChangeNotifier {
       }
     }
 
-    // 开始播放时若仍写入 progress=0、duration=0，会覆盖此前有效进度 → 同集同线路时保留旧值
+    // 起播/续播 seek 完成前 position 常为 0，勿用 0 覆盖同集同线路的有效进度
     var effectiveProgress = progress;
     var effectiveDuration = duration;
     if (progress == 0 &&
-        duration == 0 &&
         existing != null &&
         existing.episodeIndex == episodeIndex &&
-        existing.routeIndex == routeIndex) {
-      effectiveProgress = existing.progress;
-      effectiveDuration = existing.duration;
+        existing.routeIndex == routeIndex &&
+        existing.progress > 0) {
+      final nearEnd = existing.duration > 0 &&
+          existing.progress >= existing.duration - 2000;
+      if (!nearEnd && (duration == 0 || progress < duration * 0.05)) {
+        effectiveProgress = existing.progress;
+        if (duration == 0 && existing.duration > 0) {
+          effectiveDuration = existing.duration;
+        }
+      }
     }
 
     final isNew = existing == null;
@@ -142,6 +151,26 @@ class HistoryProvider extends ChangeNotifier {
     return _histories
         .where((h) => h.movieId == movieId && h.sourceId == sourceId)
         .firstOrNull;
+  }
+
+  /// 进入详情页时解析应恢复的观看记录（优先精确匹配，否则取该片最近一条）。
+  WatchHistory? findHistoryForDetail({
+    required String movieId,
+    String sourceId = '',
+    String magnetUri = '',
+  }) {
+    if (magnetUri.isNotEmpty) {
+      final byMagnet = getHistory(movieId, magnetUri: magnetUri);
+      if (byMagnet != null) return byMagnet;
+    }
+    if (sourceId.isNotEmpty) {
+      final bySource = getHistory(movieId, sourceId: sourceId);
+      if (bySource != null) return bySource;
+    }
+    for (final h in _histories) {
+      if (h.movieId == movieId) return h;
+    }
+    return null;
   }
 
   /// 获取已看集数列表

@@ -1,0 +1,29 @@
+---
+description: 详情页播放架构约束（防闪回开头等重大播放 bug）
+globs: lib/pages/detail/**,lib/services/player_service.dart
+alwaysApply: false
+---
+
+# 详情页播放架构
+
+## 唯一真相源
+
+- 播放进度以 `PlayheadAuthority.authoritative` 为准（经 `DetailPlayer.playback`）。
+- **禁止**用 mpv `position` 直接落盘、换线保留、或触发 `player.open()`。
+- **禁止**在外部直接 `reset` playhead；仅通过 `DetailPlaybackCoordinator.prepareOpen()`。
+
+## 打开媒体
+
+- 所有 CMS 集/线路切换必须：`prepareOpen()` → `PlayerService.play(startAt: plan.startAt)`。
+- 校验 `openGeneration`，过期 async 结果必须丢弃。
+- `PlayerService` 带 `startAt` 时 seek 失败抛 `PlaybackStartSeekException`，不得静默从 0 播。
+
+## 策略
+
+- 缓冲自动换线：只读 `RouteFallbackPolicy` / `playback.shouldAllowRouteFallback()`。
+- HLS discontinuity：`PlayheadAuthority.ingest` 返回 `discontinuity` 时由 `DetailPlayer` 统一 seek 纠正。
+
+## 新增功能（DLNA / 缓存 / 预加载 / 字幕）
+
+- 可读 `playback.authoritativePosition` 与 `activeStreamUrl`。
+- 不可直接 `player.open()` 或改写 `DetailPlayer.position` 作为业务进度。

@@ -1,23 +1,36 @@
 import 'package:flutter/material.dart';
-import '../../config/constants.dart';
+import 'package:movie_app/config/constants.dart';
+import 'package:movie_app/l10n/app_localizations.dart';
 
-/// 倍速选择器组件
+/// 倍速选择展示方式。
+enum SpeedSelectorPresentation {
+  /// 独立播放页等：底部 sheet。
+  bottomSheet,
+
+  /// 详情页嵌入播放器：倍速按钮上方横向小块。
+  detailEmbedded,
+
+  /// 详情页全屏：控制栏上方右侧竖向列表。
+  detailFullscreen,
+}
+
+/// 倍速选择器（底部 sheet 样式，供设置页等使用）。
 class SpeedSelector extends StatelessWidget {
-  /// 当前播放速度
-  final double currentSpeed;
-
-  /// 选择回调
-  final ValueChanged<double> onSelected;
-
   const SpeedSelector({
     super.key,
     required this.currentSpeed,
     required this.onSelected,
   });
 
+  final double currentSpeed;
+  final ValueChanged<double> onSelected;
+
+  static bool speedsMatch(double a, double b) => (a - b).abs() < 0.02;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context)!;
 
     return Container(
       decoration: BoxDecoration(
@@ -27,50 +40,265 @@ class SpeedSelector extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // 标题
           Padding(
             padding: const EdgeInsets.all(16),
             child: Text(
-              '播放速度',
+              l10n.designV3TooltipSpeed,
               style: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w600,
               ),
             ),
           ),
           const Divider(height: 1),
-
-          // 速度选项
           Padding(
             padding: const EdgeInsets.all(12),
             child: Wrap(
               spacing: 8,
               runSpacing: 8,
               children: AppConstants.speedOptions.map((speed) {
-                final isSelected = speed == currentSpeed;
-                return _buildSpeedChip(
-                  context,
-                  speed: speed,
+                final isSelected = speedsMatch(speed, currentSpeed);
+                return _SpeedChip(
+                  label: speed == 1.0 ? l10n.speedSelectorNormal : '${speed}x',
                   isSelected: isSelected,
                   onTap: () => onSelected(speed),
                 );
               }).toList(),
             ),
           ),
-
           const SizedBox(height: 8),
         ],
       ),
     );
   }
+}
 
-  Widget _buildSpeedChip(
-    BuildContext context, {
-    required double speed,
-    required bool isSelected,
-    required VoidCallback onTap,
-  }) {
+/// 详情页播放器内紧凑倍速面板（深色半透明）。
+class SpeedSelectorCompact extends StatelessWidget {
+  const SpeedSelectorCompact({
+    super.key,
+    required this.currentSpeed,
+    required this.onSelected,
+    required this.vertical,
+  });
+
+  final double currentSpeed;
+  final ValueChanged<double> onSelected;
+  final bool vertical;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+
+    Widget option(double speed) {
+      final selected = SpeedSelector.speedsMatch(speed, currentSpeed);
+      final label = speed == 1.0 ? l10n.speedSelectorNormal : '${speed}x';
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => onSelected(speed),
+          borderRadius: BorderRadius.circular(6),
+          child: Container(
+            constraints: BoxConstraints(
+              minWidth: vertical ? 52 : 0,
+              minHeight: vertical ? 30 : 28,
+            ),
+            padding: EdgeInsets.symmetric(
+              horizontal: vertical ? 10 : 8,
+              vertical: vertical ? 4 : 2,
+            ),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: selected
+                  ? Colors.white.withValues(alpha: 0.22)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: vertical ? 12 : 11,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final children =
+        AppConstants.speedOptions.map(option).toList(growable: false);
+
+    return Material(
+      color: Colors.black.withValues(alpha: 0.9),
+      elevation: 6,
+      borderRadius: BorderRadius.circular(8),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: vertical
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                children: children,
+              )
+            : SizedBox(
+                width: 228,
+                child: Wrap(
+                  spacing: 2,
+                  runSpacing: 2,
+                  alignment: WrapAlignment.center,
+                  children: children,
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+/// 显示倍速选择器。
+Future<void> showSpeedSelector({
+  required BuildContext context,
+  required double currentSpeed,
+  required ValueChanged<double> onSelected,
+  SpeedSelectorPresentation presentation =
+      SpeedSelectorPresentation.bottomSheet,
+  GlobalKey? anchorKey,
+}) async {
+  switch (presentation) {
+    case SpeedSelectorPresentation.bottomSheet:
+      await _showSpeedBottomSheet(
+        context: context,
+        currentSpeed: currentSpeed,
+        onSelected: onSelected,
+      );
+    case SpeedSelectorPresentation.detailEmbedded:
+    case SpeedSelectorPresentation.detailFullscreen:
+      await _showSpeedPopover(
+        context: context,
+        currentSpeed: currentSpeed,
+        onSelected: onSelected,
+        presentation: presentation,
+        anchorKey: anchorKey,
+      );
+  }
+}
+
+Future<void> _showSpeedBottomSheet({
+  required BuildContext context,
+  required double currentSpeed,
+  required ValueChanged<double> onSelected,
+}) async {
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (context) => SpeedSelector(
+      currentSpeed: currentSpeed,
+      onSelected: (speed) {
+        onSelected(speed);
+        Navigator.of(context).pop();
+      },
+    ),
+  );
+}
+
+Future<void> _showSpeedPopover({
+  required BuildContext context,
+  required double currentSpeed,
+  required ValueChanged<double> onSelected,
+  required SpeedSelectorPresentation presentation,
+  GlobalKey? anchorKey,
+}) async {
+  final vertical = presentation == SpeedSelectorPresentation.detailFullscreen;
+  final anchorBox = anchorKey?.currentContext?.findRenderObject() as RenderBox?;
+  final media = MediaQuery.of(context);
+  final screen = media.size;
+  final padding = media.padding;
+
+  var panelOffset = Offset(
+    screen.width - (vertical ? 68 : 236),
+    screen.height - padding.bottom - (vertical ? 168 : 96),
+  );
+
+  if (anchorBox != null && anchorBox.hasSize) {
+    final anchor = anchorBox.localToGlobal(Offset.zero) & anchorBox.size;
+    if (vertical) {
+      const panelW = 60.0;
+      const panelH = 268.0;
+      var top = anchor.top - panelH - 8;
+      if (top < padding.top + 8) {
+        top = anchor.bottom + 8;
+      }
+      panelOffset = Offset(
+        (anchor.right - panelW).clamp(8.0, screen.width - panelW - 8),
+        top.clamp(padding.top + 8, screen.height - panelH - padding.bottom - 8),
+      );
+    } else {
+      const panelW = 236.0;
+      const panelH = 76.0;
+      var top = anchor.top - panelH - 6;
+      if (top < padding.top + 8) {
+        top = anchor.bottom + 6;
+      }
+      panelOffset = Offset(
+        (anchor.right - panelW).clamp(8.0, screen.width - panelW - 8),
+        top.clamp(padding.top + 8, screen.height - panelH - padding.bottom - 8),
+      );
+    }
+  }
+
+  await showGeneralDialog<void>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+    barrierColor: Colors.transparent,
+    transitionDuration: const Duration(milliseconds: 120),
+    pageBuilder: (dialogContext, _, __) {
+      return Stack(
+        children: [
+          Positioned(
+            left: panelOffset.dx,
+            top: panelOffset.dy,
+            child: SpeedSelectorCompact(
+              currentSpeed: currentSpeed,
+              vertical: vertical,
+              onSelected: (speed) {
+                onSelected(speed);
+                Navigator.of(dialogContext).pop();
+              },
+            ),
+          ),
+        ],
+      );
+    },
+    transitionBuilder: (context, animation, _, child) {
+      return FadeTransition(
+        opacity: animation,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.96, end: 1).animate(
+            CurvedAnimation(parent: animation, curve: Curves.easeOut),
+          ),
+          alignment: vertical ? Alignment.bottomRight : Alignment.bottomCenter,
+          child: child,
+        ),
+      );
+    },
+  );
+}
+
+class _SpeedChip extends StatelessWidget {
+  const _SpeedChip({
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final label = speed == 1.0 ? '正常' : '${speed}x';
 
     return GestureDetector(
       onTap: onTap,
@@ -85,7 +313,6 @@ class SpeedSelector extends StatelessWidget {
               ? null
               : Border.all(
                   color: theme.dividerColor,
-                  width: 1,
                 ),
         ),
         child: Text(
@@ -101,23 +328,4 @@ class SpeedSelector extends StatelessWidget {
       ),
     );
   }
-}
-
-/// 显示倍速选择器底部弹窗
-Future<void> showSpeedSelector({
-  required BuildContext context,
-  required double currentSpeed,
-  required ValueChanged<double> onSelected,
-}) async {
-  await showModalBottomSheet(
-    context: context,
-    backgroundColor: Colors.transparent,
-    builder: (context) => SpeedSelector(
-      currentSpeed: currentSpeed,
-      onSelected: (speed) {
-        onSelected(speed);
-        Navigator.of(context).pop();
-      },
-    ),
-  );
 }

@@ -26,6 +26,44 @@
   "detailMagnetPlay": "Play",
   "detailMagnetOpenDetail": "Torrent detail",
   "detailMagnetZhLabelHint": "This title",
+  "detailMagnetPlayingBadge": "Magnet playback",
+  "detailMagnetMetaDirector": "Director",
+  "detailMagnetMetaActors": "Cast",
+  "detailMagnetMetaRegion": "Region",
+  "detailMagnetResourceSection": "Torrent info",
+  "detailMagnetMetaResourceTitle": "Resource title",
+  "detailMagnetMetaSource": "Source: {source}",
+  "@detailMagnetMetaSource": {
+    "placeholders": {
+      "source": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetMetaSize": "Size {size}",
+  "@detailMagnetMetaSize": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetMetaSeeders": "Seeders {count}",
+  "@detailMagnetMetaSeeders": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetMetaLeechers": "Leechers {count}",
+  "@detailMagnetMetaLeechers": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
   "designV3MovieTitle": "Interstellar",
   "designV3DoubanLabel": "Douban",
   "designV3MetaLine": "2014 · Sci‑Fi Adventure · 169 min",
@@ -47,6 +85,7 @@
   "designV3MagnetRowMeta": "22.5 GB · magnet",
   "designV3TooltipPlayPause": "Play or pause",
   "designV3TooltipSpeed": "Playback speed",
+  "speedSelectorNormal": "Normal",
   "designV3TooltipVolume": "Volume",
   "designV3TooltipCast": "Cast",
   "designV3TooltipFullscreen": "Fullscreen",
@@ -56,6 +95,7 @@
   "detailPlayerPrevEpisode": "Previous episode",
   "detailPlayerNextEpisode": "Next episode",
   "detailPlayerTooltipCache": "Cache / downloads",
+  "detailPlayerTooltipRouteQuality": "Source / quality",
   "detailPlayerFullscreenEnter": "Full screen",
   "detailPlayerFullscreenExit": "Exit full screen",
   "detailPlayerSubtitleMenu": "Subtitles (auto-match / pick)",
@@ -70,6 +110,9 @@
   "detailPlayerSubtitleNoApiKey": "Add an OpenSubtitles API key in Settings first",
   "detailPlayerSubtitleApplyFailed": "Could not load subtitles",
   "detailPlayerSubtitleApplied": "Subtitles loaded",
+  "detailPlayerSubtitleNoApiKeyHint": "Magnets can auto-match subtitles; add an OpenSubtitles API key in Settings → OpenSubtitles API Key",
+  "detailPlayerSubtitleDelay": "Subtitle timing",
+  "detailPlayerSubtitleDelayReset": "Reset offset",
   "homeTitleRecommend": "Recommendations",
   "homeEndOfListHint": "No more",
   "toolbarSearch": "Search",
@@ -146,5 +189,188 @@
   "homeSnackbarRetry": "Retry",
   "homeLoadFailedTapRetry": "Load failed, tap to retry",
   "homeSectionSeeMore": "Show more",
-  "homeSectionCollapse": "Show less"
+  "homeSectionCollapse": "Show less",
+  "settingsAutoPlayOnDetailEnter": "Auto-play on detail",
+  "settingsAutoPlayOnDetailEnterSubtitle": "Start playback when opening a title or magnet detail",
+  "settingsPreloadNextEpisode": "Preload next episode",
+  "settingsPreloadNextEpisodeSubtitle": "Resolve the next episode URL when playback reaches 80%",
+  "settingsPlaybackPrefetch": "Playback prefetch",
+  "settingsPlaybackPrefetchSubtitle": "Prefetch the first few MB of the next episode on any network",
+  "settingsTmdbApiKey": "TMDB API Key",
+  "settingsTmdbApiKeyConfigured": "Configured",
+  "settingsTmdbApiKeyNotConfigured": "Not set (Douban lookup still works)",
+  "settingsTmdbApiKeyDialogBody": "Register at themoviedb.org and create an API key to map Chinese titles to IMDb IDs and English names for better magnet results. Without a key, Douban suggest + IMDb lookup are still used.",
+  "settingsTmdbApiKeySaved": "TMDB API settings saved",
+  "detailRouteFallbackSnack": "Buffering is slow; trying another source",
+  "detailPlayerLockControls": "Lock player controls",
+  "detailPlayerUnlockControls": "Unlock player controls",
+  "homeContinueWatching": "Continue watching",
+  "homeContinueWatchingSeeAll": "See all",
+  "searchActionSearch": "Search",
+  "searchClearFilters": "Clear filters",
+  "searchPlay": "Play",
+  "searchOpenDetail": "Open detail",
+  "detailReplay": "Replay",
+  "detailEpisodeFinished": "This episode has finished",
+  "detailHistoryOverlay": "Last watched ep. {episode} at {percent}%",
+  "@detailHistoryOverlay": {
+    "placeholders": {
+      "episode": { "type": "int" },
+      "percent": { "type": "String" }
+    }
+  },
+  "detailLoadError": "Could not load title info. Check your network or switch source in Source Manager.",
+  "detailBufferingMagnet": "Loading magnet resource…",
+  "detailBufferingConnect": "Connecting to stream…",
+  "detailBuffering": "Buffering…",
+  "detailPlaybackFailed": "Playback failed",
+  "detailRetry": "Retry",
+  "detailVolumeTooltip": "Volume (tap to expand)",
+  "detailMute": "Mute",
+  "detailUnmute": "Unmute",
+  "detailRouteLabel": "Source {index}",
+  "@detailRouteLabel": {
+    "placeholders": {
+      "index": { "type": "int" }
+    }
+  },
+  "detailDlnaSearching": "Searching for devices on LAN…",
+  "detailDlnaTitle": "DLNA devices",
+  "detailDlnaEmpty": "No devices found. Make sure your TV and phone are on the same Wi‑Fi and DLNA/cast is enabled on the TV.",
+  "detailDlnaCastOk": "Stream URL sent to device",
+  "detailDlnaCastOkNamed": "Casting to {device}",
+  "@detailDlnaCastOkNamed": {
+    "placeholders": {
+      "device": { "type": "String" }
+    }
+  },
+  "detailDlnaCastFailed": "Cast failed. Try another route or try again later.",
+  "detailDlnaHint": "Pick a TV or box on your network. CMS, magnet, and offline cache URLs are converted for the TV.",
+  "detailDlnaRefresh": "Search again",
+  "detailDlnaNeedPlayback": "Start playback before casting",
+  "detailDlnaNoLanIp": "No LAN IP found. Connect to Wi‑Fi and try again.",
+  "detailDlnaNoActiveStream": "Magnet stream not ready yet. Try again shortly.",
+  "detailDlnaUnsupportedSource": "This source cannot be cast yet",
+  "detailDlnaLocalServeFailed": "Could not share the local file on LAN",
+  "detailDlnaResolveEmpty": "Could not resolve a castable URL",
+  "detailDlnaCastingNamed": "Casting · {device}",
+  "@detailDlnaCastingNamed": {
+    "placeholders": {
+      "device": { "type": "String" }
+    }
+  },
+  "detailClose": "Close",
+  "detailMagnetParsingMeta": "Parsing magnet metadata…",
+  "detailMagnetAddFailed": "Failed to add magnet link",
+  "detailMagnetNoVideoFile": "No playable video file found",
+  "detailMagnetBuffering": "Buffering data…",
+  "detailMagnetStreamFailed": "Failed to start playback stream",
+  "detailMagnetConnectingPeers": "Connecting to peers…",
+  "detailPlaybackErrorNoUrl": "No playable URL",
+  "detailPlaybackErrorParseFailed": "Parse failed",
+  "detailPlaybackErrorRouteSwitched": "Switched source",
+  "detailPlaybackErrorMultiSourceFailed": "Multi-source fallback failed",
+  "detailPlaybackErrorNetwork": "Network or player error",
+  "detailPlaybackErrorMagnet": "Magnet playback failed",
+  "detailEpisodeLabel": "Episode {index}",
+  "@detailEpisodeLabel": {
+    "placeholders": {
+      "index": { "type": "int" }
+    }
+  },
+  "detailEpisodeGridCount": "{count} episodes",
+  "@detailEpisodeGridCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "detailEpisodeGridPageInfo": "Page {current} / {total}",
+  "@detailEpisodeGridPageInfo": {
+    "placeholders": {
+      "current": { "type": "int" },
+      "total": { "type": "int" }
+    }
+  },
+  "detailEpisodeGridPrevPage": "Previous page",
+  "detailEpisodeGridNextPage": "Next page",
+  "detailEpisodeGridJumpToEpisode": "Jump to episode",
+  "detailEpisodeGridJumpTitle": "Jump to episode",
+  "detailEpisodeGridJumpHint": "Episode number (1–{max})",
+  "@detailEpisodeGridJumpHint": {
+    "placeholders": {
+      "max": { "type": "int" }
+    }
+  },
+  "detailEpisodeGridJumpConfirm": "Go",
+  "detailCachePanelTitle": "Offline cache",
+  "detailCacheDownloadCurrent": "Cache current episode",
+  "detailCacheSelectEpisodes": "Select episodes",
+  "detailCacheSelectAll": "Select all",
+  "detailCacheClearSelection": "Clear",
+  "detailCacheDownloadSelected": "Download selected ({count})",
+  "@detailCacheDownloadSelected": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "detailCacheBatchQueued": "Added {count} download tasks",
+  "@detailCacheBatchQueued": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "detailCacheBatchNone": "Selected episodes are already queued or cached",
+  "detailCacheEmptyForMovie": "No cache tasks for this title",
+  "detailCacheAlreadyCompleted": "Current episode is already cached",
+  "detailCacheAlreadyDownloading": "Current episode is already downloading",
+  "detailCacheQueued": "Added to download queue",
+  "detailCacheDownloadStarted": "Download started",
+  "detailCacheWebUnsupported": "Offline cache is not supported on web",
+  "detailCacheMagnetUnsupported": "Magnet sources cannot be cached offline",
+  "detailCacheNoEpisode": "No playable URL to cache",
+  "detailCacheUnsupportedUrl": "This URL cannot be cached",
+  "detailCacheParseFailed": "Could not resolve a direct video URL for caching",
+  "detailCacheDeleted": "Cache deleted",
+  "detailCacheManageAll": "All downloads",
+  "detailCacheStatusWaiting": "Waiting",
+  "detailCacheStatusDownloading": "Downloading",
+  "detailCacheStatusPaused": "Paused",
+  "detailCacheStatusCompleted": "Completed",
+  "detailCacheStatusFailed": "Failed",
+  "detailCachePause": "Pause",
+  "detailCacheResume": "Resume",
+  "detailCacheDelete": "Delete",
+  "cacheManagerTitle": "Downloads",
+  "cacheManagerOnlyWifi": "Wi‑Fi only",
+  "cacheManagerStorageTitle": "Storage",
+  "cacheManagerClearAll": "Clear all",
+  "cacheManagerClearConfirmTitle": "Clear cache",
+  "cacheManagerClearConfirmBody": "Delete all cached videos?",
+  "cacheManagerClearDone": "Cache cleared",
+  "cacheManagerUsedLabel": "Used: {used} / {max}",
+  "@cacheManagerUsedLabel": {
+    "placeholders": {
+      "used": { "type": "String" },
+      "max": { "type": "String" }
+    }
+  },
+  "cacheManagerCompletedCount": "{count} videos cached",
+  "@cacheManagerCompletedCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "cacheWebBanner": "Web does not support offline video downloads; an empty list is expected.",
+  "cacheFileMissing": "Cached file not found",
+  "cacheWebPlayUnsupported": "On web, play online from the detail page",
+  "cachePlayOffline": "Play offline",
+  "cacheDownloadSpeed": "{speed}/s",
+  "@cacheDownloadSpeed": {
+    "placeholders": {
+      "speed": { "type": "String" }
+    }
+  },
+  "followCacheTabEmpty": "No downloads yet",
+  "settingsOnlyWifiCache": "Download cache on Wi‑Fi only",
+  "settingsOnlyWifiCacheSubtitle": "Pauses downloads on cellular; synced with cache manager"
 }

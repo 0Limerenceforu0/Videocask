@@ -69,9 +69,15 @@ class ImdbLookupService {
     final y = year?.trim();
     final queries = <String>[];
     final c = cleanTitleForLookup(primaryTitle);
-    if (c.isNotEmpty) queries.add(c);
     final a = cleanTitleForLookup(alias ?? '');
-    if (a.isNotEmpty && a != c) queries.add(a);
+    // 中文主标题在 IMDb 联想接口命中率低，优先用 CMS 英文别名检索
+    if (_cjkPattern.hasMatch(c) && a.isNotEmpty && !_cjkPattern.hasMatch(a)) {
+      queries.add(a);
+      if (c.isNotEmpty && c != a) queries.add(c);
+    } else {
+      if (c.isNotEmpty) queries.add(c);
+      if (a.isNotEmpty && a != c) queries.add(a);
+    }
 
     String? bestId;
     double bestScore = 0;
@@ -220,9 +226,14 @@ class ImdbLookupService {
     final y = year?.trim();
     final queries = <String>[];
     final c = cleanTitleForLookup(primaryTitle);
-    if (c.isNotEmpty) queries.add(c);
     final a = cleanTitleForLookup(alias ?? '');
-    if (a.isNotEmpty && a != c) queries.add(a);
+    if (_cjkPattern.hasMatch(c) && a.isNotEmpty && !_cjkPattern.hasMatch(a)) {
+      queries.add(a);
+      if (c.isNotEmpty && c != a) queries.add(c);
+    } else {
+      if (c.isNotEmpty) queries.add(c);
+      if (a.isNotEmpty && a != c) queries.add(a);
+    }
 
     Map<String, dynamic>? bestItem;
     double bestScore = 0;

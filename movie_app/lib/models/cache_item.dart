@@ -24,6 +24,9 @@ class CacheItem {
   /// 播放地址
   final String url;
 
+  /// 采集站播放页（用作 CDN 请求的 Referer）
+  final String pageUrl;
+
   /// 清晰度
   final String quality;
 
@@ -57,6 +60,7 @@ class CacheItem {
     this.episodeIndex = 0,
     this.episodeName = '',
     required this.url,
+    this.pageUrl = '',
     this.quality = '自动',
     this.localPath = '',
     this.fileSize = 0,
@@ -78,6 +82,7 @@ class CacheItem {
       episodeIndex: json['episodeIndex'] as int? ?? 0,
       episodeName: json['episodeName']?.toString() ?? '',
       url: json['url']?.toString() ?? '',
+      pageUrl: json['pageUrl']?.toString() ?? '',
       quality: json['quality']?.toString() ?? '自动',
       localPath: json['localPath']?.toString() ?? '',
       fileSize: json['fileSize'] as int? ?? 0,
@@ -104,6 +109,7 @@ class CacheItem {
       'episodeIndex': episodeIndex,
       'episodeName': episodeName,
       'url': url,
+      'pageUrl': pageUrl,
       'quality': quality,
       'localPath': localPath,
       'fileSize': fileSize,
@@ -125,6 +131,7 @@ class CacheItem {
     int? episodeIndex,
     String? episodeName,
     String? url,
+    String? pageUrl,
     String? quality,
     String? localPath,
     int? fileSize,
@@ -143,6 +150,7 @@ class CacheItem {
       episodeIndex: episodeIndex ?? this.episodeIndex,
       episodeName: episodeName ?? this.episodeName,
       url: url ?? this.url,
+      pageUrl: pageUrl ?? this.pageUrl,
       quality: quality ?? this.quality,
       localPath: localPath ?? this.localPath,
       fileSize: fileSize ?? this.fileSize,
@@ -174,6 +182,24 @@ class CacheItem {
 
   /// 是否等待中
   bool get isWaiting => status == 'waiting';
+
+  /// 详情/缓存管理页是否应展示进度条。
+  bool get showsDownloadProgress {
+    if (isCompleted) return false;
+    if (isDownloading || isPaused || isFailed) return true;
+    return fileSize > 0 && downloadedSize > 0;
+  }
+
+  /// 已下载 / 总量文案（统一为字节）。
+  String get progressSizeLabel {
+    if (fileSize > 0) {
+      return '$formattedDownloadedSize / $formattedSize';
+    }
+    if (downloadedSize > 0) {
+      return formattedDownloadedSize;
+    }
+    return '';
+  }
 
   /// 格式化文件大小
   String get formattedSize => _formatBytes(fileSize);

@@ -274,6 +274,16 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
+  static final RegExp _cjkPattern = RegExp(r'[\u4e00-\u9fff]');
+
+  /// 中文搜索词传给磁力详情，用于补全海报 / 简介 / 推荐。
+  String? _magnetDisplayTitleHint() {
+    final q = _currentQuery.trim();
+    if (q.isEmpty) return null;
+    if (_cjkPattern.hasMatch(q)) return q;
+    return null;
+  }
+
   /// 删除搜索历史
   void _deleteHistory(String keyword) async {
     await _searchService.deleteSearchHistory(keyword);
@@ -355,7 +365,7 @@ class _SearchPageState extends State<SearchPage> {
                     constraints: const BoxConstraints(
                       maxWidth: HiFiDesignTokens.shellMaxWidth,
                     ),
-                    child: _buildBody(theme),
+                    child: _buildBody(theme, l10n),
                   ),
                 ),
               ),
@@ -376,11 +386,11 @@ class _SearchPageState extends State<SearchPage> {
         actions: [
           TextButton(
             onPressed: () => _doSearch(_searchController.text),
-            child: const Text('搜索'),
+            child: Text(l10n.searchActionSearch),
           ),
         ],
       ),
-      body: _buildBody(theme),
+      body: _buildBody(theme, l10n),
     );
   }
 
@@ -496,7 +506,7 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   /// 构建主体
-  Widget _buildBody(ThemeData theme) {
+  Widget _buildBody(ThemeData theme, AppLocalizations l10n) {
     // 显示搜索建议
     if (_showSuggestions && _suggestions.isNotEmpty) {
       return _buildSuggestions(theme);
@@ -504,7 +514,7 @@ class _SearchPageState extends State<SearchPage> {
 
     // 显示搜索结果
     if (_currentQuery.isNotEmpty) {
-      return _buildSearchResults(theme);
+      return _buildSearchResults(theme, l10n);
     }
 
     // 显示搜索历史和热门搜索
@@ -562,7 +572,7 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   /// 构建搜索结果（支持多源流式追加展示 + 筛选）
-  Widget _buildSearchResults(ThemeData theme) {
+  Widget _buildSearchResults(ThemeData theme, AppLocalizations l10n) {
     if (_searchBlockedNoSources) {
       return EmptyWidget(
         message: '没有已启用的影视搜索源，也未配置可用的磁力源。请在播放源管理中开启 CMS 源，或在设置中启用磁力搜索源。',
@@ -659,7 +669,8 @@ class _SearchPageState extends State<SearchPage> {
                       style: TextStyle(color: theme.hintColor, fontSize: 13),
                     ),
                   ),
-                ..._magnetResults.map((t) => _buildMagnetSearchTile(theme, t)),
+                ..._magnetResults
+                    .map((t) => _buildMagnetSearchTile(theme, l10n, t)),
               ],
             ],
           ),
@@ -756,7 +767,7 @@ class _SearchPageState extends State<SearchPage> {
                               _filterSort = '';
                             });
                           },
-                          child: const Text('清除筛选'),
+                          child: Text(l10n.searchClearFilters),
                         ),
                       ],
                     ),
@@ -854,7 +865,7 @@ class _SearchPageState extends State<SearchPage> {
                         ),
                       ),
                     ..._magnetResults
-                        .map((t) => _buildMagnetSearchTile(theme, t)),
+                        .map((t) => _buildMagnetSearchTile(theme, l10n, t)),
                   ],
                 ],
               ),
@@ -864,8 +875,13 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
-  Widget _buildMagnetSearchTile(ThemeData theme, TorrentInfo t) {
+  Widget _buildMagnetSearchTile(
+    ThemeData theme,
+    AppLocalizations l10n,
+    TorrentInfo t,
+  ) {
     final lines = splitTorrentDisplayTitle(t.name);
+    final hint = _magnetDisplayTitleHint();
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       elevation: 0,
@@ -904,6 +920,16 @@ class _SearchPageState extends State<SearchPage> {
                           style: TextStyle(
                             fontSize: 12,
                             color: theme.hintColor,
+                          ),
+                        ),
+                      ],
+                      if (hint != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          '中文检索：$hint',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: theme.colorScheme.primary,
                           ),
                         ),
                       ],
@@ -951,9 +977,13 @@ class _SearchPageState extends State<SearchPage> {
             Row(
               children: [
                 FilledButton.icon(
-                  onPressed: () => AppRoutes.toMagnetTorrentDetail(context, t),
+                  onPressed: () => AppRoutes.toMagnetTorrentDetail(
+                    context,
+                    t,
+                    displayTitleHint: _magnetDisplayTitleHint(),
+                  ),
                   icon: const Icon(Icons.play_arrow, size: 22),
-                  label: const Text('播放'),
+                  label: Text(l10n.searchPlay),
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16,
@@ -963,8 +993,12 @@ class _SearchPageState extends State<SearchPage> {
                 ),
                 const SizedBox(width: 10),
                 TextButton(
-                  onPressed: () => AppRoutes.toMagnetTorrentDetail(context, t),
-                  child: const Text('进入详情'),
+                  onPressed: () => AppRoutes.toMagnetTorrentDetail(
+                    context,
+                    t,
+                    displayTitleHint: _magnetDisplayTitleHint(),
+                  ),
+                  child: Text(l10n.searchOpenDetail),
                 ),
               ],
             ),

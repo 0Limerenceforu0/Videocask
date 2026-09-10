@@ -195,16 +195,6 @@ class _CategoryPortalPageState extends State<CategoryPortalPage> {
     return copy.take(10).toList();
   }
 
-  int _crossAxisCount(double width) {
-    if (width >= 880) {
-      return 5;
-    }
-    if (width > 520) {
-      return 3;
-    }
-    return 2;
-  }
-
   String _title(AppLocalizations l10n) {
     return switch (widget.kind) {
       ChannelPortalKind.movies => l10n.navChannelMovies,
@@ -314,7 +304,6 @@ class _CategoryPortalPageState extends State<CategoryPortalPage> {
     required ThemeData theme,
     required AppLocalizations l10n,
     required bool wide,
-    required int crossCount,
   }) {
     return [
       for (var i = 0; i < 3; i++)
@@ -325,7 +314,6 @@ class _CategoryPortalPageState extends State<CategoryPortalPage> {
               title: _moduleTitle(l10n, i),
               movies: _slots[i].movies,
               wide: wide,
-              narrowGridCrossAxisCount: crossCount,
               rankMovies: _rankSlice(_slots[i].movies),
               isLoading: _slots[i].loading && _slots[i].movies.isEmpty,
               errorMessage: _slots[i].error,
@@ -394,12 +382,12 @@ class _CategoryPortalPageState extends State<CategoryPortalPage> {
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final wide = constraints.maxWidth >= 880;
-                final crossCount = _crossAxisCount(constraints.maxWidth);
 
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     CategoryGenreRegionFilterBand(
+                      category: widget.kind.categoryApiValue,
                       selectedGenre: _filterGenre,
                       selectedRegion: _filterRegion,
                       onGenreSelected: (v) async {
@@ -441,7 +429,6 @@ class _CategoryPortalPageState extends State<CategoryPortalPage> {
                               theme: theme,
                               l10n: l10n,
                               wide: wide,
-                              crossCount: crossCount,
                             ),
                           ),
                         ),

@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
+import '../../utils/web_http_stub.dart'
+    if (dart.library.html) '../../utils/web_http.dart' as web_http;
 import 'package:go_router/go_router.dart';
 import '../../config/routes.dart';
 import '../../providers/history_provider.dart';
@@ -683,7 +686,7 @@ class StatsPage extends StatelessWidget {
                     clipBehavior: Clip.antiAlias,
                     child: movie.movieCover.isNotEmpty
                         ? Image.network(
-                            movie.movieCover,
+                            web_http.webProxiedImageUrl(movie.movieCover),
                             fit: BoxFit.cover,
                             errorBuilder: (_, __, ___) => const Icon(
                               Icons.movie_outlined,

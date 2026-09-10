@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+
+import '../../utils/web_http_stub.dart'
+    if (dart.library.html) '../../utils/web_http.dart' as web_http;
 import '../../config/routes.dart';
 import '../../models/playlist.dart';
 import '../../providers/playlist_provider.dart';
+import '../../widgets/movie_grid_layout.dart';
 
 /// 播放列表详情页
 ///
@@ -128,14 +132,10 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
     ThemeData theme,
     Playlist playlist,
   ) {
+    final grid = MovieGridLayout.metricsForContext(context);
     return GridView.builder(
       padding: const EdgeInsets.all(12),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        childAspectRatio: 0.65,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 12,
-      ),
+      gridDelegate: grid.sliverDelegate,
       itemCount: playlist.items.length,
       itemBuilder: (context, index) {
         final item = playlist.items[index];
@@ -234,7 +234,7 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                 aspectRatio: 0.65,
                 child: item.coverUrl.isNotEmpty
                     ? CachedNetworkImage(
-                        imageUrl: item.coverUrl,
+                        imageUrl: web_http.webProxiedImageUrl(item.coverUrl),
                         fit: BoxFit.cover,
                         memCacheWidth: 300,
                         memCacheHeight: 462,

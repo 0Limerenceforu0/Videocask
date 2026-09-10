@@ -10,3 +10,12 @@ Future<String?> httpGetText(String url) async {
 Future<String?> webRequestForApi(String targetUrl) async {
   throw UnsupportedError('webRequestForApi 仅在 Web 端可用');
 }
+
+/// 非 Web 端不需要代理，原样返回。
+String webProxiedMediaUrl(String rawUrl) => rawUrl;
+
+/// 非 Web 端不需要代理，原样返回。
+String webProxiedImageUrl(String rawUrl) => rawUrl;
+
+/// 非 Web 端走本地 HLS 去广告代理，这里原样返回。
+String webHlsUrl(String rawUrl) => rawUrl;

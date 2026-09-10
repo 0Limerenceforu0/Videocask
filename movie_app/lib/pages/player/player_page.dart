@@ -15,6 +15,14 @@ import '../../providers/history_provider.dart';
 import '../../widgets/speed_selector.dart';
 import '../../widgets/quality_selector.dart';
 import '../../widgets/subtitle_selector.dart';
+import '../detail/detail_video_layout.dart';
+
+/// 移动端：非全屏仅竖屏；全屏允许四向（横屏片源场景，独立页无分辨率时默认可横屏）。
+const List<DeviceOrientation> _playerPagePortraitOrientations =
+    DetailVideoLayout.portraitOrientations;
+
+const List<DeviceOrientation> _playerPageFullscreenOrientations =
+    DetailVideoLayout.allOrientations;
 
 /// 播放器页面
 class PlayerPage extends StatefulWidget {
@@ -255,11 +263,10 @@ class _PlayerPageState extends State<PlayerPage> {
       }
     };
 
-    // 设置系统方向
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+    // 独立播放页默认竖屏；全屏后可横屏旋转
+    await SystemChrome.setPreferredOrientations(
+      _playerPagePortraitOrientations,
+    );
     if (!mounted) return;
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
@@ -464,46 +471,13 @@ class _PlayerPageState extends State<PlayerPage> {
     _hideTimer?.cancel();
     _saveProgress();
     _playerService.dispose();
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.portraitDown,
-    ]);
+    SystemChrome.setPreferredOrientations(_playerPagePortraitOrientations);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // Web端不支持 media_kit，显示提示信息
-    if (kIsWeb) {
-      return Scaffold(
-        backgroundColor: Colors.black,
-        appBar: AppBar(
-          backgroundColor: Colors.black,
-          foregroundColor: Colors.white,
-          title: Text(widget.title),
-        ),
-        body: const Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.warning_amber_rounded,
-                color: Colors.white54,
-                size: 48,
-              ),
-              SizedBox(height: 16),
-              Text(
-                'Web端暂不支持播放，请使用桌面端或移动端',
-                style: TextStyle(color: Colors.white, fontSize: 16),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
     if (_playerService.videoController == null) {
       // 正在解析或初始化播放器
       return Scaffold(
@@ -551,7 +525,9 @@ class _PlayerPageState extends State<PlayerPage> {
           fit: StackFit.expand,
           children: [
             // 视频播放器
-            Center(
+            // 全屏页用 SizedBox.expand 给平台视图确定尺寸，避免 Web 上 HtmlElementView
+            // 在 unbounded 约束下塌缩（灰屏）。Video 内部 FittedBox 会按 fit 保持比例。
+            SizedBox.expand(
               child: Video(
                 controller: _playerService.videoController!,
                 controls: null,
@@ -982,6 +958,15 @@ class _PlayerPageState extends State<PlayerPage> {
                     context: context,
                     currentIndex: -1,
                     subtitleTracks: const [],
+                    currentVideoSource: widget.url,
+                    videoTitle: widget.title,
+                    onAiSubtitleReady: (srtOrPath) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('AI 字幕生成完成，可在外挂字幕设置中加载'),
+                        ),
+                      );
+                    },
                     onSelected: (index) {},
                   ),
                 ),
@@ -1024,20 +1009,16 @@ class _PlayerPageState extends State<PlayerPage> {
                         SystemChrome.setEnabledSystemUIMode(
                           SystemUiMode.immersiveSticky,
                         );
-                        SystemChrome.setPreferredOrientations([
-                          DeviceOrientation.landscapeLeft,
-                          DeviceOrientation.landscapeRight,
-                        ]);
+                        SystemChrome.setPreferredOrientations(
+                          _playerPageFullscreenOrientations,
+                        );
                       } else {
                         SystemChrome.setEnabledSystemUIMode(
                           SystemUiMode.edgeToEdge,
                         );
-                        SystemChrome.setPreferredOrientations([
-                          DeviceOrientation.portraitUp,
-                          DeviceOrientation.portraitDown,
-                          DeviceOrientation.landscapeLeft,
-                          DeviceOrientation.landscapeRight,
-                        ]);
+                        SystemChrome.setPreferredOrientations(
+                          _playerPagePortraitOrientations,
+                        );
                       }
                     }
                   },

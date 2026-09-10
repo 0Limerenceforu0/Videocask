@@ -4,32 +4,72 @@ import 'package:movie_app/l10n/app_localizations.dart';
 import 'package:movie_app/models/movie.dart';
 import 'package:movie_app/models/torrent_info.dart';
 
+import 'package:movie_app/utils/episode_display_label.dart';
+
+import 'detail_magnet_info_panel.dart';
 import 'detail_magnet_results_panel.dart';
 import 'detail_ui_tokens.dart';
 
 /// 宽屏（Windows）左栏：标题、元信息、简介。
 class DetailDesktopLeftSection extends StatelessWidget {
-  const DetailDesktopLeftSection({super.key, required this.movie});
+  const DetailDesktopLeftSection({
+    super.key,
+    required this.movie,
+    this.isMagnetDetail = false,
+    this.torrent,
+    this.isMagnetPlaying = false,
+  });
 
   final Movie movie;
+  final bool isMagnetDetail;
+  final TorrentInfo? torrent;
+  final bool isMagnetPlaying;
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
+    final colors = DetailPageColors.of(context);
+    final overview = isMagnetDetail
+        ? detailMagnetOverviewText(movie.description)
+        : movie.description.trim();
+    final titleLines = isMagnetDetail
+        ? detailMagnetTitleLines(movie, torrent)
+        : (primary: movie.name, secondary: null as String?);
+    final subtitle = titleLines.secondary?.trim().isNotEmpty == true
+        ? titleLines.secondary!.trim()
+        : '';
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            movie.name,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  titleLines.primary,
+                  style: TextStyle(
+                    color: colors.onSurface,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              if (isMagnetDetail && !isMagnetPlaying) ...[
+                const SizedBox(width: 8),
+                const DetailMagnetPlayingBadge(compact: true),
+              ],
+            ],
           ),
+          if (subtitle.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              style: TextStyle(color: colors.muted, fontSize: 14, height: 1.35),
+            ),
+          ],
           const SizedBox(height: 8),
           Wrap(
             spacing: 12,
@@ -40,42 +80,67 @@ class DetailDesktopLeftSection extends StatelessWidget {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
-                    color: kDetailAccentColor,
+                    color: colors.accent,
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
                     '${movie.rating}',
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    style: TextStyle(color: colors.onAccent, fontSize: 12),
                   ),
                 ),
-              Text(
-                movie.year,
-                style: const TextStyle(color: Colors.white70, fontSize: 14),
-              ),
-              Text(
-                movie.genres.join(' / '),
-                style: const TextStyle(color: Colors.white70, fontSize: 14),
-              ),
+              if (movie.year.trim().isNotEmpty)
+                Text(
+                  movie.year,
+                  style: TextStyle(color: colors.muted, fontSize: 14),
+                ),
+              if (movie.genres.isNotEmpty)
+                Text(
+                  movie.genres.join(' / '),
+                  style: TextStyle(color: colors.muted, fontSize: 14),
+                ),
             ],
           ),
-          const SizedBox(height: 16),
-          Text(
-            l10n.detailIntro,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
+          if (isMagnetDetail) ...[
+            const SizedBox(height: 12),
+            DetailMagnetInfoPanel(
+              movie: movie,
+              torrent: torrent,
+              showPlayingBadge: isMagnetPlaying,
             ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            movie.description,
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 14,
-              height: 1.5,
+          ],
+          if (overview.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+              decoration: BoxDecoration(
+                color: colors.card,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    l10n.detailIntro,
+                    style: TextStyle(
+                      color: colors.onSurface,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    overview,
+                    style: TextStyle(
+                      color: colors.muted,
+                      fontSize: 14,
+                      height: 1.5,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );
@@ -139,6 +204,7 @@ class _DetailDesktopRightSidebarState extends State<DetailDesktopRightSidebar>
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
+    final colors = DetailPageColors.of(context);
     final routes = widget.movie.playRoutes;
     final safeRouteIndex = routes.isEmpty
         ? 0
@@ -147,15 +213,15 @@ class _DetailDesktopRightSidebarState extends State<DetailDesktopRightSidebar>
         routes.isEmpty ? const <Episode>[] : routes[safeRouteIndex].episodes;
 
     return Material(
-      color: Colors.black,
+      color: colors.scaffold,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           TabBar(
             controller: _episodeOrRouteTabController,
-            labelColor: Colors.white,
-            unselectedLabelColor: Colors.white54,
-            indicatorColor: kDetailAccentColor,
+            labelColor: colors.onSurface,
+            unselectedLabelColor: colors.muted,
+            indicatorColor: colors.accent,
             tabs: [
               Tab(text: l10n.detailDesktopEpisodes),
               Tab(text: l10n.detailPlayRoutes),
@@ -192,9 +258,9 @@ class _DetailDesktopRightSidebarState extends State<DetailDesktopRightSidebar>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   TabBar(
-                    labelColor: Colors.white,
-                    unselectedLabelColor: Colors.white54,
-                    indicatorColor: kDetailAccentColor,
+                    labelColor: colors.onSurface,
+                    unselectedLabelColor: colors.muted,
+                    indicatorColor: colors.accent,
                     tabs: [
                       Tab(text: l10n.detailDesktopTabMagnet),
                       Tab(text: l10n.detailDesktopTabRecommend),
@@ -251,6 +317,7 @@ class _DesktopEpisodesPane extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = DetailPageColors.of(context);
     if (episodes.isEmpty) {
       return Center(
         child: Padding(
@@ -258,8 +325,8 @@ class _DesktopEpisodesPane extends StatelessWidget {
           child: Text(
             l10n.detailDesktopNoEpisodes,
             textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Colors.white38,
+            style: TextStyle(
+              color: colors.faint,
               fontSize: 13,
             ),
           ),
@@ -274,11 +341,16 @@ class _DesktopEpisodesPane extends StatelessWidget {
         final ep = episodes[ei];
         final playing =
             playingRouteIndex == safeRouteIndex && playingEpisodeIndex == ei;
+        final display = EpisodeDisplayLabel.forEpisode(
+          name: ep.name,
+          index: ei,
+        );
         return Padding(
           padding: const EdgeInsets.only(bottom: 6),
           child: Material(
-            color:
-                playing ? Colors.blue.withValues(alpha: 0.35) : Colors.white10,
+            color: playing
+                ? colors.accent.withValues(alpha: 0.35)
+                : colors.surfaceTint,
             borderRadius: BorderRadius.circular(8),
             child: InkWell(
               onTap: () => onEpisodeSelected(safeRouteIndex, ei),
@@ -288,15 +360,30 @@ class _DesktopEpisodesPane extends StatelessWidget {
                   horizontal: 12,
                   vertical: 10,
                 ),
-                child: Text(
-                  ep.name.isNotEmpty
-                      ? ep.name
-                      : '${l10n.detailDesktopEpisodes} ${ei + 1}',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: playing ? FontWeight.w600 : FontWeight.normal,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      display.primary,
+                      style: TextStyle(
+                        color: colors.onSurface,
+                        fontSize: 14,
+                        fontWeight: playing ? FontWeight.w600 : FontWeight.w500,
+                      ),
+                    ),
+                    if (display.full != display.primary) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        display.full,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: colors.muted,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ),
@@ -322,13 +409,14 @@ class _DesktopRoutesPane extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = DetailPageColors.of(context);
     if (routes.isEmpty) {
       return ListView(
         padding: const EdgeInsets.all(12),
         children: [
           Text(
             l10n.detailMagnetSearchHint,
-            style: const TextStyle(color: Colors.white54, fontSize: 13),
+            style: TextStyle(color: colors.muted, fontSize: 13),
           ),
         ],
       );
@@ -342,8 +430,8 @@ class _DesktopRoutesPane extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: 6),
           child: Material(
             color: selected
-                ? kDetailAccentColor.withValues(alpha: 0.35)
-                : Colors.white10,
+                ? colors.accent.withValues(alpha: 0.35)
+                : colors.surfaceTint,
             borderRadius: BorderRadius.circular(8),
             child: InkWell(
               onTap: () => onRouteSelected(i),
@@ -359,7 +447,7 @@ class _DesktopRoutesPane extends StatelessWidget {
                       child: Text(
                         routes[i].name,
                         style: TextStyle(
-                          color: Colors.white,
+                          color: colors.onSurface,
                           fontSize: 14,
                           fontWeight:
                               selected ? FontWeight.w600 : FontWeight.normal,
@@ -368,7 +456,7 @@ class _DesktopRoutesPane extends StatelessWidget {
                     ),
                     Icon(
                       Icons.chevron_right,
-                      color: selected ? Colors.white : Colors.white54,
+                      color: selected ? colors.onSurface : colors.muted,
                       size: 20,
                     ),
                   ],
@@ -403,13 +491,14 @@ class _MagnetTabBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = DetailPageColors.of(context);
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
         Text(
           l10n.detailMagnetSearch,
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: colors.onSurface,
             fontSize: 15,
             fontWeight: FontWeight.w600,
           ),
@@ -418,7 +507,7 @@ class _MagnetTabBody extends StatelessWidget {
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: Colors.white10,
+            color: colors.surfaceTint,
             borderRadius: BorderRadius.circular(8),
           ),
           child: Column(
@@ -426,7 +515,7 @@ class _MagnetTabBody extends StatelessWidget {
             children: [
               Text(
                 l10n.detailMagnetSearchHint,
-                style: const TextStyle(color: Colors.white70, fontSize: 12),
+                style: TextStyle(color: colors.muted, fontSize: 12),
               ),
               const SizedBox(height: 10),
               DetailMagnetResultsPanel(
@@ -459,6 +548,7 @@ class _RelatedTabBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = DetailPageColors.of(context);
     final list = movie.relatedMovies;
     if (list.isEmpty) {
       return ListView(
@@ -466,7 +556,7 @@ class _RelatedTabBody extends StatelessWidget {
         children: [
           Text(
             l10n.detailRelatedHint,
-            style: const TextStyle(color: Colors.white54, fontSize: 14),
+            style: TextStyle(color: colors.muted, fontSize: 14),
           ),
         ],
       );
@@ -474,8 +564,7 @@ class _RelatedTabBody extends StatelessWidget {
     return ListView.separated(
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: list.length,
-      separatorBuilder: (_, __) =>
-          const Divider(height: 1, color: Colors.white12),
+      separatorBuilder: (_, __) => Divider(height: 1, color: colors.divider),
       itemBuilder: (context, i) {
         final m = list[i];
         return ListTile(
@@ -484,12 +573,12 @@ class _RelatedTabBody extends StatelessWidget {
             m.name,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white, fontSize: 14),
+            style: TextStyle(color: colors.onSurface, fontSize: 14),
           ),
           subtitle: m.year.isNotEmpty
               ? Text(
                   m.year,
-                  style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  style: TextStyle(color: colors.muted, fontSize: 12),
                 )
               : null,
           onTap: () => onOpenRelated(m),

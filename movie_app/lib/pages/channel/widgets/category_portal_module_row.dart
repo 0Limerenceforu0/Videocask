@@ -6,6 +6,7 @@ import '../../../l10n/app_localizations.dart';
 import '../../../models/movie.dart';
 import '../../../theme/hifi_design_tokens.dart';
 import '../../home/movie_card.dart';
+import '../../../widgets/movie_grid_layout.dart';
 import '../category_portal_side_rank.dart';
 
 /// 对齐静态稿 `hifi-kp-mod-row`：模块标题 + 左栅格 + 右热播榜。
@@ -15,7 +16,6 @@ class CategoryPortalModuleRow extends StatelessWidget {
     required this.title,
     required this.movies,
     required this.wide,
-    required this.narrowGridCrossAxisCount,
     required this.rankMovies,
     this.isLoading = false,
     this.errorMessage,
@@ -28,7 +28,6 @@ class CategoryPortalModuleRow extends StatelessWidget {
   final String title;
   final List<Movie> movies;
   final bool wide;
-  final int narrowGridCrossAxisCount;
   final List<Movie> rankMovies;
   final bool isLoading;
   final String? errorMessage;
@@ -75,15 +74,27 @@ class CategoryPortalModuleRow extends StatelessWidget {
         ),
       );
     } else {
-      grid = GridView.count(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        crossAxisCount: wide ? 5 : narrowGridCrossAxisCount,
-        childAspectRatio: 0.56,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 14,
-        padding: EdgeInsets.zero,
-        children: [for (final m in movies) MovieCard(movie: m)],
+      grid = LayoutBuilder(
+        builder: (context, constraints) {
+          final contentW =
+              constraints.maxWidth.isFinite && constraints.maxWidth > 0
+                  ? constraints.maxWidth
+                  : MediaQuery.sizeOf(context).width - 24;
+          final metrics = MovieGridLayout.metricsForWidth(contentW);
+          final crossCount = wide
+              ? math.min(5, metrics.crossAxisCount)
+              : metrics.crossAxisCount;
+          return GridView.count(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisCount: crossCount,
+            childAspectRatio: metrics.childAspectRatio,
+            crossAxisSpacing: metrics.crossAxisSpacing,
+            mainAxisSpacing: metrics.mainAxisSpacing,
+            padding: EdgeInsets.zero,
+            children: [for (final m in movies) MovieCard(movie: m)],
+          );
+        },
       );
     }
 

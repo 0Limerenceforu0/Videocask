@@ -9,15 +9,16 @@ import 'package:window_manager/window_manager.dart';
 import 'app.dart';
 import 'config/pending_deep_link.dart';
 import 'services/error_handler.dart';
+import 'services/subtitle_ai_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   ErrorHandler().init();
 
-  if (!kIsWeb) {
-    MediaKit.ensureInitialized();
-  }
+  // media_kit 在 Web 上同样必须初始化（Web 后端映射到 HTML <video> + hls.js），
+  // 之前只在非 Web 调用，导致网页端 Player/VideoController 无法工作。
+  MediaKit.ensureInitialized();
 
   if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
     await windowManager.ensureInitialized();
@@ -27,6 +28,9 @@ void main() async {
   if (!kIsWeb) {
     PendingDeepLink.registerFromArguments(Platform.executableArguments);
   }
+
+  // 触发 SubtitleAiService 单例，自动注册在线/离线/浏览器三种后端
+  SubtitleAiService();
 
   runApp(const MovieApp());
 }

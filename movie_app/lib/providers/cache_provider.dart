@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../config/constants.dart';
+import '../models/cache_episode_status.dart';
 import '../models/cache_item.dart';
 import '../services/cache_service.dart';
 
@@ -29,6 +31,17 @@ class CacheProvider extends ChangeNotifier {
   /// 格式化的缓存总大小
   String get formattedTotalSize => CacheService.formatFileSize(_totalCacheSize);
 
+  /// 缓存容量上限（格式化）
+  String get formattedMaxCacheSize =>
+      CacheService.formatFileSize(CacheService.maxCacheBytes);
+
+  /// 已用空间占上限比例（0~1）
+  double get storageUsageRatio {
+    final max = CacheService.maxCacheBytes;
+    if (max <= 0) return 0;
+    return (_totalCacheSize / max).clamp(0.0, 1.0);
+  }
+
   /// 是否正在加载
   bool _isLoading = false;
 
@@ -37,9 +50,25 @@ class CacheProvider extends ChangeNotifier {
 
   /// 初始化
   Future<void> init() async {
+    _cacheService.cacheItemsChangedListener = _onCacheItemsChanged;
     await _cacheService.init();
     await loadCacheItems();
     await refreshTotalSize();
+    await scheduleWaitingDownloads();
+  }
+
+  DateTime? _lastLiveRefreshAt;
+
+  void _onCacheItemsChanged() {
+    final now = DateTime.now();
+    if (_lastLiveRefreshAt != null &&
+        now.difference(_lastLiveRefreshAt!) <
+            const Duration(milliseconds: 200)) {
+      return;
+    }
+    _lastLiveRefreshAt = now;
+    _cacheItems = _cacheService.getAllCacheItems();
+    notifyListeners();
   }
 
   /// 加载缓存项
@@ -66,6 +95,7 @@ class CacheProvider extends ChangeNotifier {
     required int episodeIndex,
     required String episodeName,
     required String url,
+    String pageUrl = '',
     String quality = '自动',
     String sourceId = '',
   }) async {
@@ -76,6 +106,7 @@ class CacheProvider extends ChangeNotifier {
       episodeIndex: episodeIndex,
       episodeName: episodeName,
       url: url,
+      pageUrl: pageUrl,
       quality: quality,
       sourceId: sourceId,
     );
@@ -83,6 +114,89 @@ class CacheProvider extends ChangeNotifier {
     _cacheItems.add(item);
     notifyListeners();
     return item;
+  }
+
+  /// 查找指定集数的最近缓存任务。
+  CacheItem? findTaskForEpisode({
+    required String movieId,
+    required int episodeIndex,
+    String sourceId = '',
+  }) {
+    return _cacheService.findTaskForEpisode(
+      movieId: movieId,
+      episodeIndex: episodeIndex,
+      sourceId: sourceId,
+    );
+  }
+
+  /// 本影片缓存任务（按创建时间倒序）。
+  List<CacheItem> tasksForMovie({
+    required String movieId,
+    String sourceId = '',
+  }) {
+    final items = _cacheItems
+        .where(
+          (i) =>
+              i.movieId == movieId &&
+              (sourceId.isEmpty ||
+                  i.sourceId.isEmpty ||
+                  i.sourceId == sourceId),
+        )
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return items;
+  }
+
+  /// 当前集离线缓存状态（详情页展示）。
+  CacheEpisodeStatus episodeCacheStatus({
+    required String movieId,
+    required int episodeIndex,
+    String sourceId = '',
+  }) {
+    final task = findTaskForEpisode(
+      movieId: movieId,
+      episodeIndex: episodeIndex,
+      sourceId: sourceId,
+    );
+    if (task == null) return CacheEpisodeStatus.none;
+    if (task.isCompleted) return CacheEpisodeStatus.completed;
+    if (task.isDownloading) return CacheEpisodeStatus.downloading;
+    if (task.isWaiting) return CacheEpisodeStatus.waiting;
+    if (task.isPaused || task.isFailed) return CacheEpisodeStatus.paused;
+    return CacheEpisodeStatus.none;
+  }
+
+  /// 添加任务并调度 waiting 队列。
+  Future<CacheItem> enqueueEpisodeDownload({
+    required String movieId,
+    required String movieName,
+    required String movieCover,
+    required int episodeIndex,
+    required String episodeName,
+    required String url,
+    String pageUrl = '',
+    String quality = '自动',
+    String sourceId = '',
+  }) async {
+    final item = await addCacheTask(
+      movieId: movieId,
+      movieName: movieName,
+      movieCover: movieCover,
+      episodeIndex: episodeIndex,
+      episodeName: episodeName,
+      url: url,
+      pageUrl: pageUrl,
+      quality: quality,
+      sourceId: sourceId,
+    );
+    await scheduleWaitingDownloads();
+    return item;
+  }
+
+  /// 启动 waiting 队列中的下载任务。
+  Future<void> scheduleWaitingDownloads() async {
+    await _cacheService.scheduleWaitingDownloads();
+    await loadCacheItems();
   }
 
   /// 开始下载
@@ -101,7 +215,11 @@ class CacheProvider extends ChangeNotifier {
   /// 恢复下载
   Future<bool> resumeDownload(String cacheId) async {
     final success = await _cacheService.resumeDownload(cacheId);
-    await loadCacheItems();
+    if (success) {
+      await scheduleWaitingDownloads();
+    } else {
+      await loadCacheItems();
+    }
     return success;
   }
 
@@ -151,4 +269,7 @@ class CacheProvider extends ChangeNotifier {
 
   /// 已完成缓存数量
   int get completedCount => completedItems.length;
+
+  /// 缓存容量上限 MB（与 [AppConstants.maxCacheSize] 一致）
+  int get maxCacheSizeMb => AppConstants.maxCacheSize;
 }

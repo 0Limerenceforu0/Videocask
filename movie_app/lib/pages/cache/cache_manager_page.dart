@@ -1,17 +1,33 @@
+import 'dart:async' show unawaited;
+
+import 'package:cached_network_image/cached_network_image.dart';
+
+import '../../utils/web_http_stub.dart'
+    if (dart.library.html) '../../utils/web_http.dart' as web_http;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'dart:io';
+
+import '../../l10n/app_localizations.dart';
 import '../../providers/cache_provider.dart';
+import '../../providers/settings_provider.dart';
 import '../../models/cache_item.dart';
+import '../../utils/cache_playback_helper.dart';
 import '../../widgets/empty_widget.dart';
 
 /// 缓存管理页面
 class CacheManagerPage extends StatelessWidget {
   const CacheManagerPage({super.key});
 
+  Future<void> _setOnlyWifi(BuildContext context, bool value) async {
+    await context.read<SettingsProvider>().setOnlyWifiCache(value);
+    if (!context.mounted) return;
+    await context.read<CacheProvider>().setOnlyWifi(value);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final cacheProvider = context.watch<CacheProvider>();
@@ -26,22 +42,21 @@ class CacheManagerPage extends StatelessWidget {
     return Scaffold(
       backgroundColor: bgColor,
       appBar: AppBar(
-        title: const Text('缓存管理'),
+        title: Text(l10n.cacheManagerTitle),
         backgroundColor: cardColor,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         actions: [
-          // 仅WiFi开关
           Switch(
             value: cacheProvider.onlyWifi,
-            onChanged: (value) => cacheProvider.setOnlyWifi(value),
+            onChanged: (value) => unawaited(_setOnlyWifi(context, value)),
             activeThumbColor: theme.colorScheme.primary,
           ),
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: Center(
               child: Text(
-                '仅WiFi',
+                l10n.cacheManagerOnlyWifi,
                 style: TextStyle(color: subTextColor, fontSize: 13),
               ),
             ),
@@ -67,7 +82,7 @@ class CacheManagerPage extends StatelessWidget {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        'Web 端本地缓存依赖浏览器存储，能力与桌面/移动应用不同；若列表长期为空属正常情况。',
+                        l10n.cacheWebBanner,
                         style: TextStyle(
                           fontSize: 13,
                           height: 1.35,
@@ -79,7 +94,6 @@ class CacheManagerPage extends StatelessWidget {
                 ),
               ),
             ),
-          // 缓存信息栏（B站风格卡片）
           Container(
             margin: const EdgeInsets.all(12),
             padding: const EdgeInsets.all(16),
@@ -94,7 +108,7 @@ class CacheManagerPage extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      '存储空间',
+                      l10n.cacheManagerStorageTitle,
                       style: TextStyle(
                         color: textColor,
                         fontSize: 15,
@@ -104,30 +118,37 @@ class CacheManagerPage extends StatelessWidget {
                     if (cacheProvider.cacheItems.isNotEmpty)
                       TextButton(
                         onPressed: () {
-                          showDialog(
+                          showDialog<void>(
                             context: context,
-                            builder: (context) => AlertDialog(
-                              title: const Text('清理缓存'),
-                              content: const Text('确定要清理所有缓存吗？'),
+                            builder: (dialogContext) => AlertDialog(
+                              title: Text(l10n.cacheManagerClearConfirmTitle),
+                              content: Text(l10n.cacheManagerClearConfirmBody),
                               actions: [
                                 TextButton(
-                                  onPressed: () => Navigator.of(context).pop(),
-                                  child: const Text('取消'),
+                                  onPressed: () =>
+                                      Navigator.of(dialogContext).pop(),
+                                  child: Text(l10n.detailClose),
                                 ),
                                 TextButton(
                                   onPressed: () async {
                                     await cacheProvider.clearAllCache();
+                                    if (dialogContext.mounted) {
+                                      Navigator.of(dialogContext).pop();
+                                    }
                                     if (context.mounted) {
-                                      Navigator.of(context).pop();
                                       ScaffoldMessenger.of(context)
                                           .showSnackBar(
-                                        const SnackBar(content: Text('缓存已清理')),
+                                        SnackBar(
+                                          content: Text(
+                                            l10n.cacheManagerClearDone,
+                                          ),
+                                        ),
                                       );
                                     }
                                   },
-                                  child: const Text(
-                                    '清理',
-                                    style: TextStyle(color: Colors.red),
+                                  child: Text(
+                                    l10n.cacheManagerClearAll,
+                                    style: const TextStyle(color: Colors.red),
                                   ),
                                 ),
                               ],
@@ -135,7 +156,7 @@ class CacheManagerPage extends StatelessWidget {
                           );
                         },
                         child: Text(
-                          '清理全部',
+                          l10n.cacheManagerClearAll,
                           style: TextStyle(
                             color: theme.colorScheme.primary,
                             fontSize: 13,
@@ -145,11 +166,10 @@ class CacheManagerPage extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 12),
-                // 空间进度条
                 ClipRRect(
                   borderRadius: BorderRadius.circular(6),
                   child: LinearProgressIndicator(
-                    value: 0.3, // 示意值
+                    value: cacheProvider.storageUsageRatio,
                     minHeight: 8,
                     backgroundColor: isDark
                         ? const Color(0xFF2E2F31)
@@ -164,11 +184,16 @@ class CacheManagerPage extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      '已用: ${cacheProvider.formattedTotalSize}',
+                      l10n.cacheManagerUsedLabel(
+                        cacheProvider.formattedTotalSize,
+                        cacheProvider.formattedMaxCacheSize,
+                      ),
                       style: TextStyle(color: subTextColor, fontSize: 12),
                     ),
                     Text(
-                      '已缓存 ${cacheProvider.completedCount} 个视频',
+                      l10n.cacheManagerCompletedCount(
+                        cacheProvider.completedCount,
+                      ),
                       style: TextStyle(color: subTextColor, fontSize: 12),
                     ),
                   ],
@@ -176,8 +201,6 @@ class CacheManagerPage extends StatelessWidget {
               ],
             ),
           ),
-
-          // 缓存列表
           Expanded(
             child: cacheProvider.cacheItems.isEmpty
                 ? const NoCacheWidget()
@@ -191,6 +214,7 @@ class CacheManagerPage extends StatelessWidget {
                         theme,
                         item,
                         cacheProvider,
+                        l10n: l10n,
                         cardColor: cardColor,
                         textColor: textColor,
                         subTextColor: subTextColor,
@@ -203,19 +227,18 @@ class CacheManagerPage extends StatelessWidget {
     );
   }
 
-  /// 构建B站风格缓存项
   Widget _buildBiliCacheItem(
     BuildContext context,
     ThemeData theme,
     CacheItem item,
     CacheProvider provider, {
+    required AppLocalizations l10n,
     required Color cardColor,
     required Color textColor,
     required Color subTextColor,
   }) {
     final progress = (item.progressPercent * 100).toInt();
 
-    // 状态图标和颜色
     final IconData statusIcon;
     final Color statusColor;
     if (item.isCompleted) {
@@ -257,27 +280,42 @@ class CacheManagerPage extends StatelessWidget {
         ),
         child: Row(
           children: [
-            // 左侧状态图标
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: statusColor.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: item.isDownloading
-                  ? SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 3,
-                        valueColor: AlwaysStoppedAnimation<Color>(statusColor),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: SizedBox(
+                width: 48,
+                height: 48,
+                child: item.movieCover.isNotEmpty
+                    ? CachedNetworkImage(
+                        imageUrl: web_http.webProxiedImageUrl(
+                          item.movieCover,
+                        ),
+                        fit: BoxFit.cover,
+                        errorWidget: (_, __, ___) => Container(
+                          color: statusColor.withValues(alpha: 0.1),
+                          child: Icon(statusIcon, color: statusColor, size: 22),
+                        ),
+                      )
+                    : Container(
+                        color: statusColor.withValues(alpha: 0.1),
+                        child: item.isDownloading
+                            ? Center(
+                                child: SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.5,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      statusColor,
+                                    ),
+                                  ),
+                                ),
+                              )
+                            : Icon(statusIcon, color: statusColor, size: 22),
                       ),
-                    )
-                  : Icon(statusIcon, color: statusColor, size: 24),
+              ),
             ),
             const SizedBox(width: 14),
-            // 右侧信息
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -329,58 +367,49 @@ class CacheManagerPage extends StatelessWidget {
                       item.formattedSize,
                       style: TextStyle(color: subTextColor, fontSize: 11),
                     ),
+                  if (item.isDownloading && item.speed > 0) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      l10n.cacheDownloadSpeed(item.formattedSpeed),
+                      style: TextStyle(color: subTextColor, fontSize: 11),
+                    ),
+                  ],
                 ],
               ),
             ),
-            // 操作按钮
-            _buildActionButtons(context, item, provider),
+            _buildActionButtons(context, item, provider, l10n),
           ],
         ),
       ),
     );
   }
 
-  /// 构建操作按钮
   Widget _buildActionButtons(
     BuildContext context,
     CacheItem item,
     CacheProvider provider,
+    AppLocalizations l10n,
   ) {
     if (item.isDownloading) {
       return IconButton(
+        tooltip: l10n.detailCachePause,
         icon: const Icon(Icons.pause, size: 20),
         onPressed: () => provider.pauseDownload(item.id),
       );
-    } else if (item.isPaused || item.isFailed || item.isWaiting) {
+    }
+    if (item.isPaused || item.isFailed || item.isWaiting) {
       return IconButton(
+        tooltip: l10n.detailCacheResume,
         icon: const Icon(Icons.play_arrow, size: 20),
-        onPressed: () => provider.resumeDownload(item.id),
+        onPressed: () => unawaited(provider.resumeDownload(item.id)),
       );
-    } else if (item.isCompleted) {
+    }
+    if (item.isCompleted) {
       return IconButton(
+        tooltip: l10n.cachePlayOffline,
         icon: const Icon(Icons.play_circle, size: 20, color: Colors.green),
-        onPressed: () async {
-          final file = File(item.localPath);
-          if (await file.exists()) {
-            if (!context.mounted) return;
-            // 桌面平台使用默认播放器打开
-            if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-              if (Platform.isWindows) {
-                await Process.run('cmd', ['/c', 'start', '', item.localPath]);
-              } else if (Platform.isMacOS) {
-                await Process.run('open', [item.localPath]);
-              } else if (Platform.isLinux) {
-                await Process.run('xdg-open', [item.localPath]);
-              }
-              if (!context.mounted) return;
-            }
-          } else {
-            if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('缓存文件不存在')),
-            );
-          }
-        },
+        onPressed: () =>
+            unawaited(CachePlaybackHelper.playCachedItem(context, item)),
       );
     }
     return const SizedBox.shrink();

@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+
 import '../models/movie.dart';
 import '../models/play_source.dart';
 import '../services/api_service.dart';
@@ -60,6 +61,9 @@ class MovieProvider extends ChangeNotifier {
 
   /// 当前影片详情
   Movie? _currentMovie;
+
+  /// 从 CMS 详情 push 磁力详情前保存，pop 时恢复（避免底层详情被全局状态污染）。
+  _DetailReturnSnapshot? _detailReturnSnapshot;
 
   /// 分类影片列表
   List<Movie> _categoryMovies = [];
@@ -386,6 +390,34 @@ class MovieProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 磁力详情等本地占位影片：不走 CMS，直接完成详情加载态。
+  void completeDetailWithMovie(Movie movie) {
+    _currentMovie = movie;
+    _isLoadingDetail = false;
+    _errorMessage = '';
+    notifyListeners();
+  }
+
+  /// 打开叠层详情（如磁力详情）前保存当前详情状态。
+  void pushDetailSnapshot() {
+    _detailReturnSnapshot = _DetailReturnSnapshot(
+      movie: _currentMovie,
+      isLoadingDetail: _isLoadingDetail,
+      errorMessage: _errorMessage,
+    );
+  }
+
+  /// 离开叠层详情后恢复进入前的 CMS 详情状态。
+  void popDetailSnapshot() {
+    final snap = _detailReturnSnapshot;
+    if (snap == null) return;
+    _currentMovie = snap.movie;
+    _isLoadingDetail = snap.isLoadingDetail;
+    _errorMessage = snap.errorMessage;
+    _detailReturnSnapshot = null;
+    notifyListeners();
+  }
+
   /// 设置当前源
   void setCurrentSource(PlaySource source) {
     _api.setCurrentSource(source);
@@ -514,4 +546,16 @@ class MovieProvider extends ChangeNotifier {
     _personalizedRecommendations = recommendations.take(20).toList();
     notifyListeners();
   }
+}
+
+class _DetailReturnSnapshot {
+  const _DetailReturnSnapshot({
+    required this.movie,
+    required this.isLoadingDetail,
+    required this.errorMessage,
+  });
+
+  final Movie? movie;
+  final bool isLoadingDetail;
+  final String errorMessage;
 }

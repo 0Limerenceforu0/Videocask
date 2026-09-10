@@ -1,8 +1,7 @@
 name: movie_app
 description: 跨端影视播放应用 - 覆盖Android、PC、Web三端
 publish_to: 'none'
-version: 1.0.0+1
-
+version: 1.0.22+22
 environment:
   sdk: '>=3.0.0 <4.0.0'
 
@@ -107,6 +106,20 @@ dependencies:
   # 文件选择（≥8 兼容 Flutter 已移除的 v1 嵌入 API）
   file_picker: ^10.3.8
   screen_brightness: ^2.1.7
+
+  # ============================================================
+  # 离线 AI 字幕生成（sherpa_onnx，Apache 2.0，无任何付费 API）
+  # ============================================================
+  # sherpa_onnx：跨平台离线 ASR / TTS / VAD。k2-fsa 官方维护。
+  # 支持 Whisper / Paraformer / SenseVoice / Zipformer / Moonshine / TeleSpeech
+  # 等多种 ONNX 模型；Android/iOS/Windows/macOS/Linux 都有 native 二进制。
+  sherpa_onnx: ^1.13.7
+
+  # tar 归档（解压 sherpa 模型 tar.bz2）
+  archive: ^4.0.3
+
+  # 进程调用（桌面端调系统 ffmpeg）
+  # 已在 dart:io 中包含，无需额外包
 
 dev_dependencies:
   flutter_test:

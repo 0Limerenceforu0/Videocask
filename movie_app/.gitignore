@@ -43,3 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+.edge_cdp/
+.edge_profile/
+.edge_profile2/
+%SystemDrive%/

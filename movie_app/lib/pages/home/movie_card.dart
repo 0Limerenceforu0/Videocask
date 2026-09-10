@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+
+import '../../utils/web_http_stub.dart'
+    if (dart.library.html) '../../utils/web_http.dart' as web_http;
 import 'package:provider/provider.dart';
 import '../../models/movie.dart';
 import '../../config/routes.dart';
 import '../../providers/source_provider.dart';
+import '../../widgets/movie_grid_layout.dart';
 
 String _displayYear(Movie movie) {
   final y = movie.year.trim();
@@ -46,9 +50,40 @@ class MovieCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (width != null) {
+      return _buildCard(
+        context,
+        cardWidth: width!,
+        cardHeight: height ?? width! * MovieGridLayout.posterHeightFactor,
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final cardWidth =
+            constraints.maxWidth.isFinite && constraints.maxWidth > 0
+                ? constraints.maxWidth
+                : 120.0;
+        const metaH = MovieGridLayout.metaBelowPosterHeight;
+        final cardHeight = height ??
+            (constraints.maxHeight.isFinite && constraints.maxHeight > metaH
+                ? constraints.maxHeight - metaH
+                : cardWidth * MovieGridLayout.posterHeightFactor);
+        return _buildCard(
+          context,
+          cardWidth: cardWidth,
+          cardHeight: cardHeight,
+        );
+      },
+    );
+  }
+
+  Widget _buildCard(
+    BuildContext context, {
+    required double cardWidth,
+    required double cardHeight,
+  }) {
     final theme = Theme.of(context);
-    final cardWidth = width ?? 120.0;
-    final cardHeight = height ?? cardWidth * 1.4;
 
     return GestureDetector(
       onTap: onTap ??
@@ -226,7 +261,7 @@ class MovieCard extends StatelessWidget {
     }
 
     return CachedNetworkImage(
-      imageUrl: movie.cover,
+      imageUrl: web_http.webProxiedImageUrl(movie.cover),
       fit: BoxFit.cover,
       memCacheWidth: 400,
       memCacheHeight: 560,
@@ -313,7 +348,7 @@ class MovieCardHorizontal extends StatelessWidget {
               clipBehavior: Clip.antiAlias,
               child: movie.cover.isNotEmpty
                   ? CachedNetworkImage(
-                      imageUrl: movie.cover,
+                      imageUrl: web_http.webProxiedImageUrl(movie.cover),
                       fit: BoxFit.cover,
                       memCacheWidth: 180,
                       memCacheHeight: 240,

@@ -8,6 +8,14 @@ import 'package:movie_app/utils/torrent_title_display.dart';
 
 import 'detail_ui_tokens.dart';
 
+String? _magnetHintFromMovie(Movie movie) {
+  final name = movie.name.trim();
+  if (name.isNotEmpty && RegExp(r'[\u4e00-\u9fff]').hasMatch(name)) {
+    return name;
+  }
+  return null;
+}
+
 /// 详情页内嵌：磁力聚合结果列表（与搜索页相同 [TorrentSearchService] 逻辑，由上层传入 strict/loose 搜索结果）。
 class DetailMagnetResultsPanel extends StatelessWidget {
   const DetailMagnetResultsPanel({
@@ -34,6 +42,7 @@ class DetailMagnetResultsPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
+    final colors = DetailPageColors.of(context);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -48,8 +57,8 @@ class DetailMagnetResultsPanel extends StatelessWidget {
               icon: const Icon(Icons.manage_search, size: 18),
               label: Text(l10n.detailMagnetRefreshStrict),
               style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.white,
-                side: const BorderSide(color: Colors.white38),
+                foregroundColor: colors.onSurface,
+                side: BorderSide(color: colors.muted.withValues(alpha: 0.6)),
               ),
             ),
             OutlinedButton.icon(
@@ -57,8 +66,8 @@ class DetailMagnetResultsPanel extends StatelessWidget {
               icon: const Icon(Icons.zoom_out_map, size: 18),
               label: Text(l10n.detailMagnetRefreshLoose),
               style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.white,
-                side: const BorderSide(color: Colors.white38),
+                foregroundColor: colors.onSurface,
+                side: BorderSide(color: colors.muted.withValues(alpha: 0.6)),
               ),
             ),
             TextButton.icon(
@@ -67,8 +76,7 @@ class DetailMagnetResultsPanel extends StatelessWidget {
                   : () => AppRoutes.toSearch(context, query: movie.name),
               icon: const Icon(Icons.open_in_new, size: 18),
               label: Text(l10n.detailMagnetOpenInSearch),
-              style:
-                  TextButton.styleFrom(foregroundColor: Colors.lightBlueAccent),
+              style: TextButton.styleFrom(foregroundColor: colors.accent),
             ),
           ],
         ),
@@ -76,19 +84,19 @@ class DetailMagnetResultsPanel extends StatelessWidget {
           const SizedBox(height: 16),
           Row(
             children: [
-              const SizedBox(
+              SizedBox(
                 width: 22,
                 height: 22,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  color: Colors.white54,
+                  color: colors.muted,
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   l10n.detailMagnetSearching,
-                  style: const TextStyle(color: Colors.white60, fontSize: 13),
+                  style: TextStyle(color: colors.muted, fontSize: 13),
                 ),
               ),
             ],
@@ -98,7 +106,7 @@ class DetailMagnetResultsPanel extends StatelessWidget {
           const SizedBox(height: 12),
           Text(
             statusMessage,
-            style: const TextStyle(color: Colors.white54, fontSize: 13),
+            style: TextStyle(color: colors.muted, fontSize: 13),
           ),
         ],
         if (!isLoading && results.isNotEmpty) ...[
@@ -112,6 +120,7 @@ class DetailMagnetResultsPanel extends StatelessWidget {
               return _MagnetResultTile(
                 movie: movie,
                 torrent: results[i],
+                colors: colors,
                 dense: dense,
               );
             },
@@ -126,11 +135,13 @@ class _MagnetResultTile extends StatelessWidget {
   const _MagnetResultTile({
     required this.movie,
     required this.torrent,
+    required this.colors,
     required this.dense,
   });
 
   final Movie movie;
   final TorrentInfo torrent;
+  final DetailPageColors colors;
   final bool dense;
 
   @override
@@ -140,7 +151,7 @@ class _MagnetResultTile extends StatelessWidget {
     final showZhLabel = torrentTitlePrimaryIsMostlyLatin(torrent.name);
 
     return Material(
-      color: Colors.white10,
+      color: colors.surfaceTint,
       borderRadius: BorderRadius.circular(10),
       child: Padding(
         padding: EdgeInsets.fromLTRB(dense ? 10 : 12, dense ? 10 : 12, 12, 12),
@@ -159,15 +170,15 @@ class _MagnetResultTile extends StatelessWidget {
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: kDetailAccentColor.withValues(alpha: 0.35),
+                        color: colors.accent.withValues(alpha: 0.35),
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
                         movie.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
+                        style: TextStyle(
+                          color: colors.onAccent,
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
                         ),
@@ -177,8 +188,8 @@ class _MagnetResultTile extends StatelessWidget {
                     Expanded(
                       child: Text(
                         l10n.detailMagnetZhLabelHint,
-                        style: const TextStyle(
-                          color: Colors.white38,
+                        style: TextStyle(
+                          color: colors.faint,
                           fontSize: 11,
                         ),
                       ),
@@ -190,8 +201,8 @@ class _MagnetResultTile extends StatelessWidget {
               lines.primary,
               maxLines: 3,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: colors.onSurface,
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
                 height: 1.25,
@@ -204,7 +215,7 @@ class _MagnetResultTile extends StatelessWidget {
                   lines.secondary!,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  style: TextStyle(color: colors.muted, fontSize: 12),
                 ),
               ),
             const SizedBox(height: 8),
@@ -212,11 +223,15 @@ class _MagnetResultTile extends StatelessWidget {
               spacing: 8,
               runSpacing: 4,
               children: [
-                _meta(Icons.storage_outlined, torrent.sizeFormatted),
-                _meta(Icons.cloud_outlined, torrent.source),
-                _meta(Icons.arrow_upward, '${torrent.seedersFormatted}↑'),
+                _meta(Icons.storage_outlined, torrent.sizeFormatted, colors),
+                _meta(Icons.cloud_outlined, torrent.source, colors),
+                _meta(
+                  Icons.arrow_upward,
+                  '${torrent.seedersFormatted}↑',
+                  colors,
+                ),
                 if (torrent.imdbId != null && torrent.imdbId!.isNotEmpty)
-                  _meta(Icons.movie_outlined, torrent.imdbId!),
+                  _meta(Icons.movie_outlined, torrent.imdbId!, colors),
               ],
             ),
             const SizedBox(height: 10),
@@ -227,6 +242,7 @@ class _MagnetResultTile extends StatelessWidget {
                     context,
                     torrent,
                     enrichFrom: movie,
+                    displayTitleHint: _magnetHintFromMovie(movie),
                   ),
                   icon: const Icon(Icons.play_arrow, size: 20),
                   label: Text(l10n.detailMagnetPlay),
@@ -243,6 +259,7 @@ class _MagnetResultTile extends StatelessWidget {
                     context,
                     torrent,
                     enrichFrom: movie,
+                    displayTitleHint: _magnetHintFromMovie(movie),
                   ),
                   child: Text(l10n.detailMagnetOpenDetail),
                 ),
@@ -254,15 +271,15 @@ class _MagnetResultTile extends StatelessWidget {
     );
   }
 
-  Widget _meta(IconData icon, String text) {
+  Widget _meta(IconData icon, String text, DetailPageColors colors) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 14, color: Colors.white54),
+        Icon(icon, size: 14, color: colors.muted),
         const SizedBox(width: 4),
         Text(
           text,
-          style: const TextStyle(color: Colors.white60, fontSize: 11),
+          style: TextStyle(color: colors.muted, fontSize: 11),
         ),
       ],
     );

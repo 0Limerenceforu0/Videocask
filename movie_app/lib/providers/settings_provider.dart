@@ -3,6 +3,7 @@ import '../config/constants.dart';
 import '../config/magnet_source_catalog.dart';
 import '../models/magnet_source_config.dart';
 import '../services/storage_service.dart';
+import '../services/cache_service.dart';
 import '../services/subtitle_service.dart';
 import '../services/sync_service.dart';
 import '../services/webdav_service.dart';
@@ -36,14 +37,29 @@ class SettingsProvider extends ChangeNotifier {
   /// 自动连播
   bool get autoPlayNext => _autoPlayNext;
 
+  /// 进入详情页自动播放
+  bool _autoPlayOnDetailEnter = true;
+
+  bool get autoPlayOnDetailEnter => _autoPlayOnDetailEnter;
+
   /// 播放策略：smooth / balanced / quality
   String _playbackStrategy = 'balanced';
 
   /// 播放策略
   String get playbackStrategy => _playbackStrategy;
 
+  /// 播放到 80% 时预解析下一集
+  bool _preloadNextEpisode = true;
+
+  bool get preloadNextEpisode => _preloadNextEpisode;
+
+  /// 预拉下一集前几 MB（全网络，可关）
+  bool _playbackPrefetch = true;
+
+  bool get playbackPrefetch => _playbackPrefetch;
+
   /// 仅WiFi缓存
-  bool _onlyWifiCache = true;
+  bool _onlyWifiCache = false;
 
   /// 仅WiFi缓存
   bool get onlyWifiCache => _onlyWifiCache;
@@ -85,6 +101,13 @@ class SettingsProvider extends ChangeNotifier {
 
   bool get opensubtitlesApiKeyConfigured =>
       _opensubtitlesApiKey.trim().isNotEmpty;
+
+  /// TMDB API Key（中文片名解析为 IMDb / 英文名，提升磁力命中率）
+  String _tmdbApiKey = '';
+
+  String get tmdbApiKey => _tmdbApiKey;
+
+  bool get tmdbApiKeyConfigured => _tmdbApiKey.trim().isNotEmpty;
 
   /// 磁力搜索源（含内置与自定义）
   List<MagnetSourceConfig> _magnetSources = [];
@@ -157,14 +180,24 @@ class SettingsProvider extends ChangeNotifier {
       AppConstants.keyAutoPlayNext,
       defaultValue: true,
     );
+    _autoPlayOnDetailEnter = _storage.getBoolSetting(
+      AppConstants.keyAutoPlayOnDetailEnter,
+      defaultValue: true,
+    );
     _onlyWifiCache = _storage.getBoolSetting(
       AppConstants.keyOnlyWifiCache,
-      defaultValue: true,
+      defaultValue: false,
     );
     _playbackStrategy =
         _storage.getSetting(AppConstants.keyPlaybackStrategy) ?? 'balanced';
+    _preloadNextEpisode = _storage.getBoolSetting(
+      AppConstants.keyPreloadNextEpisode,
+      defaultValue: true,
+    );
+    _playbackPrefetch = _loadPlaybackPrefetchSetting();
     _opensubtitlesApiKey =
         _storage.getSetting(AppConstants.keyOpensubtitlesApiKey) ?? '';
+    _tmdbApiKey = _storage.getSetting(AppConstants.keyTmdbApiKey) ?? '';
 
     // 初始化同步服务
     await _syncService.init();
@@ -205,6 +238,16 @@ class SettingsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 设置进入详情页自动播放
+  Future<void> setAutoPlayOnDetailEnter(bool value) async {
+    _autoPlayOnDetailEnter = value;
+    await _storage.saveBoolSetting(
+      AppConstants.keyAutoPlayOnDetailEnter,
+      value,
+    );
+    notifyListeners();
+  }
+
   /// 设置播放策略
   Future<void> setPlaybackStrategy(String strategy) async {
     const allowed = {'smooth', 'balanced', 'quality'};
@@ -216,10 +259,36 @@ class SettingsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setPreloadNextEpisode(bool value) async {
+    _preloadNextEpisode = value;
+    await _storage.saveBoolSetting(AppConstants.keyPreloadNextEpisode, value);
+    notifyListeners();
+  }
+
+  Future<void> setPlaybackPrefetch(bool value) async {
+    _playbackPrefetch = value;
+    await _storage.saveBoolSetting(AppConstants.keyPlaybackPrefetch, value);
+    notifyListeners();
+  }
+
+  bool _loadPlaybackPrefetchSetting() {
+    if (_storage.getSetting(AppConstants.keyPlaybackPrefetch) != null) {
+      return _storage.getBoolSetting(
+        AppConstants.keyPlaybackPrefetch,
+        defaultValue: true,
+      );
+    }
+    return _storage.getBoolSetting(
+      AppConstants.keyWifiPlaybackPrefetch,
+      defaultValue: true,
+    );
+  }
+
   /// 设置仅WiFi缓存
   Future<void> setOnlyWifiCache(bool value) async {
     _onlyWifiCache = value;
     await _storage.saveBoolSetting(AppConstants.keyOnlyWifiCache, value);
+    await CacheService().setOnlyWifi(value);
     notifyListeners();
   }
 
@@ -231,6 +300,13 @@ class SettingsProvider extends ChangeNotifier {
       _opensubtitlesApiKey,
     );
     SubtitleService().invalidateAuth();
+    notifyListeners();
+  }
+
+  /// TMDB API Key（留空则仅用豆瓣 + IMDb 解析中文片名）
+  Future<void> setTmdbApiKey(String value) async {
+    _tmdbApiKey = value.trim();
+    await _storage.saveSetting(AppConstants.keyTmdbApiKey, _tmdbApiKey);
     notifyListeners();
   }
 

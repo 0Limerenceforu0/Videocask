@@ -7,6 +7,7 @@ import '../config/constants.dart';
 import '../models/movie.dart';
 import '../models/play_source.dart';
 import 'network/dio_factory.dart';
+import '../utils/commentary_content_filter.dart';
 import 'error_handler.dart';
 
 // 条件导入：Web端使用 dart:html 的 HttpRequest，非Web端使用 stub
@@ -795,6 +796,7 @@ class ApiService {
       return listRaw
           .whereType<Map<String, dynamic>>()
           .map((e) => Movie.fromCmsJson(e))
+          .where((m) => !CommentaryContentFilter.isMovie(m))
           .toList();
     } catch (e) {
       debugPrint('解析影片列表失败: $e');
@@ -948,6 +950,19 @@ class ApiService {
       }
     }
 
+    if (movie.name.trim().length >= 2) {
+      await tryKeyword(movie.name.trim());
+    }
+
+    final baseTitle = stripSeasonFromTitleForRecommend(movie.name);
+    if (baseTitle.length >= 2 && baseTitle != movie.name.trim()) {
+      await tryKeyword(baseTitle);
+    }
+
+    if (out.length < 6 && movie.alias.trim().length >= 2) {
+      await tryKeyword(movie.alias.trim());
+    }
+
     for (final g in movie.genres) {
       for (final part in g.split(RegExp(r'[,，/、]'))) {
         await tryKeyword(part);
@@ -955,12 +970,8 @@ class ApiService {
       }
     }
 
-    final baseTitle = stripSeasonFromTitleForRecommend(movie.name);
-    if (baseTitle.length >= 2 && baseTitle != movie.name.trim()) {
-      await tryKeyword(baseTitle);
-    }
-    if (out.length < 6 && movie.name.trim().length >= 2) {
-      await tryKeyword(movie.name.trim());
+    if (out.length < 4 && movie.director.trim().length >= 2) {
+      await tryKeyword(movie.director.trim());
     }
 
     return out.take(10).toList();

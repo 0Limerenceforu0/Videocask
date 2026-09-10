@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+
+import '../../utils/web_http_stub.dart'
+    if (dart.library.html) '../../utils/web_http.dart' as web_http;
 import '../../config/routes.dart';
 import '../../config/constants.dart';
 import '../../providers/user_provider.dart';
@@ -334,7 +337,9 @@ class ProfilePage extends StatelessWidget {
               child: userInfo.avatar.isNotEmpty
                   ? ClipOval(
                       child: CachedNetworkImage(
-                        imageUrl: userInfo.avatar,
+                        imageUrl: web_http.webProxiedImageUrl(
+                          userInfo.avatar,
+                        ),
                         fit: BoxFit.cover,
                         errorWidget: (_, __, ___) =>
                             _buildDefaultAvatar(theme, isGuest),
@@ -786,7 +791,9 @@ class ProfilePage extends StatelessWidget {
                             clipBehavior: Clip.antiAlias,
                             child: fav.movieCover.isNotEmpty
                                 ? CachedNetworkImage(
-                                    imageUrl: fav.movieCover,
+                                    imageUrl: web_http.webProxiedImageUrl(
+                                      fav.movieCover,
+                                    ),
                                     fit: BoxFit.cover,
                                     errorWidget: (_, __, ___) => const Icon(
                                       Icons.movie_outlined,
@@ -919,7 +926,9 @@ class ProfilePage extends StatelessWidget {
                               clipBehavior: Clip.antiAlias,
                               child: history.movieCover.isNotEmpty
                                   ? CachedNetworkImage(
-                                      imageUrl: history.movieCover,
+                                      imageUrl: web_http.webProxiedImageUrl(
+                                        history.movieCover,
+                                      ),
                                       fit: BoxFit.cover,
                                       errorWidget: (_, __, ___) => const Icon(
                                         Icons.movie_outlined,

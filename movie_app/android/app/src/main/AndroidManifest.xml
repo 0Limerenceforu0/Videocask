@@ -3,6 +3,8 @@
     <!-- 网络权限（视频播放、API请求、磁力下载必需） -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
 
     <!-- 存储权限（Android 10以下需要） -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"

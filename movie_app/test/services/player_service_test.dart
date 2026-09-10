@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:movie_app/services/playback_strategy.dart';
 import 'package:movie_app/services/player_service.dart';
 
 void main() {
@@ -60,6 +61,10 @@ void main() {
       expect(playerService.videoController, isNull);
       expect(playerService.autoPlayNext, isTrue);
       expect(playerService.playbackSpeed, equals(1.0));
+      expect(
+        playerService.strategyConfig.demuxerBufferBytes,
+        PlaybackStrategyConfig.fromKey('balanced').demuxerBufferBytes,
+      );
     });
   });
 }

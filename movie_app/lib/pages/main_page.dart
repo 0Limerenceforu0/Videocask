@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:movie_app/l10n/app_localizations.dart';
 import 'package:provider/provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+
+import '../utils/web_http_stub.dart'
+    if (dart.library.html) '../utils/web_http.dart' as web_http;
 import 'home/home_page.dart';
 import 'follow/follow_page.dart';
 import 'profile/profile_page.dart';
@@ -152,7 +155,9 @@ class _MainPageState extends State<MainPage> {
                     clipBehavior: Clip.antiAlias,
                     child: playerProvider.movieCover.isNotEmpty
                         ? CachedNetworkImage(
-                            imageUrl: playerProvider.movieCover,
+                            imageUrl: web_http.webProxiedImageUrl(
+                              playerProvider.movieCover,
+                            ),
                             fit: BoxFit.cover,
                             memCacheWidth: 80,
                             errorWidget: (context, url, error) => const Icon(

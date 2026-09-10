@@ -88,6 +88,44 @@ class AppLocalizationsEn extends AppLocalizations {
   String get detailMagnetZhLabelHint => 'This title';
 
   @override
+  String get detailMagnetPlayingBadge => 'Magnet playback';
+
+  @override
+  String get detailMagnetMetaDirector => 'Director';
+
+  @override
+  String get detailMagnetMetaActors => 'Cast';
+
+  @override
+  String get detailMagnetMetaRegion => 'Region';
+
+  @override
+  String get detailMagnetResourceSection => 'Torrent info';
+
+  @override
+  String get detailMagnetMetaResourceTitle => 'Resource title';
+
+  @override
+  String detailMagnetMetaSource(String source) {
+    return 'Source: $source';
+  }
+
+  @override
+  String detailMagnetMetaSize(String size) {
+    return 'Size $size';
+  }
+
+  @override
+  String detailMagnetMetaSeeders(String count) {
+    return 'Seeders $count';
+  }
+
+  @override
+  String detailMagnetMetaLeechers(String count) {
+    return 'Leechers $count';
+  }
+
+  @override
   String get designV3MovieTitle => 'Interstellar';
 
   @override
@@ -153,6 +191,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get designV3TooltipSpeed => 'Playback speed';
 
   @override
+  String get speedSelectorNormal => 'Normal';
+
+  @override
   String get designV3TooltipVolume => 'Volume';
 
   @override
@@ -178,6 +219,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get detailPlayerTooltipCache => 'Cache / downloads';
+
+  @override
+  String get detailPlayerTooltipRouteQuality => 'Source / quality';
 
   @override
   String get detailPlayerFullscreenEnter => 'Full screen';
@@ -222,6 +266,16 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get detailPlayerSubtitleApplied => 'Subtitles loaded';
+
+  @override
+  String get detailPlayerSubtitleNoApiKeyHint =>
+      'Magnets can auto-match subtitles; add an OpenSubtitles API key in Settings → OpenSubtitles API Key';
+
+  @override
+  String get detailPlayerSubtitleDelay => 'Subtitle timing';
+
+  @override
+  String get detailPlayerSubtitleDelayReset => 'Reset offset';
 
   @override
   String get homeTitleRecommend => 'Recommendations';
@@ -362,4 +416,397 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get homeSectionCollapse => 'Show less';
+
+  @override
+  String get settingsAutoPlayOnDetailEnter => 'Auto-play on detail';
+
+  @override
+  String get settingsAutoPlayOnDetailEnterSubtitle =>
+      'Start playback when opening a title or magnet detail';
+
+  @override
+  String get settingsPreloadNextEpisode => 'Preload next episode';
+
+  @override
+  String get settingsPreloadNextEpisodeSubtitle =>
+      'Resolve the next episode URL when playback reaches 80%';
+
+  @override
+  String get settingsPlaybackPrefetch => 'Playback prefetch';
+
+  @override
+  String get settingsPlaybackPrefetchSubtitle =>
+      'Prefetch the first few MB of the next episode on any network';
+
+  @override
+  String get settingsTmdbApiKey => 'TMDB API Key';
+
+  @override
+  String get settingsTmdbApiKeyConfigured => 'Configured';
+
+  @override
+  String get settingsTmdbApiKeyNotConfigured =>
+      'Not set (Douban lookup still works)';
+
+  @override
+  String get settingsTmdbApiKeyDialogBody =>
+      'Register at themoviedb.org and create an API key to map Chinese titles to IMDb IDs and English names for better magnet results. Without a key, Douban suggest + IMDb lookup are still used.';
+
+  @override
+  String get settingsTmdbApiKeySaved => 'TMDB API settings saved';
+
+  @override
+  String get detailRouteFallbackSnack =>
+      'Buffering is slow; trying another source';
+
+  @override
+  String get detailPlayerLockControls => 'Lock player controls';
+
+  @override
+  String get detailPlayerUnlockControls => 'Unlock player controls';
+
+  @override
+  String get homeContinueWatching => 'Continue watching';
+
+  @override
+  String get homeContinueWatchingSeeAll => 'See all';
+
+  @override
+  String get searchActionSearch => 'Search';
+
+  @override
+  String get searchClearFilters => 'Clear filters';
+
+  @override
+  String get searchPlay => 'Play';
+
+  @override
+  String get searchOpenDetail => 'Open detail';
+
+  @override
+  String get detailReplay => 'Replay';
+
+  @override
+  String get detailEpisodeFinished => 'This episode has finished';
+
+  @override
+  String detailHistoryOverlay(int episode, String percent) {
+    return 'Last watched ep. $episode at $percent%';
+  }
+
+  @override
+  String get detailLoadError =>
+      'Could not load title info. Check your network or switch source in Source Manager.';
+
+  @override
+  String get detailBufferingMagnet => 'Loading magnet resource…';
+
+  @override
+  String get detailBufferingConnect => 'Connecting to stream…';
+
+  @override
+  String get detailBuffering => 'Buffering…';
+
+  @override
+  String get detailPlaybackFailed => 'Playback failed';
+
+  @override
+  String get detailRetry => 'Retry';
+
+  @override
+  String get detailVolumeTooltip => 'Volume (tap to expand)';
+
+  @override
+  String get detailMute => 'Mute';
+
+  @override
+  String get detailUnmute => 'Unmute';
+
+  @override
+  String detailRouteLabel(int index) {
+    return 'Source $index';
+  }
+
+  @override
+  String get detailDlnaSearching => 'Searching for devices on LAN…';
+
+  @override
+  String get detailDlnaTitle => 'DLNA devices';
+
+  @override
+  String get detailDlnaEmpty =>
+      'No devices found. Make sure your TV and phone are on the same Wi‑Fi and DLNA/cast is enabled on the TV.';
+
+  @override
+  String get detailDlnaCastOk => 'Stream URL sent to device';
+
+  @override
+  String detailDlnaCastOkNamed(String device) {
+    return 'Casting to $device';
+  }
+
+  @override
+  String get detailDlnaCastFailed =>
+      'Cast failed. Try another route or try again later.';
+
+  @override
+  String get detailDlnaHint =>
+      'Pick a TV or box on your network. CMS, magnet, and offline cache URLs are converted for the TV.';
+
+  @override
+  String get detailDlnaRefresh => 'Search again';
+
+  @override
+  String get detailDlnaNeedPlayback => 'Start playback before casting';
+
+  @override
+  String get detailDlnaNoLanIp =>
+      'No LAN IP found. Connect to Wi‑Fi and try again.';
+
+  @override
+  String get detailDlnaNoActiveStream =>
+      'Magnet stream not ready yet. Try again shortly.';
+
+  @override
+  String get detailDlnaUnsupportedSource => 'This source cannot be cast yet';
+
+  @override
+  String get detailDlnaLocalServeFailed =>
+      'Could not share the local file on LAN';
+
+  @override
+  String get detailDlnaResolveEmpty => 'Could not resolve a castable URL';
+
+  @override
+  String detailDlnaCastingNamed(String device) {
+    return 'Casting · $device';
+  }
+
+  @override
+  String get detailClose => 'Close';
+
+  @override
+  String get detailMagnetParsingMeta => 'Parsing magnet metadata…';
+
+  @override
+  String get detailMagnetAddFailed => 'Failed to add magnet link';
+
+  @override
+  String get detailMagnetNoVideoFile => 'No playable video file found';
+
+  @override
+  String get detailMagnetBuffering => 'Buffering data…';
+
+  @override
+  String get detailMagnetStreamFailed => 'Failed to start playback stream';
+
+  @override
+  String get detailMagnetConnectingPeers => 'Connecting to peers…';
+
+  @override
+  String get detailPlaybackErrorNoUrl => 'No playable URL';
+
+  @override
+  String get detailPlaybackErrorParseFailed => 'Parse failed';
+
+  @override
+  String get detailPlaybackErrorRouteSwitched => 'Switched source';
+
+  @override
+  String get detailPlaybackErrorMultiSourceFailed =>
+      'Multi-source fallback failed';
+
+  @override
+  String get detailPlaybackErrorNetwork => 'Network or player error';
+
+  @override
+  String get detailPlaybackErrorMagnet => 'Magnet playback failed';
+
+  @override
+  String detailEpisodeLabel(int index) {
+    return 'Episode $index';
+  }
+
+  @override
+  String detailEpisodeGridCount(int count) {
+    return '$count episodes';
+  }
+
+  @override
+  String detailEpisodeGridPageInfo(int current, int total) {
+    return 'Page $current / $total';
+  }
+
+  @override
+  String get detailEpisodeGridPrevPage => 'Previous page';
+
+  @override
+  String get detailEpisodeGridNextPage => 'Next page';
+
+  @override
+  String get detailEpisodeGridJumpToEpisode => 'Jump to episode';
+
+  @override
+  String get detailEpisodeGridJumpTitle => 'Jump to episode';
+
+  @override
+  String detailEpisodeGridJumpHint(int max) {
+    return 'Episode number (1–$max)';
+  }
+
+  @override
+  String get detailEpisodeGridJumpConfirm => 'Go';
+
+  @override
+  String get detailCachePanelTitle => 'Offline cache';
+
+  @override
+  String get detailCacheDownloadCurrent => 'Cache current episode';
+
+  @override
+  String get detailCacheSelectEpisodes => 'Select episodes';
+
+  @override
+  String get detailCacheSelectAll => 'Select all';
+
+  @override
+  String get detailCacheClearSelection => 'Clear';
+
+  @override
+  String detailCacheDownloadSelected(int count) {
+    return 'Download selected ($count)';
+  }
+
+  @override
+  String detailCacheBatchQueued(int count) {
+    return 'Added $count download tasks';
+  }
+
+  @override
+  String get detailCacheBatchNone =>
+      'Selected episodes are already queued or cached';
+
+  @override
+  String get detailCacheEmptyForMovie => 'No cache tasks for this title';
+
+  @override
+  String get detailCacheAlreadyCompleted => 'Current episode is already cached';
+
+  @override
+  String get detailCacheAlreadyDownloading =>
+      'Current episode is already downloading';
+
+  @override
+  String get detailCacheQueued => 'Added to download queue';
+
+  @override
+  String get detailCacheDownloadStarted => 'Download started';
+
+  @override
+  String get detailCacheWebUnsupported =>
+      'Offline cache is not supported on web';
+
+  @override
+  String get detailCacheMagnetUnsupported =>
+      'Magnet sources cannot be cached offline';
+
+  @override
+  String get detailCacheNoEpisode => 'No playable URL to cache';
+
+  @override
+  String get detailCacheUnsupportedUrl => 'This URL cannot be cached';
+
+  @override
+  String get detailCacheParseFailed =>
+      'Could not resolve a direct video URL for caching';
+
+  @override
+  String get detailCacheDeleted => 'Cache deleted';
+
+  @override
+  String get detailCacheManageAll => 'All downloads';
+
+  @override
+  String get detailCacheStatusWaiting => 'Waiting';
+
+  @override
+  String get detailCacheStatusDownloading => 'Downloading';
+
+  @override
+  String get detailCacheStatusPaused => 'Paused';
+
+  @override
+  String get detailCacheStatusCompleted => 'Completed';
+
+  @override
+  String get detailCacheStatusFailed => 'Failed';
+
+  @override
+  String get detailCachePause => 'Pause';
+
+  @override
+  String get detailCacheResume => 'Resume';
+
+  @override
+  String get detailCacheDelete => 'Delete';
+
+  @override
+  String get cacheManagerTitle => 'Downloads';
+
+  @override
+  String get cacheManagerOnlyWifi => 'Wi‑Fi only';
+
+  @override
+  String get cacheManagerStorageTitle => 'Storage';
+
+  @override
+  String get cacheManagerClearAll => 'Clear all';
+
+  @override
+  String get cacheManagerClearConfirmTitle => 'Clear cache';
+
+  @override
+  String get cacheManagerClearConfirmBody => 'Delete all cached videos?';
+
+  @override
+  String get cacheManagerClearDone => 'Cache cleared';
+
+  @override
+  String cacheManagerUsedLabel(String used, String max) {
+    return 'Used: $used / $max';
+  }
+
+  @override
+  String cacheManagerCompletedCount(int count) {
+    return '$count videos cached';
+  }
+
+  @override
+  String get cacheWebBanner =>
+      'Web does not support offline video downloads; an empty list is expected.';
+
+  @override
+  String get cacheFileMissing => 'Cached file not found';
+
+  @override
+  String get cacheWebPlayUnsupported =>
+      'On web, play online from the detail page';
+
+  @override
+  String get cachePlayOffline => 'Play offline';
+
+  @override
+  String cacheDownloadSpeed(String speed) {
+    return '$speed/s';
+  }
+
+  @override
+  String get followCacheTabEmpty => 'No downloads yet';
+
+  @override
+  String get settingsOnlyWifiCache => 'Download cache on Wi‑Fi only';
+
+  @override
+  String get settingsOnlyWifiCacheSubtitle =>
+      'Pauses downloads on cellular; synced with cache manager';
 }

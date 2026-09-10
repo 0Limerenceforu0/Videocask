@@ -4,6 +4,9 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+
+import '../../utils/web_http_stub.dart'
+    if (dart.library.html) '../../utils/web_http.dart' as web_http;
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../../config/routes.dart';
@@ -26,6 +29,7 @@ import 'movie_card.dart';
 import '../../widgets/shimmer_loading.dart';
 import '../../widgets/error_widget.dart' as app_widgets;
 import '../../widgets/hifi_home_wide_portal_modules.dart';
+import '../../widgets/movie_grid_layout.dart';
 
 /// 首页 - 分区布局（横向滚动 + 高分推荐无限滚动）
 class HomePage extends StatefulWidget {
@@ -448,24 +452,11 @@ class _HomePageState extends State<HomePage>
     super.dispose();
   }
 
-  /// 根据屏幕宽度动态计算网格列数
-  int _calculateCrossAxisCount(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
-    // 大窗口时增加列数，避免太稀疏
-    if (_denseMode) {
-      if (width > 1600) return 11;
-      if (width > 1200) return 9;
-      if (width > 900) return 7;
-      if (width > 600) return 5;
-      if (width > 400) return 4;
-      return 3;
-    }
-    if (width > 1600) return 10;
-    if (width > 1200) return 8;
-    if (width > 900) return 6;
-    if (width > 600) return 4;
-    if (width > 400) return 3;
-    return 2;
+  MovieGridMetrics _movieGridMetrics(BuildContext context) {
+    return MovieGridLayout.metricsForContext(
+      context,
+      dense: _denseMode,
+    );
   }
 
   /// 分类选择
@@ -698,21 +689,25 @@ class _HomePageState extends State<HomePage>
   ///
   /// 卡片宽度约 130px，高度约 190px，显示封面 + 名称 + 评分
   Widget _buildHorizontalMovieList(List<Movie> movies) {
+    final screenW = MediaQuery.sizeOf(context).width;
+    final cardWidth = (screenW * 0.30).clamp(104.0, 132.0);
+    final cardHeight = cardWidth * 1.4;
+    final listHeight = cardHeight + 56;
     return SizedBox(
-      height: 250, // 卡片高度190 + 底部文字约40 + 余量20
+      height: listHeight,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
         itemCount: movies.length,
         // 增大缓存区域以提升横向滚动流畅度
         cacheExtent: 500,
         itemBuilder: (context, index) {
           return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 4),
             child: MovieCard(
               movie: movies[index],
-              width: 130,
-              height: 190,
+              width: cardWidth,
+              height: cardHeight,
             ),
           );
         },
@@ -722,18 +717,13 @@ class _HomePageState extends State<HomePage>
 
   /// 构建展开后的竖向网格
   Widget _buildExpandedGrid(List<Movie> movies, BuildContext context) {
-    final crossCount = _calculateCrossAxisCount(context);
+    final grid = _movieGridMetrics(context);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: GridView.builder(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: crossCount,
-          childAspectRatio: 0.56,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 14,
-        ),
+        gridDelegate: grid.sliverDelegate,
         itemCount: movies.length,
         itemBuilder: (context, index) {
           return MovieCard(movie: movies[index]);
@@ -842,6 +832,7 @@ class _HomePageState extends State<HomePage>
     final channelKind = _channelKindForHomeCategory(_selectedCategory);
 
     return CategoryGenreRegionFilterBand(
+      category: _selectedCategory,
       selectedGenre: _filterGenre,
       selectedRegion: _filterRegion,
       onGenreSelected: (v) {
@@ -893,6 +884,8 @@ class _HomePageState extends State<HomePage>
 
     if (watchHistory.isEmpty) return const SizedBox.shrink();
 
+    final l10n = AppLocalizations.of(context)!;
+
     return Column(
       children: [
         // 分区标题栏
@@ -912,7 +905,7 @@ class _HomePageState extends State<HomePage>
               const SizedBox(width: 8),
               // 分区标题
               Text(
-                '继续观看',
+                l10n.homeContinueWatching,
                 style: theme.textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.bold,
                   fontSize: 17,
@@ -925,7 +918,7 @@ class _HomePageState extends State<HomePage>
                 child: Row(
                   children: [
                     Text(
-                      '查看全部',
+                      l10n.homeContinueWatchingSeeAll,
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.hintColor,
                         fontSize: 13,
@@ -1015,7 +1008,9 @@ class _HomePageState extends State<HomePage>
                             tag:
                                 'history_${history.movieId}_${history.sourceId}',
                             child: CachedNetworkImage(
-                              imageUrl: history.movieCover,
+                              imageUrl: web_http.webProxiedImageUrl(
+                                history.movieCover,
+                              ),
                               fit: BoxFit.cover,
                               placeholder: (context, url) => Center(
                                 child: CircularProgressIndicator(
@@ -1553,12 +1548,7 @@ class _HomePageState extends State<HomePage>
                 SliverPadding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   sliver: SliverGrid(
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: _calculateCrossAxisCount(context),
-                      childAspectRatio: 0.56,
-                      crossAxisSpacing: 10,
-                      mainAxisSpacing: 14,
-                    ),
+                    gridDelegate: _movieGridMetrics(context).sliverDelegate,
                     delegate: SliverChildBuilderDelegate(
                       (context, index) {
                         final list = movieProvider.categoryMovies;
@@ -1716,12 +1706,7 @@ class _HomePageState extends State<HomePage>
                 SliverPadding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   sliver: SliverGrid(
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: _calculateCrossAxisCount(context),
-                      childAspectRatio: 0.58,
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 12,
-                    ),
+                    gridDelegate: _movieGridMetrics(context).sliverDelegate,
                     delegate: SliverChildBuilderDelegate(
                       (context, index) {
                         return _buildHighRatedCard(

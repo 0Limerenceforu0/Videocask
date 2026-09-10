@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
+import '../../utils/web_http_stub.dart'
+    if (dart.library.html) '../../utils/web_http.dart' as web_http;
 import '../../config/routes.dart';
 import '../../models/movie.dart';
 import '../../providers/movie_provider.dart';
@@ -309,7 +312,7 @@ class _RankingPageState extends State<RankingPage>
               clipBehavior: Clip.antiAlias,
               child: movie.cover.isNotEmpty
                   ? Image.network(
-                      movie.cover,
+                      web_http.webProxiedImageUrl(movie.cover),
                       fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) =>
                           const Icon(Icons.movie_outlined, color: Colors.grey),

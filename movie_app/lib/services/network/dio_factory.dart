@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
 import '../../config/constants.dart';
 
@@ -67,8 +68,9 @@ class CacheInterceptor extends Interceptor {
 class DioFactory {
   DioFactory._();
 
-  /// 获取缓存目录
-  static Future<String> _getCacheDir() async {
+  /// 获取缓存目录；Web 端无文件系统，返回 null 表示禁用磁盘缓存
+  static Future<String?> _getCacheDir() async {
+    if (kIsWeb) return null;
     final tempDir = await getTemporaryDirectory();
     return '${tempDir.path}/dio_cache';
   }
@@ -92,8 +94,10 @@ class DioFactory {
       ),
     );
 
-    // 添加缓存拦截器
-    dio.interceptors.add(CacheInterceptor(cacheDirPath: cacheDir));
+    // 添加缓存拦截器（Web 端无文件系统，跳过磁盘缓存）
+    if (cacheDir != null) {
+      dio.interceptors.add(CacheInterceptor(cacheDirPath: cacheDir));
+    }
 
     return dio;
   }
@@ -116,8 +120,10 @@ class DioFactory {
       ),
     );
 
-    // 添加缓存拦截器
-    dio.interceptors.add(CacheInterceptor(cacheDirPath: cacheDir));
+    // 添加缓存拦截器（Web 端无文件系统，跳过磁盘缓存）
+    if (cacheDir != null) {
+      dio.interceptors.add(CacheInterceptor(cacheDirPath: cacheDir));
+    }
 
     return dio;
   }

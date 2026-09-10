@@ -90,20 +90,32 @@ class SectionList extends StatelessWidget {
 
         // 影片列表
         if (horizontal)
-          SizedBox(
-            height: 250,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              itemCount: movies.length,
-              separatorBuilder: (context, index) => const SizedBox(width: 10),
-              itemBuilder: (context, index) {
-                return SizedBox(
-                  width: 110,
-                  child: MovieCard(movie: movies[index]),
-                );
-              },
-            ),
+          Builder(
+            builder: (context) {
+              final screenW = MediaQuery.sizeOf(context).width;
+              final cardWidth = (screenW * 0.30).clamp(104.0, 132.0);
+              final listHeight = cardWidth * 1.4 + 56;
+              return SizedBox(
+                height: listHeight,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  itemCount: movies.length,
+                  separatorBuilder: (context, index) =>
+                      const SizedBox(width: 8),
+                  itemBuilder: (context, index) {
+                    return SizedBox(
+                      width: cardWidth,
+                      child: MovieCard(
+                        movie: movies[index],
+                        width: cardWidth,
+                        height: cardWidth * 1.4,
+                      ),
+                    );
+                  },
+                ),
+              );
+            },
           )
         else
           ListView.separated(

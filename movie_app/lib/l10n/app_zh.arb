@@ -26,6 +26,44 @@
   "detailMagnetPlay": "播放",
   "detailMagnetOpenDetail": "磁力详情",
   "detailMagnetZhLabelHint": "对应本片",
+  "detailMagnetPlayingBadge": "磁力播放",
+  "detailMagnetMetaDirector": "导演",
+  "detailMagnetMetaActors": "主演",
+  "detailMagnetMetaRegion": "地区",
+  "detailMagnetResourceSection": "资源信息",
+  "detailMagnetMetaResourceTitle": "资源标题",
+  "detailMagnetMetaSource": "来源 {source}",
+  "@detailMagnetMetaSource": {
+    "placeholders": {
+      "source": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetMetaSize": "大小 {size}",
+  "@detailMagnetMetaSize": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetMetaSeeders": "做种 {count}",
+  "@detailMagnetMetaSeeders": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetMetaLeechers": "下载 {count}",
+  "@detailMagnetMetaLeechers": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
   "designV3MovieTitle": "星际穿越",
   "designV3DoubanLabel": "豆瓣",
   "designV3MetaLine": "2014 | 科幻 冒险 | 169分钟",
@@ -47,6 +85,7 @@
   "designV3MagnetRowMeta": "22.5 GB · 磁力",
   "designV3TooltipPlayPause": "播放或暂停",
   "designV3TooltipSpeed": "播放速度",
+  "speedSelectorNormal": "正常",
   "designV3TooltipVolume": "音量",
   "designV3TooltipCast": "投屏",
   "designV3TooltipFullscreen": "全屏",
@@ -56,6 +95,7 @@
   "detailPlayerPrevEpisode": "上一集",
   "detailPlayerNextEpisode": "下一集",
   "detailPlayerTooltipCache": "缓存",
+  "detailPlayerTooltipRouteQuality": "线路 / 清晰度",
   "detailPlayerFullscreenEnter": "全屏",
   "detailPlayerFullscreenExit": "退出全屏",
   "detailPlayerSubtitleMenu": "字幕（自动匹配 / 选择）",
@@ -70,6 +110,9 @@
   "detailPlayerSubtitleNoApiKey": "请先在设置中填写 OpenSubtitles API Key",
   "detailPlayerSubtitleApplyFailed": "加载字幕失败",
   "detailPlayerSubtitleApplied": "已加载字幕",
+  "detailPlayerSubtitleNoApiKeyHint": "磁力资源可自动匹配字幕，需先在「设置 → OpenSubtitles API Key」填写 Key",
+  "detailPlayerSubtitleDelay": "字幕时间轴",
+  "detailPlayerSubtitleDelayReset": "重置偏移",
   "homeTitleRecommend": "推荐",
   "homeEndOfListHint": "没有更多了",
   "toolbarSearch": "搜索",
@@ -146,5 +189,188 @@
   "homeSnackbarRetry": "重试",
   "homeLoadFailedTapRetry": "加载失败，点击重试",
   "homeSectionSeeMore": "查看更多",
-  "homeSectionCollapse": "收起"
+  "homeSectionCollapse": "收起",
+  "settingsAutoPlayOnDetailEnter": "进入详情自动播放",
+  "settingsAutoPlayOnDetailEnterSubtitle": "打开影片或磁力详情时自动开始播放",
+  "settingsPreloadNextEpisode": "预加载下一集",
+  "settingsPreloadNextEpisodeSubtitle": "当前集播放到 80% 时后台解析下一集地址",
+  "settingsPlaybackPrefetch": "播放预缓冲",
+  "settingsPlaybackPrefetchSubtitle": "任意网络下预拉下一集前几 MB，加快切集",
+  "settingsTmdbApiKey": "TMDB API Key",
+  "settingsTmdbApiKeyConfigured": "已配置",
+  "settingsTmdbApiKeyNotConfigured": "未配置（仍可用豆瓣解析）",
+  "settingsTmdbApiKeyDialogBody": "在 themoviedb.org 注册并申请 API Key，用于中文片名解析为 IMDb 编号与英文片名，提升磁力搜索命中率。留空时仍会通过豆瓣联想 + IMDb 解析。",
+  "settingsTmdbApiKeySaved": "已保存 TMDB API 配置",
+  "detailRouteFallbackSnack": "缓冲较慢，已尝试切换线路",
+  "detailPlayerLockControls": "锁定播放控件",
+  "detailPlayerUnlockControls": "解锁播放控件",
+  "homeContinueWatching": "继续观看",
+  "homeContinueWatchingSeeAll": "查看全部",
+  "searchActionSearch": "搜索",
+  "searchClearFilters": "清除筛选",
+  "searchPlay": "播放",
+  "searchOpenDetail": "进入详情",
+  "detailReplay": "重播",
+  "detailEpisodeFinished": "本集已播放完毕",
+  "detailHistoryOverlay": "上次看到 第{episode}集 {percent}%",
+  "@detailHistoryOverlay": {
+    "placeholders": {
+      "episode": { "type": "int" },
+      "percent": { "type": "String" }
+    }
+  },
+  "detailLoadError": "无法加载影片信息，请检查网络或在「源管理」中切换采集源后重试。",
+  "detailBufferingMagnet": "正在加载磁力资源…",
+  "detailBufferingConnect": "正在连接播放资源…",
+  "detailBuffering": "正在缓冲…",
+  "detailPlaybackFailed": "播放失败",
+  "detailRetry": "重试",
+  "detailVolumeTooltip": "音量（点击展开）",
+  "detailMute": "静音",
+  "detailUnmute": "取消静音",
+  "detailRouteLabel": "线路 {index}",
+  "@detailRouteLabel": {
+    "placeholders": {
+      "index": { "type": "int" }
+    }
+  },
+  "detailDlnaSearching": "正在搜索局域网设备…",
+  "detailDlnaTitle": "DLNA 设备",
+  "detailDlnaEmpty": "未发现设备，请确认电视与手机连接同一 Wi‑Fi，并已开启电视上的 DLNA/投屏功能",
+  "detailDlnaCastOk": "已推送播放地址到设备",
+  "detailDlnaCastOkNamed": "已投屏到 {device}",
+  "@detailDlnaCastOkNamed": {
+    "placeholders": {
+      "device": { "type": "String" }
+    }
+  },
+  "detailDlnaCastFailed": "投屏失败，请换线路或稍后重试",
+  "detailDlnaHint": "请选择要投屏的电视或盒子。CMS、磁力、离线缓存均会转换为电视可访问的地址。",
+  "detailDlnaRefresh": "重新搜索",
+  "detailDlnaNeedPlayback": "请先开始播放，再投屏",
+  "detailDlnaNoLanIp": "未获取到局域网 IP，请连接 Wi‑Fi 后重试",
+  "detailDlnaNoActiveStream": "磁力流尚未就绪，请稍候再试",
+  "detailDlnaUnsupportedSource": "当前片源暂不支持投屏",
+  "detailDlnaLocalServeFailed": "无法在局域网分享本地文件",
+  "detailDlnaResolveEmpty": "无法解析可投屏的播放地址",
+  "detailDlnaCastingNamed": "投屏中 · {device}",
+  "@detailDlnaCastingNamed": {
+    "placeholders": {
+      "device": { "type": "String" }
+    }
+  },
+  "detailClose": "关闭",
+  "detailMagnetParsingMeta": "正在解析磁力元数据…",
+  "detailMagnetAddFailed": "添加磁力链接失败",
+  "detailMagnetNoVideoFile": "未找到可播放的视频文件",
+  "detailMagnetBuffering": "正在缓冲数据…",
+  "detailMagnetStreamFailed": "启动播放流失败",
+  "detailMagnetConnectingPeers": "正在连接节点…",
+  "detailPlaybackErrorNoUrl": "无可播放地址",
+  "detailPlaybackErrorParseFailed": "解析失败",
+  "detailPlaybackErrorRouteSwitched": "已切换线路",
+  "detailPlaybackErrorMultiSourceFailed": "多源回退失败",
+  "detailPlaybackErrorNetwork": "网络或播放器错误",
+  "detailPlaybackErrorMagnet": "磁力播放失败",
+  "detailEpisodeLabel": "第{index}集",
+  "@detailEpisodeLabel": {
+    "placeholders": {
+      "index": { "type": "int" }
+    }
+  },
+  "detailEpisodeGridCount": "共 {count} 集",
+  "@detailEpisodeGridCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "detailEpisodeGridPageInfo": "第 {current} / {total} 页",
+  "@detailEpisodeGridPageInfo": {
+    "placeholders": {
+      "current": { "type": "int" },
+      "total": { "type": "int" }
+    }
+  },
+  "detailEpisodeGridPrevPage": "上一页",
+  "detailEpisodeGridNextPage": "下一页",
+  "detailEpisodeGridJumpToEpisode": "跳转到集数",
+  "detailEpisodeGridJumpTitle": "跳转到集数",
+  "detailEpisodeGridJumpHint": "输入集数（1–{max}）",
+  "@detailEpisodeGridJumpHint": {
+    "placeholders": {
+      "max": { "type": "int" }
+    }
+  },
+  "detailEpisodeGridJumpConfirm": "跳转",
+  "detailCachePanelTitle": "离线缓存",
+  "detailCacheDownloadCurrent": "缓存当前集",
+  "detailCacheSelectEpisodes": "选择集数",
+  "detailCacheSelectAll": "全选",
+  "detailCacheClearSelection": "取消",
+  "detailCacheDownloadSelected": "下载所选 ({count})",
+  "@detailCacheDownloadSelected": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "detailCacheBatchQueued": "已加入 {count} 个下载任务",
+  "@detailCacheBatchQueued": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "detailCacheBatchNone": "所选集数均已在队列或已缓存",
+  "detailCacheEmptyForMovie": "本影片暂无缓存任务",
+  "detailCacheAlreadyCompleted": "当前集已缓存完成",
+  "detailCacheAlreadyDownloading": "当前集已在下载队列中",
+  "detailCacheQueued": "已加入下载队列",
+  "detailCacheDownloadStarted": "已开始下载",
+  "detailCacheWebUnsupported": "Web 端暂不支持离线缓存",
+  "detailCacheMagnetUnsupported": "磁力资源暂不支持离线缓存",
+  "detailCacheNoEpisode": "无可缓存的播放地址",
+  "detailCacheUnsupportedUrl": "该地址暂不支持缓存",
+  "detailCacheParseFailed": "无法解析真实视频地址，暂不能缓存",
+  "detailCacheDeleted": "已删除缓存",
+  "detailCacheManageAll": "全部缓存",
+  "detailCacheStatusWaiting": "等待中",
+  "detailCacheStatusDownloading": "下载中",
+  "detailCacheStatusPaused": "已暂停",
+  "detailCacheStatusCompleted": "已完成",
+  "detailCacheStatusFailed": "失败",
+  "detailCachePause": "暂停",
+  "detailCacheResume": "继续",
+  "detailCacheDelete": "删除",
+  "cacheManagerTitle": "缓存管理",
+  "cacheManagerOnlyWifi": "仅 WiFi 下载",
+  "cacheManagerStorageTitle": "存储空间",
+  "cacheManagerClearAll": "清理全部",
+  "cacheManagerClearConfirmTitle": "清理缓存",
+  "cacheManagerClearConfirmBody": "确定要清理所有缓存吗？",
+  "cacheManagerClearDone": "缓存已清理",
+  "cacheManagerUsedLabel": "已用: {used} / {max}",
+  "@cacheManagerUsedLabel": {
+    "placeholders": {
+      "used": { "type": "String" },
+      "max": { "type": "String" }
+    }
+  },
+  "cacheManagerCompletedCount": "已缓存 {count} 个视频",
+  "@cacheManagerCompletedCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "cacheWebBanner": "Web 端不支持视频离线下载；列表为空属正常情况。",
+  "cacheFileMissing": "缓存文件不存在",
+  "cacheWebPlayUnsupported": "Web 端请从详情页在线播放",
+  "cachePlayOffline": "离线播放",
+  "cacheDownloadSpeed": "{speed}/s",
+  "@cacheDownloadSpeed": {
+    "placeholders": {
+      "speed": { "type": "String" }
+    }
+  },
+  "followCacheTabEmpty": "暂无缓存",
+  "settingsOnlyWifiCache": "仅 WiFi 下载缓存",
+  "settingsOnlyWifiCacheSubtitle": "移动网络下不自动下载，与缓存管理页开关同步"
 }

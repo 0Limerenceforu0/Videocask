@@ -1,18 +1,22 @@
 import 'package:flutter/material.dart';
 
-import '../config/constants.dart';
+import '../config/category_filter_catalog.dart';
 import '../l10n/app_localizations.dart';
 
 /// 分类列表用的「类型 + 地区」横向 Chip 筛选（与 `MovieProvider.loadCategoryMovies` 参数一致）。
 class CategoryGenreRegionFilterBand extends StatelessWidget {
   const CategoryGenreRegionFilterBand({
     super.key,
+    required this.category,
     required this.selectedGenre,
     required this.selectedRegion,
     required this.onGenreSelected,
     required this.onRegionSelected,
     this.header,
   });
+
+  /// CMS 大类名（如「电影」「剧集」），决定类型/地区候选项。
+  final String category;
 
   final String selectedGenre;
   final String selectedRegion;
@@ -25,6 +29,8 @@ class CategoryGenreRegionFilterBand extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
+    final genres = CategoryFilterCatalog.genresFor(category);
+    final regions = CategoryFilterCatalog.regionsFor(category);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
@@ -34,14 +40,14 @@ class CategoryGenreRegionFilterBand extends StatelessWidget {
           if (header != null) header!,
           _FilterChipLabeledRow(
             label: l10n.filterLabelGenre,
-            items: AppConstants.filterGenres,
+            items: genres,
             selected: selectedGenre,
             onSelected: onGenreSelected,
           ),
           const SizedBox(height: 8),
           _FilterChipLabeledRow(
             label: l10n.filterLabelRegion,
-            items: AppConstants.regions,
+            items: regions,
             selected: selectedRegion,
             onSelected: onRegionSelected,
           ),

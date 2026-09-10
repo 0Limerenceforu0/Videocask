@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shimmer/shimmer.dart';
 
+import 'movie_grid_layout.dart';
+
 /// 骨架屏卡片组件
 ///
 /// 通用的骨架屏占位组件，用于在数据加载时展示闪烁的占位效果。
@@ -90,7 +92,7 @@ class HomeShimmer extends StatelessWidget {
 
             // 分区标题 + 网格卡片占位
             _buildSectionPlaceholder(isDark, title: '高分推荐'),
-            _buildGridPlaceholder(isDark),
+            _buildGridPlaceholder(context, isDark),
             const SizedBox(height: 80),
           ],
         ),
@@ -150,18 +152,14 @@ class HomeShimmer extends StatelessWidget {
   }
 
   /// 网格卡片占位
-  Widget _buildGridPlaceholder(bool isDark) {
+  Widget _buildGridPlaceholder(BuildContext context, bool isDark) {
+    final grid = MovieGridLayout.metricsForContext(context);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: GridView.builder(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          childAspectRatio: 0.58,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-        ),
+        gridDelegate: grid.sliverDelegate,
         itemCount: 6,
         itemBuilder: (context, index) {
           return Column(

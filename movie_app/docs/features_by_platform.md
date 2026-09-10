@@ -25,9 +25,9 @@
 
 | 功能 | 说明 |
 |------|------|
-| 首页 | 轮播、分区、分类/地区筛选、下拉刷新、高分区无限加载、视图密度、回顶、骨架屏/错误态、源切换联动等 |
+| 首页 | 轮播、分区、**继续观看**（横向卡片，进详情断点续播）、分类/地区筛选、下拉刷新、高分区无限加载、视图密度、回顶、骨架屏/错误态、源切换联动等 |
 | 搜索 | 关键词搜索、结果进详情 |
-| 详情 | 拉取详情、切源、`MovieProvider`、播放（非 Web）、磁力检索与结果、相关推荐、历史与进度持久化、迷你播放器状态等 |
+| 详情 | 拉取详情、切源、`MovieProvider`、播放（非 Web）、磁力检索与结果、相关推荐、**继续观看 / 断点续播**、历史与进度持久化、迷你播放器状态等 |
 | 追剧 | 收藏 / 观看历史 / 缓存 Tab |
 | 我的 | 登录态、快捷入口、数据统计、账号与设置入口 |
 | 排行榜 | 榜单与进详情 |
@@ -35,7 +35,7 @@
 | 观影统计 | 总览、类型分布、活跃度、TOP5 |
 | 登录 / 游客 | `UserProvider`、`AuthService` |
 | 播放源管理 | 多源、当前源、与首页联动 |
-| 设置 | 播放参数、OpenSubtitles、数据导出/导入、磁力搜索源配置、WebDAV、主题、关于与开源许可 |
+| 设置 | 播放策略（流畅/均衡/画质）、预加载下一集、播放预缓冲、**进入详情自动播放**、默认倍速/清晰度、硬解、自动连播等；OpenSubtitles、**TMDB API Key**、数据导出/导入、磁力搜索源配置、WebDAV、主题、关于与开源许可 |
 
 ### 1.3 数据、网络与基础设施
 
@@ -44,18 +44,31 @@
 | `StorageService`（Hive） | 历史、收藏、设置、源、用户、播放列表等；导出/导入 JSON |
 | `ApiService` / `SearchService` | CMS 与搜索 |
 | `SyncService` / `WebDavService` | 与设置中 WebDAV 同步项配合 |
-| `TorrentSearchService`、磁力详情与播放相关服务 | 聚合检索；IO 与 Web 实现层次不同但产品能力同属「磁力」 |
-| `SubtitleService`、DLNA、`VideoParser`、`ImdbLookupService` 等 | 按场景在详情等处调用 |
+| `TorrentSearchService`、磁力详情与播放相关服务 | 聚合检索；**中文片名**经豆瓣 / TMDB / IMDb 解析后再搜；IO 与 Web 实现层次不同但产品能力同属「磁力」 |
+| `SubtitleService`、DLNA、`VideoParser`、`ImdbLookupService`、`DoubanLookupService`、`TmdbLookupService`、`MagnetDetailEnrichmentService` 等 | 按场景在详情等处调用 |
 | `ThemeProvider`、`SettingsProvider`、各业务 `Provider` | 全局状态 |
 | `ErrorHandler`、`DioFactory` | 错误与网络 |
 | 国际化 | `AppLocalizations` + ARB（中英） |
 | 详情设计对照 | `AndroidIntroDesignV3Page` 路由（规格见 `detail_page_spec.md`） |
 
-### 1.4 通用优化建议
+### 1.4 播放与缓存（非 Web，详情为主入口）
+
+| 功能 | 说明 |
+|------|------|
+| 播放器内核 | `media_kit` / mpv；策略见 `PlaybackStrategyConfig` → `PlayerService` |
+| URL 解析 | `PlaybackUrlResolver`：本地缓存优先 → 解析页 → 直链 |
+| 智能选线 | `PlaybackRouteSelector`：Range 探针 + 策略评分 |
+| 进度与 Seek | 拖动快速 Seek，松手精确 Seek；**继续观看**从 `HistoryProvider` 恢复线路/集数/进度（`PlayerService.play(startAt)` + seek 重试） |
+| 下一集 | 约 80% 预解析 URL；设置可关「预加载下一集」 |
+| 预缓冲 | 任意网络 Range 预拉下一集前几 MB；设置「播放预缓冲」可关（存储键 `playback_prefetch`，兼容旧 `wifi_playback_prefetch`） |
+| 离线播放 | 已完成缓存优先 `file://` 播放 |
+| 详情线路 | 换线保持集号；点当前线路不重载（`DetailPage._selectPlayRoute`） |
+
+### 1.5 通用优化建议
 
 1. **平台差异显性化**：同一功能在 Web（如无硬解播放）、桌面（键盘快捷键）上的表现不同，建议在设置或关于中维护 **能力矩阵**，避免用户认为「功能损坏」。
-2. **文案与规范**：首页、统计等仍有硬编码中文，建议按页面迁移至 ARB，与仓库规范一致。
-3. **去掉死代码与双轨**：如详情内 `_loadRecommendations()` 空实现、独立 `PlayerPage` 与详情播放器并存等，应合并或删除以降低维护成本。
+2. **文案与规范**：详情播放器、搜索页、首页「继续观看」等已分批迁移 ARB；其余页面（设置子页、追剧等）仍待迁移。
+3. **去掉死代码与双轨**：如详情内 `_loadRecommendations()` 空实现、独立 `PlayerPage` 与详情播放器并存等，应合并或删除以降低维护成本；**详情页**已拆出 `detail_resume_coordinator`、`detail_magnet_playback`、`detail_fullscreen_orientation`、`detail_dlna_sheet` 等模块，后续可继续抽播放器 UI。
 4. **详情 UI 对齐**：以 `docs/detail_page_spec.md` 与静态设计页为基准，统一窄屏与宽屏信息架构（Tab、主操作、折叠简介等）。
 5. **导入导出**：JSON 带 **schema 版本号**，便于后续字段演进与迁移。
 
@@ -69,9 +82,12 @@
 |------|------|
 | 底部导航 | **首页 / 追剧 / 我的** 三栏（已无「发现」） |
 | 迷你播放器条 | 叠在底栏上方，与 `PlayerProvider` 联动 |
-| `SystemChrome` | 竖屏偏好、状态栏样式等 |
+| 屏幕方向 | 应用默认竖正/竖倒；详情全屏时按片源横竖屏开放旋转：**Android 横屏片源**（高/宽 > 1.08）仅锁左右横屏，避免先横后竖；**竖屏片源**仍仅竖屏；**iOS** 横屏片源先切横屏再四向；退出全屏恢复竖屏 |
+| 播放器锁屏 | Android / iOS 详情播放器内；Android 全屏左右各一锁钮 |
+| `SystemChrome` | 状态栏样式、沉浸全屏等 |
 | 系统返回与安全区 | 与 `Scaffold`、`MediaQuery` 典型移动布局配合 |
 | 存储与权限 | 下载/缓存等与 `permission_handler`、路径策略相关（随实现演进） |
+| Release 打包 | 推荐 `.\tool\build_apk.ps1`（打包前自动 `+1` 构建号）；等价于 `dart run tool/bump_version.dart` + `flutter build apk --release`；仅 **arm64-v8a**；产物见 `build/app/outputs/flutter-apk/`；商店包用 `.\tool\build_appbundle.ps1` |
 
 **优化建议：** 迷你条与底栏、Home Indicator 叠层做 **真机安全区** 测试；权限流程与缓存操作 **先授权再执行**。
 
@@ -95,7 +111,7 @@
 |------|------|
 | `window_manager` | 启动显示与聚焦 |
 | 详情宽屏分栏 | 条件：**桌面三平台**且宽度 ≥ 断点（与 Web 宽屏同构）；左播放器+信息，右栏顶「选集/播放线路」Tab，下「磁力/推荐」 |
-| 窗口全屏、键盘快捷键 | 详情播放器内与桌面环境绑定 |
+| 窗口全屏、键盘快捷键 | 详情播放器内与桌面环境绑定；**无**移动端式锁屏钮 |
 
 **优化建议：** Linux/macOS 已与 Windows 共用详情分栏断点；桌面 **argv DeepLink** 见 `docs/deeplink.md`（协议注册仍可补）。
 
@@ -138,4 +154,10 @@
 | 详情宽屏 IA | Web / Windows 宽屏分栏一致；右栏顶「选集/播放线路」Tab，下「磁力/推荐」。 |
 | 2026-04-19 | 高保真顶栏壳：Linux/macOS/Windows 在宽度断点下与 Web 同构（`useWideTopBarShell`）；与仅 Windows 详情分栏策略区分。 |
 | 2026-04-19 | 详情宽屏分栏与 Web 对齐至 **三桌面**；argv DeepLink 与 `deeplink.md` 更新。 |
+| 2026-05-29 | 补充 §1.4 播放与缓存、设置项说明；移动端全屏方向/锁屏；详情线路切换与预缓冲（全网络）等行为与代码对齐。 |
+| 2026-05-29 | Android 打包脚本 `tool/build_apk.ps1` / `build_appbundle.ps1`：每次打包前自动递增 `pubspec.yaml` 构建号（`+N`）。 |
+| 2026-05-29 | **继续观看 / 断点续播**：`PlayerService.play(startAt)`、`DetailResumeCoordinator`、进度落盘保护；首页「继续观看」进详情自动续播。 |
+| 2026-05-29 | **中文磁力检索**：豆瓣 + TMDB（设置 API Key）+ IMDb 解析片名；磁力详情 `MagnetDetailEnrichmentService` 补海报/简介/演职员/相似推荐。 |
+| 2026-05-29 | **详情页拆分**：`detail_resume_coordinator.dart`、`detail_magnet_playback.dart`、`detail_fullscreen_orientation.dart`、`detail_dlna_sheet.dart`；详情/搜索/首页继续观看等文案迁移 ARB。 |
+| 2026-05-29 | **Android 全屏方向**：横屏片源（高/宽 > 1.08）全屏仅锁 `landscapeLeft/Right`，避免先横后竖；竖屏片源仍仅竖屏；iOS 保留先横屏再四向。 |
 

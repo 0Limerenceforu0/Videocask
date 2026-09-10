@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:async' show unawaited;
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../../config/constants.dart';
 import '../../config/routes.dart';
 import '../../config/themes.dart';
+import '../../l10n/app_localizations.dart';
+import '../../services/storage_service.dart';
+import '../../services/subtitle_ai_backend.dart';
+import '../../widgets/ai_subtitle_settings_panel.dart';
 import 'magnet_sources_page.dart';
 import '../../providers/theme_provider.dart';
 import '../../providers/settings_provider.dart';
@@ -34,6 +39,7 @@ class SettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = _getColors(context);
+    final l10n = AppLocalizations.of(context)!;
 
     return Scaffold(
       backgroundColor: colors.bgColor,
@@ -104,6 +110,19 @@ class SettingsPage extends StatelessWidget {
                     context.read<SettingsProvider>().setAutoPlayNext(value),
               ),
               _buildBiliDivider(colors),
+              _buildBiliSwitchItem(
+                context,
+                colors,
+                icon: Icons.play_circle_outline,
+                iconBgColor: const Color(0xFF64B5F6),
+                title: l10n.settingsAutoPlayOnDetailEnter,
+                subtitle: l10n.settingsAutoPlayOnDetailEnterSubtitle,
+                value: context.watch<SettingsProvider>().autoPlayOnDetailEnter,
+                onChanged: (value) => context
+                    .read<SettingsProvider>()
+                    .setAutoPlayOnDetailEnter(value),
+              ),
+              _buildBiliDivider(colors),
               _buildBiliSettingItem(
                 context,
                 colors,
@@ -114,6 +133,50 @@ class SettingsPage extends StatelessWidget {
                   context.watch<SettingsProvider>().playbackStrategy,
                 ),
                 onTap: () => _showPlaybackStrategySetting(context),
+              ),
+              _buildBiliDivider(colors),
+              _buildBiliSwitchItem(
+                context,
+                colors,
+                icon: Icons.skip_next_outlined,
+                iconBgColor: const Color(0xFF4DB6AC),
+                title: l10n.settingsPreloadNextEpisode,
+                subtitle: l10n.settingsPreloadNextEpisodeSubtitle,
+                value: context.watch<SettingsProvider>().preloadNextEpisode,
+                onChanged: (value) => context
+                    .read<SettingsProvider>()
+                    .setPreloadNextEpisode(value),
+              ),
+              _buildBiliDivider(colors),
+              _buildBiliSwitchItem(
+                context,
+                colors,
+                icon: Icons.cloud_download_outlined,
+                iconBgColor: const Color(0xFF90A4AE),
+                title: l10n.settingsPlaybackPrefetch,
+                subtitle: l10n.settingsPlaybackPrefetchSubtitle,
+                value: context.watch<SettingsProvider>().playbackPrefetch,
+                onChanged: (value) =>
+                    context.read<SettingsProvider>().setPlaybackPrefetch(value),
+              ),
+              _buildBiliDivider(colors),
+              _buildBiliSwitchItem(
+                context,
+                colors,
+                icon: Icons.wifi_outlined,
+                iconBgColor: const Color(0xFF64B5F6),
+                title: l10n.settingsOnlyWifiCache,
+                subtitle: l10n.settingsOnlyWifiCacheSubtitle,
+                value: context.watch<SettingsProvider>().onlyWifiCache,
+                onChanged: (value) {
+                  unawaited(() async {
+                    await context
+                        .read<SettingsProvider>()
+                        .setOnlyWifiCache(value);
+                    if (!context.mounted) return;
+                    await context.read<CacheProvider>().setOnlyWifi(value);
+                  }());
+                },
               ),
               _buildBiliDivider(colors),
               _buildBiliSettingItem(
@@ -128,6 +191,28 @@ class SettingsPage extends StatelessWidget {
                     ? '已配置'
                     : '未配置（在线字幕不可用）',
                 onTap: () => _showOpensubtitlesApiKeyDialog(context),
+              ),
+              _buildBiliDivider(colors),
+              _buildBiliSettingItem(
+                context,
+                colors,
+                icon: Icons.movie_filter_outlined,
+                iconBgColor: const Color(0xFF7986CB),
+                title: l10n.settingsTmdbApiKey,
+                value: context.watch<SettingsProvider>().tmdbApiKeyConfigured
+                    ? l10n.settingsTmdbApiKeyConfigured
+                    : l10n.settingsTmdbApiKeyNotConfigured,
+                onTap: () => _showTmdbApiKeyDialog(context),
+              ),
+              _buildBiliDivider(colors),
+              _buildBiliSettingItem(
+                context,
+                colors,
+                icon: Icons.auto_awesome_outlined,
+                iconBgColor: const Color(0xFF7E57C2),
+                title: 'AI 字幕生成',
+                value: _aiSubtitleStatusText(context),
+                onTap: () => showAiSubtitleSettings(context),
               ),
             ],
           ),
@@ -1219,6 +1304,81 @@ class SettingsPage extends StatelessWidget {
         return '优先选择线路更多、评分更高的资源';
       default:
         return '在流畅与画质之间自动平衡';
+    }
+  }
+
+  void _showTmdbApiKeyDialog(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final settings = context.read<SettingsProvider>();
+    final controller = TextEditingController(text: settings.tmdbApiKey);
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(l10n.settingsTmdbApiKey),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                l10n.settingsTmdbApiKeyDialogBody,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                decoration: const InputDecoration(
+                  labelText: 'API Key',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 2,
+                autofocus: true,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              await settings.setTmdbApiKey(controller.text);
+              if (ctx.mounted) Navigator.pop(ctx);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(l10n.settingsTmdbApiKeySaved)),
+                );
+              }
+            },
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _aiSubtitleStatusText(BuildContext context) {
+    final s = StorageService();
+    final minutes = s.subtitleAiMaxMinutes <= 0 ? 10 : s.subtitleAiMaxMinutes;
+    switch (s.subtitleAiBackend) {
+      case SubtitleAiBackendKind.onlineApi:
+        if (s.subtitleAiApiUrl.trim().isEmpty) {
+          return '在线 API 未配置 · $minutes 分钟';
+        }
+        final model = s.subtitleAiModel.isEmpty ? 'base' : s.subtitleAiModel;
+        return '在线 API · $model · $minutes 分钟';
+      case SubtitleAiBackendKind.sherpaNative:
+        if (s.subtitleAiOfflineModel.isEmpty) {
+          return '本地离线 · 未选模型 · $minutes 分钟';
+        }
+        return '本地离线 · $minutes 分钟';
+      case SubtitleAiBackendKind.transformersWeb:
+        return '浏览器 Whisper · $minutes 分钟';
     }
   }
 

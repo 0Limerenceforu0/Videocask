@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:json_annotation/json_annotation.dart';
 
@@ -185,11 +187,8 @@ class Movie {
     final contentHtml = json['vod_content']?.toString() ?? '';
     final description = _stripHtmlTags(contentHtml);
 
-    // 解析播放线路和集数
-    final playRoutes = _parsePlayRoutes(
-      json['vod_play_from']?.toString() ?? '',
-      json['vod_play_url']?.toString() ?? '',
-    );
+    // 解析播放线路和集数（结构化 vod_play_list 与 vod_play_from/url 取线路更多者）
+    final playRoutes = _resolvePlayRoutesFromCmsJson(json);
 
     // 解析最后更新时间（vod_time 可能是 Unix 时间戳）
     final timeStr = json['vod_time']?.toString() ?? '';
@@ -257,61 +256,29 @@ class Movie {
 
   /// 解析播放线路和集数
   ///
-  /// vod_play_from格式: "线路1$$$线路2$$$线路3"
+  /// vod_play_from格式: "线路1$$$线路2" 或 "youku,qiyi"（逗号分隔播放器）
   /// vod_play_url格式: "第1集$url1#第2集$url2$$$第1集$url3#第2集$url4"
   /// 用$$$分割不同线路，用#分割同一线路的不同集数，用$分割集数名称和URL
+  ///
+  /// 常见采集站仅填一个 [vod_play_from]（如 `lzm3u8`），多线路全在 [vod_play_url] 的 `$$$` 分段里。
   static List<PlayRoute> _parsePlayRoutes(String playFrom, String playUrl) {
-    if (playFrom.isEmpty || playUrl.isEmpty) return [];
+    final fromList = _splitCmsRouteNames(playFrom);
+    final urlList = _splitCmsRouteUrlBlocks(
+      playUrl,
+      expectedRoutes: fromList.length,
+    );
+    if (fromList.isEmpty || urlList.isEmpty) return [];
+
+    final routeCount =
+        urlList.length > fromList.length ? urlList.length : fromList.length;
 
     final routes = <PlayRoute>[];
+    for (var i = 0; i < routeCount; i++) {
+      final routeName = _routeDisplayName(fromList, i);
+      final routeUrlStr = i < urlList.length ? urlList[i] : '';
+      if (routeUrlStr.isEmpty) continue;
 
-    // 用$$$分割不同线路
-    final fromList = playFrom.split('\$\$\$');
-    final urlList = playUrl.split('\$\$\$');
-
-    // 确保线路数量一致，取最小值
-    final count =
-        fromList.length < urlList.length ? fromList.length : urlList.length;
-
-    for (int i = 0; i < count; i++) {
-      final routeName = fromList[i].trim();
-      final routeUrlStr = urlList[i].trim();
-
-      if (routeName.isEmpty || routeUrlStr.isEmpty) continue;
-
-      // 用#分割同一线路的不同集数
-      final episodeParts = routeUrlStr.split('#');
-      final episodes = <Episode>[];
-
-      for (int j = 0; j < episodeParts.length; j++) {
-        final part = episodeParts[j].trim();
-        if (part.isEmpty) continue;
-
-        // 用$分割集数名称和URL（注意：URL中可能包含$符号，所以只分割第一个$）
-        final dollarIndex = part.indexOf('\$');
-        String episodeName;
-        String episodeUrl;
-
-        if (dollarIndex > 0) {
-          episodeName = part.substring(0, dollarIndex).trim();
-          episodeUrl = part.substring(dollarIndex + 1).trim();
-        } else {
-          // 如果没有$符号，整个作为URL，集数名称自动生成
-          episodeName = '第${j + 1}集';
-          episodeUrl = part;
-        }
-
-        if (episodeUrl.isNotEmpty) {
-          episodes.add(
-            Episode(
-              index: j,
-              name: episodeName,
-              url: episodeUrl,
-            ),
-          );
-        }
-      }
-
+      final episodes = _parseEpisodesFromRouteBlock(routeUrlStr);
       if (episodes.isNotEmpty) {
         routes.add(
           PlayRoute(
@@ -323,6 +290,196 @@ class Movie {
     }
 
     return routes;
+  }
+
+  /// 合并 CMS 结构化 [vod_play_list] 与经典 [vod_play_from]/[vod_play_url] 解析结果。
+  ///
+  /// 部分采集站 [vod_play_list] 仅含默认播放器一条线路，完整多线路仍在
+  /// [vod_play_url] 的 `$$$` 分段里，不可因前者存在而丢弃后者。
+  static List<PlayRoute> _resolvePlayRoutesFromCmsJson(
+    Map<String, dynamic> json,
+  ) {
+    final fromStructured =
+        _parsePlayRoutesFromJson(json) ?? const <PlayRoute>[];
+    final fromClassic = _parsePlayRoutes(
+      json['vod_play_from']?.toString() ?? '',
+      json['vod_play_url']?.toString() ?? '',
+    );
+    if (fromStructured.isEmpty) return fromClassic;
+    if (fromClassic.isEmpty) return fromStructured;
+    if (fromClassic.length > fromStructured.length) return fromClassic;
+    if (fromStructured.length > fromClassic.length) return fromStructured;
+    final classicEpisodes = fromClassic.fold<int>(
+      0,
+      (sum, r) => sum + r.episodes.length,
+    );
+    final structuredEpisodes = fromStructured.fold<int>(
+      0,
+      (sum, r) => sum + r.episodes.length,
+    );
+    return classicEpisodes > structuredEpisodes ? fromClassic : fromStructured;
+  }
+
+  /// 部分接口直接返回结构化的 `vod_play_list`（也可能是 JSON 字符串）。
+  static List<PlayRoute>? _parsePlayRoutesFromJson(Map<String, dynamic> json) {
+    final raw = json['vod_play_list'];
+    final List<dynamic>? list = switch (raw) {
+      final List<dynamic> l => l,
+      final String s when s.trim().isNotEmpty => _decodePlayListString(s),
+      _ => null,
+    };
+    if (list == null || list.isEmpty) return null;
+
+    final routes = <PlayRoute>[];
+    for (var i = 0; i < list.length; i++) {
+      final item = list[i];
+      if (item is! Map) continue;
+      final map = Map<String, dynamic>.from(item);
+
+      var name = map['from']?.toString().trim() ?? '';
+      if (name.isEmpty) {
+        final playerInfo = map['player_info'];
+        if (playerInfo is Map) {
+          name = playerInfo['show']?.toString().trim() ?? '';
+        }
+      }
+      if (name.isEmpty) {
+        name = '线路 ${i + 1}';
+      }
+
+      final urlsRaw = map['urls'];
+      if (urlsRaw is List && urlsRaw.isNotEmpty) {
+        final episodes = <Episode>[];
+        for (var j = 0; j < urlsRaw.length; j++) {
+          final u = urlsRaw[j];
+          if (u is! Map) continue;
+          final episodeUrl = u['url']?.toString().trim() ?? '';
+          if (episodeUrl.isEmpty) continue;
+          final episodeName = u['name']?.toString().trim() ?? '';
+          episodes.add(
+            Episode(
+              index: j,
+              name: episodeName.isNotEmpty ? episodeName : '第${j + 1}集',
+              url: episodeUrl,
+            ),
+          );
+        }
+        if (episodes.isNotEmpty) {
+          routes.add(PlayRoute(name: name, episodes: episodes));
+        }
+        continue;
+      }
+
+      final urlStr = map['url']?.toString().trim() ?? '';
+      if (urlStr.isEmpty) continue;
+      final episodes = _parseEpisodesFromRouteBlock(urlStr);
+      if (episodes.isNotEmpty) {
+        routes.add(PlayRoute(name: name, episodes: episodes));
+      }
+    }
+
+    return routes.isEmpty ? null : routes;
+  }
+
+  static List<dynamic>? _decodePlayListString(String raw) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is List) return decoded;
+    } catch (_) {}
+    return null;
+  }
+
+  static String _normalizeCmsPlayField(String raw) {
+    var s = raw.trim();
+    if (s.contains('%24%24%24')) {
+      s = s.replaceAll('%24%24%24', r'$$$');
+    }
+    return s;
+  }
+
+  static List<String> _splitCmsRouteNames(String playFrom) {
+    final normalized = _normalizeCmsPlayField(playFrom);
+    if (normalized.isEmpty) return [];
+
+    List<String> parts;
+    if (normalized.contains(r'$$$')) {
+      parts = normalized.split(r'$$$');
+    } else if (normalized.contains(',')) {
+      parts = normalized.split(',');
+    } else {
+      parts = [normalized];
+    }
+
+    return parts.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+  }
+
+  static List<String> _splitCmsRouteUrlBlocks(
+    String playUrl, {
+    int expectedRoutes = 0,
+  }) {
+    final normalized = _normalizeCmsPlayField(playUrl);
+    if (normalized.isEmpty) return [];
+
+    List<String> splitBlocks(String separator) {
+      return normalized
+          .split(separator)
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toList();
+    }
+
+    var blocks = splitBlocks(r'$$$');
+    if (blocks.length <= 1 && expectedRoutes > 1) {
+      final alt = splitBlocks(r'$$');
+      if (alt.length > blocks.length) {
+        blocks = alt;
+      }
+    }
+    return blocks;
+  }
+
+  static String _routeDisplayName(List<String> fromList, int index) {
+    if (index < fromList.length && fromList[index].isNotEmpty) {
+      return fromList[index];
+    }
+    if (fromList.isNotEmpty && fromList.first.isNotEmpty) {
+      return '${fromList.first} ${index + 1}';
+    }
+    return '线路 ${index + 1}';
+  }
+
+  static List<Episode> _parseEpisodesFromRouteBlock(String routeUrlStr) {
+    final episodeParts = routeUrlStr.split('#');
+    final episodes = <Episode>[];
+
+    for (var j = 0; j < episodeParts.length; j++) {
+      final part = episodeParts[j].trim();
+      if (part.isEmpty) continue;
+
+      final dollarIndex = part.indexOf(r'$');
+      final String episodeName;
+      final String episodeUrl;
+
+      if (dollarIndex > 0) {
+        episodeName = part.substring(0, dollarIndex).trim();
+        episodeUrl = part.substring(dollarIndex + 1).trim();
+      } else {
+        episodeName = '第${j + 1}集';
+        episodeUrl = part;
+      }
+
+      if (episodeUrl.isNotEmpty) {
+        episodes.add(
+          Episode(
+            index: j,
+            name: episodeName,
+            url: episodeUrl,
+          ),
+        );
+      }
+    }
+
+    return episodes;
   }
 
   /// 复制并修改部分字段

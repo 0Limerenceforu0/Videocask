@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
 import '../pages/main_page.dart';
 import '../pages/home/search_page.dart';
 import '../pages/detail/detail_page.dart';
@@ -15,13 +16,16 @@ import '../pages/playlist/playlist_detail_page.dart';
 import '../pages/follow/follow_page.dart';
 import '../pages/design_reference/android_intro_design_v3_page.dart';
 import '../models/movie.dart';
+import '../models/cache_item.dart';
 import '../models/watch_history.dart';
+import '../utils/cache_playback_helper.dart';
 import '../models/torrent_info.dart';
 import '../services/torrent_search_service.dart';
 import '../utils/torrent_title_display.dart';
 import 'channel_portal_kind.dart';
 import 'constants.dart';
 import '../pages/channel/category_portal_page.dart';
+import '../providers/movie_provider.dart';
 
 Uri _normalizeIncomingDeepLink(Uri uri) {
   if (uri.scheme != 'movieapp') {
@@ -49,7 +53,26 @@ class DetailRouteExtra {
   final Movie? movie;
   final String? initialMagnetUri;
 
-  const DetailRouteExtra({this.movie, this.initialMagnetUri});
+  /// 用户搜索时的中文片名（磁力详情补全元数据）
+  final String? displayTitleHint;
+
+  /// 磁力条目自带的 IMDb ID
+  final String? torrentImdbId;
+
+  /// 当前播放的磁力条目（详情页展示资源信息）
+  final TorrentInfo? torrent;
+
+  /// 从缓存列表进入详情时指定起播集数。
+  final int? initialEpisodeIndex;
+
+  const DetailRouteExtra({
+    this.movie,
+    this.initialMagnetUri,
+    this.displayTitleHint,
+    this.torrentImdbId,
+    this.torrent,
+    this.initialEpisodeIndex,
+  });
 }
 
 /// 路由配置
@@ -77,10 +100,15 @@ class AppRoutes {
   /// DeepLink scheme
   static const String scheme = 'movieapp';
 
+  /// 详情页路由观察（叠层详情时暂停底层播放等）
+  static final RouteObserver<PageRoute<dynamic>> detailRouteObserver =
+      RouteObserver<PageRoute<dynamic>>();
+
   /// 全局路由配置
   static final GoRouter router = GoRouter(
     initialLocation: home,
     debugLogDiagnostics: false,
+    observers: [detailRouteObserver],
     routes: [
       // 首页（底部导航栏主框架）
       GoRoute(
@@ -107,9 +135,17 @@ class AppRoutes {
           final extra = state.extra;
           Movie? movieArg;
           var initialMagnet = '';
+          String? displayTitleHint;
+          String? torrentImdbId;
+          TorrentInfo? torrentArg;
+          int? initialEpisodeIndex;
           if (extra is DetailRouteExtra) {
             movieArg = extra.movie;
             initialMagnet = extra.initialMagnetUri ?? '';
+            displayTitleHint = extra.displayTitleHint;
+            torrentImdbId = extra.torrentImdbId;
+            torrentArg = extra.torrent;
+            initialEpisodeIndex = extra.initialEpisodeIndex;
           } else if (extra is Movie) {
             movieArg = extra;
           }
@@ -118,6 +154,10 @@ class AppRoutes {
             sourceId: sourceId,
             movie: movieArg,
             initialMagnetUri: initialMagnet,
+            displayTitleHint: displayTitleHint,
+            torrentImdbId: torrentImdbId,
+            torrent: torrentArg,
+            initialEpisodeIndex: initialEpisodeIndex,
           );
         }),
       ),
@@ -340,10 +380,31 @@ class AppRoutes {
         if (sourceId.isNotEmpty) 'sourceId': sourceId,
       },
     );
-    final Object? extra = (initialMagnetUri.isNotEmpty)
-        ? DetailRouteExtra(movie: movie, initialMagnetUri: initialMagnetUri)
+    final Object? extra = initialMagnetUri.isNotEmpty
+        ? DetailRouteExtra(
+            movie: movie,
+            initialMagnetUri: initialMagnetUri,
+          )
         : movie;
     context.push(uri.toString(), extra: extra);
+  }
+
+  /// 从已完成缓存进入详情离线播放（移动端）。
+  static void toDetailFromCache(BuildContext context, CacheItem item) {
+    final movie = CachePlaybackHelper.movieFromCacheItem(item);
+    final uri = Uri.parse(detail).replace(
+      queryParameters: <String, String>{
+        'id': item.movieId,
+        if (item.sourceId.isNotEmpty) 'sourceId': item.sourceId,
+      },
+    );
+    context.push(
+      uri.toString(),
+      extra: DetailRouteExtra(
+        movie: movie,
+        initialEpisodeIndex: item.episodeIndex,
+      ),
+    );
   }
 
   /// 从观看历史进入详情（磁力源会带上 [WatchHistory.magnetUri] 以恢复播放）
@@ -377,6 +438,7 @@ class AppRoutes {
     BuildContext context,
     TorrentInfo torrent, {
     Movie? enrichFrom,
+    String? displayTitleHint,
   }) {
     final btih = TorrentSearchService.extractBtih(torrent.magnetUri) ??
         'h${torrent.magnetUri.hashCode.abs()}';
@@ -449,11 +511,15 @@ class AppRoutes {
         'sourceId': AppConstants.magnetDetailSourceId,
       },
     );
+    context.read<MovieProvider>().pushDetailSnapshot();
     context.push(
       uri.toString(),
       extra: DetailRouteExtra(
         movie: movie,
         initialMagnetUri: torrent.magnetUri,
+        displayTitleHint: displayTitleHint,
+        torrentImdbId: torrent.imdbId,
+        torrent: torrent,
       ),
     );
   }

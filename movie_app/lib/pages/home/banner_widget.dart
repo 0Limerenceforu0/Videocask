@@ -2,6 +2,9 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+
+import '../../utils/web_http_stub.dart'
+    if (dart.library.html) '../../utils/web_http.dart' as web_http;
 import '../../models/movie.dart';
 import '../../config/routes.dart';
 
@@ -182,7 +185,7 @@ class _BannerWidgetState extends State<BannerWidget> {
     return ImageFiltered(
       imageFilter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
       child: CachedNetworkImage(
-        imageUrl: imageUrl,
+        imageUrl: web_http.webProxiedImageUrl(imageUrl),
         fit: BoxFit.cover,
         memCacheWidth: 600,
         memCacheHeight: 900,
@@ -200,7 +203,7 @@ class _BannerWidgetState extends State<BannerWidget> {
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
       child: CachedNetworkImage(
-        imageUrl: imageUrl,
+        imageUrl: web_http.webProxiedImageUrl(imageUrl),
         fit: BoxFit.contain,
         memCacheWidth: (400 * devicePixelRatio).round(),
         memCacheHeight: (600 * devicePixelRatio).round(),

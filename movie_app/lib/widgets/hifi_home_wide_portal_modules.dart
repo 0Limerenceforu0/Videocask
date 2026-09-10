@@ -150,7 +150,6 @@ class HiFiHomeWidePortalModules extends StatelessWidget {
             movies: _gridMovies(pool, kind),
             rankMovies: _rankMovies(pool, kind),
             wide: true,
-            narrowGridCrossAxisCount: 5,
             filterChips: _chipRow(context, kind: kind, l10n: l10n),
             onMorePressed: () => AppRoutes.toChannelPortal(context, kind),
             moreTooltip: l10n.categoryPortalModuleMore,
