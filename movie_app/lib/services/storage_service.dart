@@ -11,6 +11,7 @@ import '../models/watch_history.dart';
 import '../models/favorite.dart';
 import '../models/cache_item.dart';
 import '../models/playlist.dart';
+import 'subtitle_ai_backend.dart' show SubtitleAiBackendKind;
 
 /// 本地存储服务 - 基于Hive
 class StorageService {
@@ -324,6 +325,70 @@ class StorageService {
   }
 
   // ==================== 通用设置 ====================
+
+  /// AI 字幕配置项
+  String get subtitleAiApiUrl =>
+      getSetting('subtitle_ai_api_url') ??
+      'http://localhost:8000/v1/audio/transcriptions';
+  Future<void> setSubtitleAiApiUrl(String v) =>
+      saveSetting('subtitle_ai_api_url', v);
+
+  String get subtitleAiApiKey => getSetting('subtitle_ai_api_key') ?? '';
+  Future<void> setSubtitleAiApiKey(String v) =>
+      saveSetting('subtitle_ai_api_key', v);
+
+  String get subtitleAiModel => getSetting('subtitle_ai_model') ?? 'base';
+  Future<void> setSubtitleAiModel(String v) =>
+      saveSetting('subtitle_ai_model', v);
+
+  String get subtitleAiLanguage => getSetting('subtitle_ai_language') ?? 'zh';
+  Future<void> setSubtitleAiLanguage(String v) =>
+      saveSetting('subtitle_ai_language', v);
+
+  int get subtitleAiMaxMinutes =>
+      getIntSetting('subtitle_ai_max_minutes', defaultValue: 10);
+  Future<void> setSubtitleAiMaxMinutes(int v) =>
+      saveIntSetting('subtitle_ai_max_minutes', v);
+
+  bool get subtitleAiSendAsUrl =>
+      getBoolSetting('subtitle_ai_send_as_url', defaultValue: false);
+  Future<void> setSubtitleAiSendAsUrl(bool v) =>
+      saveBoolSetting('subtitle_ai_send_as_url', v);
+
+  String get subtitleAiInitialPrompt =>
+      getSetting('subtitle_ai_initial_prompt') ?? '';
+  Future<void> setSubtitleAiInitialPrompt(String v) =>
+      saveSetting('subtitle_ai_initial_prompt', v);
+
+  // ==================== 离线后端设置 ====================
+
+  /// 字幕 AI 后端类型
+  ///
+  /// 默认走**离线本地识别**（符合「无需独立后端」）：
+  /// - 非 Web：sherpa_onnx 本地模型
+  /// - Web：transformers.js（浏览器内推理）
+  /// 用户可在「设置 → AI 字幕生成」里切回在线 API。
+  SubtitleAiBackendKind get subtitleAiBackend {
+    final raw = getSetting('subtitle_ai_backend');
+    final fallback = kIsWeb
+        ? SubtitleAiBackendKind.transformersWeb
+        : SubtitleAiBackendKind.sherpaNative;
+    if (raw == null) return fallback;
+    return SubtitleAiBackendKind.values.firstWhere(
+      (v) => v.name == raw,
+      orElse: () => fallback,
+    );
+  }
+
+  Future<void> setSubtitleAiBackend(SubtitleAiBackendKind v) =>
+      saveSetting('subtitle_ai_backend', v.name);
+
+  /// 选中的离线模型 ID
+  String get subtitleAiOfflineModel =>
+      getSetting('subtitle_ai_offline_model') ?? '';
+  Future<void> setSubtitleAiOfflineModel(String v) =>
+      saveSetting('subtitle_ai_offline_model', v);
+
   // ==================== 通用设置方法 ====================
 
   /// 获取设置值
@@ -338,6 +403,18 @@ class StorageService {
     _ensureInitialized();
     if (_settingsBox == null) return;
     await _settingsBox!.put(key, value);
+  }
+
+  /// 删除设置键（恢复到「未设置」= 代码默认值）。
+  ///
+  /// 用于矩阵测试 deeplink 的 `default` 重置：测试残留的 vo/hwdec/sp/gpuapi
+  /// 覆盖键若一直留在 Hive 里，会让后续所有真机验证都跑在非默认配置上
+  /// （2026-10-24 实测踩过：残留 `debug_gpu_api=opengl` + `vo=mediacodecEmbed`
+  /// 导致磁力首播流程中途切后端、重建播放器）。
+  Future<void> deleteSetting(String key) async {
+    _ensureInitialized();
+    if (_settingsBox == null) return;
+    await _settingsBox!.delete(key);
   }
 
   /// 获取布尔设置值

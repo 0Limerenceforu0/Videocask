@@ -1,7 +1,7 @@
 name: movie_app
 description: 跨端影视播放应用 - 覆盖Android、PC、Web三端
 publish_to: 'none'
-version: 1.0.22+22
+version: 1.1.3+63
 environment:
   sdk: '>=3.0.0 <4.0.0'
 
@@ -29,9 +29,24 @@ dependencies:
   dio: ^5.4.0
 
   # 视频播放
-  media_kit: ^1.2.5
-  media_kit_video: ^1.2.5
-  media_kit_libs_video: ^1.0.7
+  #
+  # 使用 Predidit/media-kit 分支（Kazumi 同款），原因：
+  #   上游 media-kit#1391 存在 Android 每帧泄漏 GPU fence（anon_inode:sync_file）
+  #   → 约 25 fd/秒线性增长 → 数分钟即 fd 耗尽崩溃。该分支已带修复补丁，
+  #   且捆绑更新的 libmpv 二进制（v1.3.1，2026-10-18）。
+  #   两个包必须锁定到同一 commit，否则原生库与 Dart 层不匹配。
+  #   该分支用 Dart build hook 接管原生库下载/打包，不再需要 media_kit_libs_*。
+  #   要求 Dart >= 3.10 / Flutter >= 3.38（本机 Flutter 3.50 / Dart 3.11 满足）。
+  media_kit:
+    git:
+      url: https://github.com/Predidit/media-kit.git
+      ref: 83b7ca63772856e1ea0158916177e136f7b7b0be
+      path: ./media_kit
+  media_kit_video:
+    git:
+      url: https://github.com/Predidit/media-kit.git
+      ref: 83b7ca63772856e1ea0158916177e136f7b7b0be
+      path: ./media_kit_video
 
   # 轮播
   carousel_slider: ^5.0.0
@@ -51,15 +66,16 @@ dependencies:
   # DLNA投屏
   dlna_dart: ^0.1.0
 
-  # 字幕
-  subtitle_wrapper_package: ^2.2.0
+  # ============================================================
+  # 离线 AI 字幕生成（sherpa_onnx，Apache 2.0，无任何付费 API）
+  # ============================================================
+  # sherpa_onnx：跨平台离线 ASR / TTS / VAD。k2-fsa 官方维护。
+  # 支持 Whisper / Paraformer / SenseVoice / Zipformer / Moonshine / TeleSpeech
+  # 等多种 ONNX 模型；Android/iOS/Windows/macOS/Linux 都有 native 二进制。
+  sherpa_onnx: ^1.13.7
 
-  # 图标和字体
-  cupertino_icons: ^1.0.6
-  google_fonts: ^6.1.0
-
-  # 平台检测
-  universal_platform: ^1.0.0+1
+  # tar 归档（解压 sherpa 模型 tar.bz2）
+  archive: ^4.0.3
 
   # PWA支持
   flutter_launcher_icons: ^0.13.1
@@ -67,35 +83,20 @@ dependencies:
   # 路径处理
   path_provider: ^2.1.2
 
-  # 权限管理
-  permission_handler: ^11.3.0
-
-  # 设备信息
-  device_info_plus: ^9.1.2
-
-  # URL启动器
-  url_launcher: ^6.2.4
-
   # 国际化
   intl: ^0.20.2
-
-  # 动画
-  flutter_staggered_animations: ^1.1.1
 
   # 骨架屏加载动画
   shimmer: ^3.0.0
 
   # 网络状态检测
-  connectivity_plus: ^5.0.2
+  # 7.x 起 checkConnectivity/onConnectivityChanged 返回 List<ConnectivityResult>
+  # （多网卡并存时不再互相覆盖）。升它是因为 media_kit git 分支要求 js ^0.7.1，
+  # 而 5.x/6.x 卡在 js ^0.6.x，版本解算冲突。
+  connectivity_plus: ^7.3.1
 
   # 二维码生成
   qr_flutter: ^4.1.0
-
-  # 系统分享
-  share_plus: ^7.2.1
-
-  # 消息提示
-  overlay_support: ^2.1.0
 
   # P2P 磁力链接流式播放
   libtorrent_flutter: ^1.7.8
@@ -112,6 +113,9 @@ dev_dependencies:
     sdk: flutter
   integration_test:
     sdk: flutter
+  # 仅供 tool/analyze_inprocess.dart 使用：本机若因驱动拦截导致 dart 无法创建
+  # 子进程（CreateFile 231），flutter analyze 会失效，可用它做进程内静态分析。
+  analyzer: any
   flutter_lints: ^3.0.1
   build_runner: ^2.4.8
   json_serializable: ^6.7.1
@@ -124,8 +128,36 @@ flutter:
   assets:
     - assets/images/
     - assets/icons/
+    - assets/ad_block_rules.json
 
   fonts:
     - family: AppIcons
       fonts:
         - asset: assets/fonts/AppIcons.ttf
+# media_kit（Predidit 分支）的 Dart build hook 配置。
+#
+# 为什么需要指定 cache-directory：hook 下载 libmpv 后要解压，而 Windows x64 的
+# 压缩包是 7z，hook 会调外部 `tar` 解压 —— 但 Windows 自带的 bsdtar(libarchive
+# 3.5.2) 缺 LZMA 编解码，会报 "LZMA codec is unsupported"；Git 自带的 GNU tar
+# 更是不支持 7z。结果是连 `flutter test`（主机即 Windows x64）都过不去原生资源构建。
+#
+# 解法：把 hook 的缓存目录固定到仓库内，再用 tool/seed_media_kit_native_cache.py
+# 预置解压结果（走本机 7-Zip），并写好 extracted.json 校验戳。hook 发现解压产物
+# 有效就直接复用，不再调用 tar。放在 .dart_tool 外，因此能扛过 flutter clean。
+hooks:
+  user_defines:
+    media_kit:
+      source: bundled
+      cache-directory: native-cache
+      # 本地逃生阀：安全中心把 reg.exe 列入黑名单 → vcvars 无法定位 Windows SDK
+      # → media_kit 的 event_loop DLL 若交给 native_toolchain_c 的 CBuilder 编译，
+      #   必然失败（C1083 找不到 stdlib.h）。
+      # 现改为：**跳过 CBuilder 编译，改用预编译好的 DLL**
+      #   （media_kit 包内 hook/prebuilt/windows/media_kit_event_loop.dll，
+      #     由本项目 tool\build_media_kit_event_loop_win.bat 生成）。
+      # 关键：只跳 event_loop 的编译，**绝不能整个 hook 提前 return** ——
+      #   那样连 libmpv 原生资产也不会注册，Windows 包会在
+      #   MediaKit.ensureInitialized() 处开机即崩（2026-10-24 实测踩过）。
+      # reg.exe 解禁后，删掉本行 + 删 media_kit 包内 hook/prebuilt/ 即可回到
+      #   官方 CBuilder 编译路径。
+      skip-windows-event-loop: true

@@ -3,19 +3,31 @@ import 'package:flutter/services.dart';
 import 'dart:async' show unawaited;
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
+import '../../config/changelog.dart';
 import '../../config/constants.dart';
 import '../../config/routes.dart';
 import '../../config/themes.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/storage_service.dart';
+import '../../services/subtitle_ai_backend.dart';
+import '../../services/video_output_policy.dart';
+import '../../widgets/ai_subtitle_settings_panel.dart';
 import 'magnet_sources_page.dart';
 import '../../providers/theme_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../providers/source_provider.dart';
 import '../../providers/cache_provider.dart';
+import '../../services/debug_log.dart';
+import '../../services/log_export.dart';
+import '../../services/hw_decode_policy.dart';
+import '../../services/hw_decode_platform.dart';
 
 /// 设置中心页面
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
+
+  /// 导出/清空日志操作的并发守卫（避免连点重复触发）。
+  static bool _logBusy = false;
 
   /// B站风格颜色配置
   static _SettingsColors _getColors(BuildContext context) {
@@ -89,10 +101,30 @@ class SettingsPage extends StatelessWidget {
                 icon: Icons.memory_outlined,
                 iconBgColor: const Color(0xFFFFB74D),
                 title: '硬件解码',
-                subtitle: '开启后播放更流畅',
+                subtitle: '默认开启；档位不适配请手动改档（下方可手动选档）',
                 value: context.watch<SettingsProvider>().hardwareDecode,
                 onChanged: (value) =>
                     context.read<SettingsProvider>().setHardwareDecode(value),
+              ),
+              _buildBiliDivider(colors),
+              _buildBiliSettingItem(
+                context,
+                colors,
+                icon: Icons.tune_outlined,
+                iconBgColor: const Color(0xFF4DB6AC),
+                title: AppLocalizations.of(context)!.settingsHwDecodeMode,
+                value: _hwDecodeModeSummary(context),
+                onTap: () => _showHwDecodeModeSheet(context),
+              ),
+              _buildBiliDivider(colors),
+              _buildBiliSettingItem(
+                context,
+                colors,
+                icon: Icons.monitor_outlined,
+                iconBgColor: const Color(0xFF9575CD),
+                title: AppLocalizations.of(context)!.settingsVideoOutputMode,
+                value: _videoOutputModeSummary(context),
+                onTap: () => _showVideoOutputModeSheet(context),
               ),
               _buildBiliDivider(colors),
               _buildBiliSwitchItem(
@@ -105,6 +137,18 @@ class SettingsPage extends StatelessWidget {
                 value: context.watch<SettingsProvider>().autoPlayNext,
                 onChanged: (value) =>
                     context.read<SettingsProvider>().setAutoPlayNext(value),
+              ),
+              _buildBiliDivider(colors),
+              _buildBiliSwitchItem(
+                context,
+                colors,
+                icon: Icons.block_outlined,
+                iconBgColor: const Color(0xFFEF9A9A),
+                title: 'HLS 去广告',
+                subtitle: '自动剔除 m3u8 里注入的广告分片；如遇跳剧情可关闭',
+                value: context.watch<SettingsProvider>().hlsAdFilter,
+                onChanged: (value) =>
+                    context.read<SettingsProvider>().setHlsAdFilter(value),
               ),
               _buildBiliDivider(colors),
               _buildBiliSwitchItem(
@@ -200,6 +244,56 @@ class SettingsPage extends StatelessWidget {
                     ? l10n.settingsTmdbApiKeyConfigured
                     : l10n.settingsTmdbApiKeyNotConfigured,
                 onTap: () => _showTmdbApiKeyDialog(context),
+              ),
+              _buildBiliDivider(colors),
+              _buildBiliSettingItem(
+                context,
+                colors,
+                icon: Icons.auto_awesome_outlined,
+                iconBgColor: const Color(0xFF7E57C2),
+                title: 'AI 字幕生成',
+                value: _aiSubtitleStatusText(context),
+                onTap: () => showAiSubtitleSettings(context),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+
+          // 诊断分组
+          _buildBiliSectionHeader(colors, '诊断'),
+          _buildBiliSectionCard(
+            context,
+            colors,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(14),
+                child: Text(
+                  '遇到跳剧情 / 闪退 / 卡顿等问题时：先正常使用该功能复现一次，'
+                  '再点下方「导出诊断日志」把整个 guanzi_logs（含 crash_*.txt 崩溃栈）'
+                  '打包发给我即可——无需电脑、无需文件管理器权限。',
+                  style: TextStyle(color: colors.subTextColor, fontSize: 12),
+                ),
+              ),
+              _buildBiliDivider(colors),
+              _buildBiliSettingItem(
+                context,
+                colors,
+                icon: Icons.upload_file_outlined,
+                iconBgColor: const Color(0xFF42A5F5),
+                title: '导出诊断日志',
+                value: '打包到系统下载目录',
+                onTap: () => _exportLogs(context),
+              ),
+              _buildBiliDivider(colors),
+              _buildBiliSettingItem(
+                context,
+                colors,
+                icon: Icons.delete_sweep_outlined,
+                iconBgColor: const Color(0xFFEF9A9A),
+                title: '清空诊断日志',
+                value: '删除崩溃/日志文件',
+                onTap: () => _clearLogs(context),
               ),
             ],
           ),
@@ -389,6 +483,17 @@ class SettingsPage extends StatelessWidget {
               _buildBiliSettingItem(
                 context,
                 colors,
+                icon: Icons.update_outlined,
+                iconBgColor: const Color(0xFFFFB74D),
+                title: '更新日志',
+                value:
+                    'v${AppChangelog.latest.version} 新增 ${AppChangelog.latest.items.length} 项',
+                onTap: () => _showChangelogSheet(context),
+              ),
+              _buildBiliDivider(colors),
+              _buildBiliSettingItem(
+                context,
+                colors,
                 icon: Icons.code_outlined,
                 iconBgColor: const Color(0xFF81C784),
                 title: '开源许可',
@@ -563,6 +668,210 @@ class SettingsPage extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// 硬件解码档位选择（底部弹窗）。
+  ///
+  /// 档位说明：
+  /// - 自动：按平台选最稳的硬解档（Android 走拷贝式）；不适配需手动改档；
+  /// - 兼容：MediaCodec 拷贝式，硬件解码 + 拷回 CPU 渲染，兼容性最好；
+  /// - 高性能：MediaCodec 零拷贝，最省电，但个别机型会卡死/闪退；
+  /// - 关闭：纯软件解码。
+  void _showHwDecodeModeSheet(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final settings = context.read<SettingsProvider>();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => Container(
+        decoration: BoxDecoration(
+          color: Theme.of(sheetContext).colorScheme.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+                child: Text(
+                  l10n.settingsHwDecodeMode,
+                  style: Theme.of(sheetContext)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text(
+                  l10n.settingsHwDecodeModeDesc,
+                  style: Theme.of(sheetContext).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(sheetContext).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ),
+              for (final option in _hwDecodeModeOptions(l10n))
+                RadioListTile<String>(
+                  value: option.value,
+                  groupValue: settings.hwDecodeModeKey.isEmpty
+                      ? 'auto'
+                      : settings.hwDecodeModeKey,
+                  onChanged: (value) {
+                    if (value == null) return;
+                    if (value == 'auto') {
+                      context.read<SettingsProvider>().setHwDecodeMode(
+                            defaultHwDecodeMode(detectHwDecodePlatform()),
+                          );
+                    } else {
+                      context
+                          .read<SettingsProvider>()
+                          .setHwDecodeMode(hwDecodeModeFromKey(
+                            value,
+                            platform: detectHwDecodePlatform(),
+                          ));
+                    }
+                    Navigator.pop(sheetContext);
+                  },
+                  title: Text(option.label),
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 视频输出后端选择（默认 gpu-next / 新版渲染）。
+  /// fd 泄漏已在引擎层通过 SurfaceTexture 桥接统一修复，三种后端都不漏句柄；
+  /// 该设置只影响画面兼容性与功能（字幕/滤镜/截图），出画异常时再手动切换。
+  void _showVideoOutputModeSheet(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final settings = context.read<SettingsProvider>();
+    final current = settings.effectiveVideoOutputMode;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => Container(
+        decoration: BoxDecoration(
+          color: Theme.of(sheetContext).colorScheme.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+                child: Text(
+                  l10n.settingsVideoOutputMode,
+                  style: Theme.of(sheetContext)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text(
+                  l10n.settingsVideoOutputModeDesc,
+                  style: Theme.of(sheetContext).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(sheetContext).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ),
+              // 顺序即推荐顺序：新版渲染（推荐）→ 旧版渲染（兜底）→ 硬解直出。
+              for (final option in [
+                (value: VideoOutputMode.gpuNext,
+                 label: l10n.settingsVoGpuNext,
+                 desc: l10n.settingsVoGpuNextDesc),
+                (value: VideoOutputMode.gpu,
+                 label: l10n.settingsVoGpu,
+                 desc: l10n.settingsVoGpuDesc),
+                (value: VideoOutputMode.mediacodecEmbed,
+                 label: l10n.settingsVoEmbed,
+                 desc: l10n.settingsVoEmbedDesc),
+              ])
+                RadioListTile<VideoOutputMode>(
+                  value: option.value,
+                  groupValue: current,
+                  onChanged: (value) {
+                    if (value == null) return;
+                    unawaited(settings.setVideoOutputMode(value));
+                    Navigator.pop(sheetContext);
+                  },
+                  title: Text(option.label),
+                  subtitle: Text(option.desc),
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _videoOutputModeSummary(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    switch (context.watch<SettingsProvider>().effectiveVideoOutputMode) {
+      case VideoOutputMode.gpuNext:
+        return l10n.settingsVoGpuNext;
+      case VideoOutputMode.gpu:
+        return l10n.settingsVoGpu;
+      case VideoOutputMode.mediacodecEmbed:
+        return l10n.settingsVoEmbed;
+    }
+  }
+
+  /// 硬解档位选项（label 走 l10n，value 为持久化键）。
+  List<({String value, String label})> _hwDecodeModeOptions(
+    AppLocalizations l10n,
+  ) {
+    final platform = detectHwDecodePlatform();
+    final options = <({String value, String label})>[];
+    if (platform == HwDecodePlatform.android) {
+      options
+        ..add((
+          value: 'mediaCodecZeroCopy',
+          label: l10n.settingsHwDecodeModeZeroCopy,
+        ))
+        ..add((
+          value: 'mediaCodecCopy',
+          label: l10n.settingsHwDecodeModeCopy,
+        ));
+    }
+    options
+      ..add((value: 'auto', label: l10n.settingsHwDecodeModeAuto))
+      ..add((value: 'disabled', label: l10n.settingsHwDecodeModeOff));
+    return options;
+  }
+
+  /// 当前硬解档位的摘要文案（设置项右侧显示）。
+  String _hwDecodeModeSummary(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final settings = context.watch<SettingsProvider>();
+    if (!settings.hardwareDecode) return l10n.settingsHwDecodeModeOff;
+    final key = settings.hwDecodeModeKey;
+    if (key.isEmpty ||
+        key == encodeHwDecodeMode(
+            defaultHwDecodeMode(detectHwDecodePlatform()),
+        )) {
+      return l10n.settingsHwDecodeModeAuto;
+    }
+    final mode = hwDecodeModeFromKey(key, platform: detectHwDecodePlatform());
+    switch (mode) {
+      case HwDecodeMode.mediaCodecCopy:
+        return l10n.settingsHwDecodeModeCopy;
+      case HwDecodeMode.mediaCodecZeroCopy:
+        return l10n.settingsHwDecodeModeZeroCopy;
+      case HwDecodeMode.autoSafe:
+        return l10n.settingsHwDecodeModeAuto;
+      case HwDecodeMode.disabled:
+        return l10n.settingsHwDecodeModeOff;
+    }
   }
 
   /// 显示速度设置
@@ -897,7 +1206,7 @@ class SettingsPage extends StatelessWidget {
   }
 
   /// 显示WebDAV配置（B站风格卡片式表单）
-  void _showWebDavConfig(BuildContext context) {
+  Future<void> _showWebDavConfig(BuildContext context) async {
     final settings = context.read<SettingsProvider>();
     final urlController = TextEditingController(
       text: settings.webdavConfig?.serverUrl ?? '',
@@ -912,7 +1221,7 @@ class SettingsPage extends StatelessWidget {
       text: settings.webdavConfig?.remotePath ?? '/movie_app/',
     );
 
-    showModalBottomSheet(
+    await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -1103,6 +1412,11 @@ class SettingsPage extends StatelessWidget {
         ),
       ),
     );
+    // 弹窗关闭后释放 4 个输入控制器（否则每次打开 WebDAV 配置都泄漏一份）。
+    urlController.dispose();
+    userController.dispose();
+    passController.dispose();
+    pathController.dispose();
   }
 
   /// 同步上传
@@ -1246,6 +1560,7 @@ class SettingsPage extends StatelessWidget {
         ],
       ),
     );
+    controller.dispose();
 
     if (result != null && result.isNotEmpty) {
       // ignore: use_build_context_synchronously
@@ -1255,6 +1570,58 @@ class SettingsPage extends StatelessWidget {
           SnackBar(content: Text(success ? '导入成功' : '导入失败')),
         );
       }
+    }
+  }
+
+  /// 导出诊断日志：打包 guanzi_logs 到系统下载目录。
+  Future<void> _exportLogs(BuildContext context) async {
+    if (SettingsPage._logBusy) return;
+    SettingsPage._logBusy = true;
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('正在导出诊断日志…')),
+      );
+    }
+    try {
+      final dest = await LogExport.exportToDownloads();
+      DebugLog.log('LogExport', '导出成功: $dest');
+      if (context.mounted) {
+        // 老系统在无存储权限时会降级到应用外部目录，因此显示实际落盘路径而非写死「下载目录」。
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已导出：$dest')),
+        );
+      }
+    } catch (e) {
+      DebugLog.log('LogExport', '导出失败: $e', flush: true);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导出失败：$e')),
+        );
+      }
+    } finally {
+      SettingsPage._logBusy = false;
+    }
+  }
+
+  /// 清空诊断日志：删除崩溃/日志文件（应用对自身私有目录有删除权）。
+  Future<void> _clearLogs(BuildContext context) async {
+    if (SettingsPage._logBusy) return;
+    SettingsPage._logBusy = true;
+    try {
+      final n = await LogExport.clearLogs();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(n > 0 ? '已清空 $n 个日志/崩溃文件' : '没有可清空的文件')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('清空失败：$e')),
+        );
+      }
+    } finally {
+      SettingsPage._logBusy = false;
     }
   }
 
@@ -1294,11 +1661,123 @@ class SettingsPage extends StatelessWidget {
     }
   }
 
-  void _showTmdbApiKeyDialog(BuildContext context) {
+  /// 更新日志（底部弹窗：isScrollControlled + 高度上限 + 内部 SingleChildScrollView）
+  void _showChangelogSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        return Container(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(ctx).height * 0.75,
+          ),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surface,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '更新日志',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '当前 v${AppConstants.appVersion}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (final entry in AppChangelog.entries) ...[
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12, bottom: 6),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.baseline,
+                              textBaseline: TextBaseline.alphabetic,
+                              children: [
+                                Text(
+                                  'v${entry.version}',
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  entry.date,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          for (final item in entry.items)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4, bottom: 4),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 6),
+                                    child: Container(
+                                      width: 4,
+                                      height: 4,
+                                      decoration: BoxDecoration(
+                                        color: theme.colorScheme.primary,
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      item,
+                                      style: theme.textTheme.bodyMedium,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showTmdbApiKeyDialog(BuildContext context) async {
     final l10n = AppLocalizations.of(context)!;
     final settings = context.read<SettingsProvider>();
     final controller = TextEditingController(text: settings.tmdbApiKey);
-    showDialog<void>(
+    await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(l10n.settingsTmdbApiKey),
@@ -1347,13 +1826,34 @@ class SettingsPage extends StatelessWidget {
         ],
       ),
     );
+    controller.dispose();
   }
 
-  void _showOpensubtitlesApiKeyDialog(BuildContext context) {
+  String _aiSubtitleStatusText(BuildContext context) {
+    final s = StorageService();
+    final minutes = s.subtitleAiMaxMinutes <= 0 ? 10 : s.subtitleAiMaxMinutes;
+    switch (s.subtitleAiBackend) {
+      case SubtitleAiBackendKind.onlineApi:
+        if (s.subtitleAiApiUrl.trim().isEmpty) {
+          return '在线 API 未配置 · $minutes 分钟';
+        }
+        final model = s.subtitleAiModel.isEmpty ? 'base' : s.subtitleAiModel;
+        return '在线 API · $model · $minutes 分钟';
+      case SubtitleAiBackendKind.sherpaNative:
+        if (s.subtitleAiOfflineModel.isEmpty) {
+          return '本地离线 · 未选模型 · $minutes 分钟';
+        }
+        return '本地离线 · $minutes 分钟';
+      case SubtitleAiBackendKind.transformersWeb:
+        return '浏览器 Whisper · $minutes 分钟';
+    }
+  }
+
+  Future<void> _showOpensubtitlesApiKeyDialog(BuildContext context) async {
     final settings = context.read<SettingsProvider>();
     final controller =
         TextEditingController(text: settings.opensubtitlesApiKey);
-    showDialog<void>(
+    await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('OpenSubtitles API Key'),
@@ -1402,6 +1902,7 @@ class SettingsPage extends StatelessWidget {
         ],
       ),
     );
+    controller.dispose();
   }
 }
 

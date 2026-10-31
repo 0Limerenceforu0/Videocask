@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../config/category_filter_catalog.dart';
 import '../../config/channel_portal_kind.dart';
 import '../../config/routes.dart';
 import '../../config/channel_portal_module_catalog.dart';
@@ -11,6 +12,7 @@ import '../../l10n/app_localizations.dart';
 import '../../models/movie.dart';
 import '../../providers/movie_provider.dart';
 import '../../providers/source_provider.dart';
+import '../../services/cms_category_resolver.dart';
 import '../../theme/hifi_design_tokens.dart';
 import '../../widgets/category_genre_region_filter_band.dart';
 import '../../widgets/hifi_channel_nav_row.dart';
@@ -35,6 +37,9 @@ class _ChannelSlot {
   bool loading = false;
   bool appending = false;
   String? error;
+
+  /// 请求代际：切换筛选 / 刷新后自增，旧请求返回时按代际丢弃，避免覆盖新结果。
+  int generation = 0;
 }
 
 class _CategoryPortalPageState extends State<CategoryPortalPage> {
@@ -84,12 +89,26 @@ class _CategoryPortalPageState extends State<CategoryPortalPage> {
     return fixed ?? _genreParam();
   }
 
+  /// 追加分页数据时按「名称 + 年份」去重，避免同一部片反复出现（曾出现「一直刷新重复剧情」）。
+  static List<Movie> _appendDedup(List<Movie> base, List<Movie> more) {
+    if (more.isEmpty) return base;
+    final seen = <String>{
+      for (final m in base) '${m.name.toLowerCase().trim()}|${m.year}',
+    };
+    final out = List<Movie>.from(base);
+    for (final m in more) {
+      if (seen.add('${m.name.toLowerCase().trim()}|${m.year}')) out.add(m);
+    }
+    return out;
+  }
+
   Future<void> _fetchSlot(int i, {required bool refresh}) async {
     final slot = _slots[i];
     if (refresh) {
-      if (slot.appending) {
-        return;
-      }
+      // 用户主动切筛选 / 下拉刷新：允许覆盖仍在进行中的「加载更多」。
+      slot.generation++;
+      slot.appending = false;
+      slot.nextPage = 1;
     } else {
       if (slot.loading || slot.appending) {
         return;
@@ -98,6 +117,7 @@ class _CategoryPortalPageState extends State<CategoryPortalPage> {
         return;
       }
     }
+    final gen = slot.generation;
 
     setState(() {
       if (refresh) {
@@ -136,24 +156,36 @@ class _CategoryPortalPageState extends State<CategoryPortalPage> {
           page: pageNum,
         );
       }();
-      if (!context.mounted) {
+      if (!context.mounted || gen != slot.generation) {
         return;
       }
       setState(() {
+        if (page.unsupported && refresh) {
+          // 该源没有这个分类（例如站点没有「短剧」）：保持空列表 + 明确停到底，
+          // 而不是回退成「全站最新」把电影塞进来。
+          slot.movies = [];
+          slot.nextPage = 1;
+          slot.hasMore = false;
+          slot.loading = false;
+          slot.appending = false;
+          slot.error = null;
+          return;
+        }
         if (refresh) {
           slot.movies = page.movies;
           slot.nextPage = page.hasMore ? 2 : 1;
           slot.loading = false;
         } else {
-          slot.movies = [...slot.movies, ...page.movies];
+          slot.movies = _appendDedup(slot.movies, page.movies);
           slot.nextPage++;
           slot.appending = false;
         }
-        slot.hasMore = page.hasMore;
+        // 空列表时不能再上报 hasMore，否则滚动会无限重复发请求。
+        slot.hasMore = page.hasMore && slot.movies.isNotEmpty;
         slot.error = null;
       });
     } catch (e) {
-      if (!context.mounted) {
+      if (!context.mounted || gen != slot.generation) {
         return;
       }
       setState(() {
@@ -266,13 +298,42 @@ class _CategoryPortalPageState extends State<CategoryPortalPage> {
     );
   }
 
-  void _onModuleMoreFromPortal() {
-    final cat = widget.kind.homeBrowseCategoryName;
-    if (cat != null) {
-      AppRoutes.toHomeWithCategory(context, cat);
-    } else {
-      AppRoutes.toHome(context);
-    }
+  /// 模块「更多」：进入该模块对应的完整分类列表页（可继续无限刷新加载）。
+  void _onModuleMore(int index) {
+    final fixed = _fixedGenreForSlot(index);
+    final genre = fixed ?? _filterGenre;
+    AppRoutes.toCategoryList(
+      context,
+      category: widget.kind.categoryApiValue,
+      genre: genre.isEmpty ? '全部' : genre,
+      region: _filterRegion,
+    );
+  }
+
+  /// 当前「类型 / 地区」筛选下该模块可见的影片。
+  ///
+  /// 采集站会忽略 `class` / `area` 参数（实测），所以除了在服务端按同族子类取数，
+  /// 这里还要在已加载数据上补一层本地过滤，保证点筛选**立刻**有反馈。
+  List<Movie> _visibleMovies(int i) {
+    final all = _slots[i].movies;
+    final genre = _filterGenre;
+    final region = _filterRegion;
+    final noGenre = genre.isEmpty || genre == '全部';
+    final noRegion = region.isEmpty || region == '全部';
+    if (noGenre && noRegion) return all;
+    final knownRegions =
+        CategoryFilterCatalog.regionsFor(widget.kind.categoryApiValue);
+    return all
+        .where(
+          (m) =>
+              CmsCategoryResolver.genreMatches(genre, m.genres) &&
+              CmsCategoryResolver.regionMatches(
+                region,
+                m.region,
+                knownRegions: knownRegions,
+              ),
+        )
+        .toList(growable: false);
   }
 
   String _moduleTitle(AppLocalizations l10n, int i) {
@@ -300,28 +361,34 @@ class _CategoryPortalPageState extends State<CategoryPortalPage> {
     return _slots[0].movies.isNotEmpty;
   }
 
+  /// 单个模块（标题 + 栅格 + 右侧热播榜 + 更多按钮）。
+  Widget _moduleSliver(int i, AppLocalizations l10n, bool wide) {
+    final slot = _slots[i];
+    final visible = _visibleMovies(i);
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: CategoryPortalModuleRow(
+          title: _moduleTitle(l10n, i),
+          movies: visible,
+          wide: wide,
+          rankMovies: _rankSlice(visible),
+          isLoading: slot.loading && visible.isEmpty && slot.error == null,
+          errorMessage: slot.error,
+          onMorePressed: () => _onModuleMore(i),
+          moreTooltip: l10n.categoryPortalModuleMoreTooltip,
+        ),
+      ),
+    );
+  }
+
   List<Widget> _contentSlivers({
     required ThemeData theme,
     required AppLocalizations l10n,
     required bool wide,
   }) {
     return [
-      for (var i = 0; i < 3; i++)
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: CategoryPortalModuleRow(
-              title: _moduleTitle(l10n, i),
-              movies: _slots[i].movies,
-              wide: wide,
-              rankMovies: _rankSlice(_slots[i].movies),
-              isLoading: _slots[i].loading && _slots[i].movies.isEmpty,
-              errorMessage: _slots[i].error,
-              onMorePressed: _onModuleMoreFromPortal,
-              moreTooltip: l10n.categoryPortalModuleMoreTooltip,
-            ),
-          ),
-        ),
+      for (var i = 0; i < 3; i++) _moduleSliver(i, l10n, wide),
       if (_showFooter())
         SliverToBoxAdapter(
           child: Padding(

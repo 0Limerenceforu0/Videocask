@@ -55,3 +55,10 @@ app.*.map.json
 
 # CDP 调试截图（诊断产物，不入库）
 tool/*.png
+
+# media_kit build hook 的原生库缓存（由 tool/seed_media_kit_native_cache.py 生成）
+native-cache/
+
+# 一次性排障产物
+tool/webverify/
+tool/__pycache__/

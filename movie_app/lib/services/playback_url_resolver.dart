@@ -139,7 +139,9 @@ class PlaybackUrlResolver {
     }
   }
 
-  void clearParsedCache() => _parsedUrlCache.clear();
+  void clearParsedCache() {
+    _parsedUrlCache.clear();
+  }
 
   /// 播放器直接打开用：尝试把远端 m3u8 换成本地去广告代理地址。
   ///

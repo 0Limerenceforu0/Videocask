@@ -8,7 +8,61 @@ import 'package:movie_app/utils/episode_display_label.dart';
 
 import 'detail_magnet_info_panel.dart';
 import 'detail_magnet_results_panel.dart';
+import 'detail_movie_info_section.dart';
+import 'detail_source_switch_pane.dart';
 import 'detail_ui_tokens.dart';
+
+/// 宽屏左栏「换路线」入口 chip（放在标题区原「换源」位置）。
+///
+/// 单线路影片也照常显示（提示仅 1 条线路），点开弹出线路选择；
+/// 与窄屏详情区、`showDetailRouteSheet` 同源。
+class _DesktopRouteChip extends StatelessWidget {
+  const _DesktopRouteChip({
+    required this.movie,
+    required this.selectedRouteIndex,
+    required this.onTap,
+  });
+
+  final Movie movie;
+  final int selectedRouteIndex;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = DetailPageColors.of(context);
+    final safeIndex = movie.playRoutes.isEmpty
+        ? 0
+        : selectedRouteIndex.clamp(0, movie.playRoutes.length - 1);
+    final route = movie.playRoutes[safeIndex];
+    final name = route.name.isEmpty ? '线路 ${safeIndex + 1}' : route.name;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(4),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+          border: Border.all(color: colors.accent.withValues(alpha: 0.5)),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.high_quality_rounded, size: 13, color: colors.accent),
+            const SizedBox(width: 4),
+            Text(
+              name,
+              style: TextStyle(
+                color: colors.accent,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 /// 宽屏（Windows）左栏：标题、元信息、简介。
 class DetailDesktopLeftSection extends StatelessWidget {
@@ -18,12 +72,16 @@ class DetailDesktopLeftSection extends StatelessWidget {
     this.isMagnetDetail = false,
     this.torrent,
     this.isMagnetPlaying = false,
+    required this.onRouteSelected,
+    required this.currentRouteIndex,
   });
 
   final Movie movie;
   final bool isMagnetDetail;
   final TorrentInfo? torrent;
   final bool isMagnetPlaying;
+  final ValueChanged<int> onRouteSelected;
+  final int currentRouteIndex;
 
   @override
   Widget build(BuildContext context) {
@@ -98,6 +156,18 @@ class DetailDesktopLeftSection extends StatelessWidget {
                   movie.genres.join(' / '),
                   style: TextStyle(color: colors.muted, fontSize: 14),
                 ),
+              // 「换路线」入口：放在标题区原「换源」位置；单线路时仍显示（提示仅 1 条线路）。
+              if (!isMagnetDetail && movie.playRoutes.isNotEmpty)
+                _DesktopRouteChip(
+                  movie: movie,
+                  selectedRouteIndex: currentRouteIndex,
+                  onTap: () => showDetailRouteSheet(
+                    context,
+                    movie,
+                    currentRouteIndex,
+                    onRouteSelected,
+                  ),
+                ),
             ],
           ),
           if (isMagnetDetail) ...[
@@ -152,6 +222,7 @@ class DetailDesktopRightSidebar extends StatefulWidget {
   const DetailDesktopRightSidebar({
     super.key,
     required this.movie,
+    required this.isMagnetDetail,
     required this.scrollController,
     required this.selectedRouteIndex,
     required this.onRouteSelected,
@@ -167,6 +238,7 @@ class DetailDesktopRightSidebar extends StatefulWidget {
   });
 
   final Movie movie;
+  final bool isMagnetDetail;
   final ScrollController scrollController;
   final int selectedRouteIndex;
   final ValueChanged<int> onRouteSelected;
@@ -217,15 +289,19 @@ class _DetailDesktopRightSidebarState extends State<DetailDesktopRightSidebar>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          TabBar(
-            controller: _episodeOrRouteTabController,
-            labelColor: colors.onSurface,
-            unselectedLabelColor: colors.muted,
-            indicatorColor: colors.accent,
-            tabs: [
-              Tab(text: l10n.detailDesktopEpisodes),
-              Tab(text: l10n.detailPlayRoutes),
-            ],
+          Expanded(
+            child: TabBar(
+              controller: _episodeOrRouteTabController,
+              labelColor: colors.onSurface,
+              unselectedLabelColor: colors.muted,
+              indicatorColor: colors.accent,
+              tabs: [
+                Tab(text: l10n.detailDesktopEpisodes),
+                // 「播放线路」Tab 换成「换源」：线路选择已由标题区的「换路线」
+                // chip 承担（点开是底部弹窗），Tab 位置给真正缺的功能。
+                Tab(text: l10n.detailSwitchSource),
+              ],
+            ),
           ),
           Expanded(
             flex: 2,
@@ -241,12 +317,7 @@ class _DetailDesktopRightSidebarState extends State<DetailDesktopRightSidebar>
                   playingEpisodeIndex: widget.playingEpisodeIndex,
                   onEpisodeSelected: widget.onEpisodeSelected,
                 ),
-                _DesktopRoutesPane(
-                  l10n: l10n,
-                  routes: routes,
-                  safeRouteIndex: safeRouteIndex,
-                  onRouteSelected: widget.onRouteSelected,
-                ),
+                DetailSourceSwitchPane(movie: widget.movie),
               ],
             ),
           ),
@@ -394,81 +465,6 @@ class _DesktopEpisodesPane extends StatelessWidget {
   }
 }
 
-class _DesktopRoutesPane extends StatelessWidget {
-  const _DesktopRoutesPane({
-    required this.l10n,
-    required this.routes,
-    required this.safeRouteIndex,
-    required this.onRouteSelected,
-  });
-
-  final AppLocalizations l10n;
-  final List<PlayRoute> routes;
-  final int safeRouteIndex;
-  final ValueChanged<int> onRouteSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = DetailPageColors.of(context);
-    if (routes.isEmpty) {
-      return ListView(
-        padding: const EdgeInsets.all(12),
-        children: [
-          Text(
-            l10n.detailMagnetSearchHint,
-            style: TextStyle(color: colors.muted, fontSize: 13),
-          ),
-        ],
-      );
-    }
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      itemCount: routes.length,
-      itemBuilder: (context, i) {
-        final selected = i == safeRouteIndex;
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: Material(
-            color: selected
-                ? colors.accent.withValues(alpha: 0.35)
-                : colors.surfaceTint,
-            borderRadius: BorderRadius.circular(8),
-            child: InkWell(
-              onTap: () => onRouteSelected(i),
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        routes[i].name,
-                        style: TextStyle(
-                          color: colors.onSurface,
-                          fontSize: 14,
-                          fontWeight:
-                              selected ? FontWeight.w600 : FontWeight.normal,
-                        ),
-                      ),
-                    ),
-                    Icon(
-                      Icons.chevron_right,
-                      color: selected ? colors.onSurface : colors.muted,
-                      size: 20,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
 
 class _MagnetTabBody extends StatelessWidget {
   const _MagnetTabBody({

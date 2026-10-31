@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import '../config/constants.dart';
 import '../models/cache_item.dart';
+import '../utils/app_data_paths.dart';
 import 'cache_item_store.dart';
 import 'hls_segment_crypto.dart';
 import 'media_fetch_headers.dart';
@@ -18,7 +19,7 @@ class CacheService {
     CacheItemStore? store,
     M3u8PlaylistResolver? m3u8Resolver,
     Dio? downloadDio,
-    Future<ConnectivityResult> Function()? connectivityChecker,
+    Future<List<ConnectivityResult>> Function()? connectivityChecker,
     String? cacheDirectory,
     Future<M3u8MediaPlaylist> Function(String url, {String? referer})?
         m3u8ResolveOverride,
@@ -39,7 +40,7 @@ class CacheService {
     CacheItemStore? store,
     M3u8PlaylistResolver? m3u8Resolver,
     Dio? downloadDio,
-    Future<ConnectivityResult> Function()? connectivityChecker,
+    Future<List<ConnectivityResult>> Function()? connectivityChecker,
     String? cacheDirectory,
     Future<M3u8MediaPlaylist> Function(String url, {String? referer})?
         m3u8ResolveOverride,
@@ -57,7 +58,7 @@ class CacheService {
   final CacheItemStore _store;
   Dio? _downloadDio;
   final M3u8PlaylistResolver _m3u8Resolver;
-  final Future<ConnectivityResult> Function() _connectivityChecker;
+  final Future<List<ConnectivityResult>> Function() _connectivityChecker;
   final String? _cacheDirOverride;
   final Future<M3u8MediaPlaylist> Function(String url, {String? referer})?
       _m3u8ResolveOverride;
@@ -144,7 +145,11 @@ class CacheService {
   }
 
   /// 连接状态订阅
-  StreamSubscription<ConnectivityResult>? _connectivitySub;
+  ///
+  /// connectivity_plus 7.x 起回调给的是**全部**可用网络类型
+  /// （`List<ConnectivityResult>`，多网卡/热点并存时不再互相覆盖），
+  /// 这里在入口处折算成一个"代表类型"再交给 [_connectivityAllowsDownload]。
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
 
   Future<void>? _downloadStartLock;
 
@@ -170,8 +175,9 @@ class CacheService {
       return;
     }
 
-    final supportDir = await getApplicationSupportDirectory();
-    _cacheDir = '${supportDir.path}/movie_app/cache';
+    // 桌面端位于软件所在目录（绿色便携），移动端走应用支持目录。
+    final cacheDir = await AppDataPaths.cacheRoot();
+    _cacheDir = cacheDir.path;
     await Directory(_cacheDir!).create(recursive: true);
     await _migrateFromLegacyTempCache();
 
@@ -182,7 +188,8 @@ class CacheService {
 
     // 监听网络状态
     await _connectivitySub?.cancel();
-    _connectivitySub = Connectivity().onConnectivityChanged.listen((result) {
+    _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
+      final result = representativeConnectivity(results);
       if (_onlyWifi && result != ConnectivityResult.wifi) {
         pauseAllDownloads();
         return;
@@ -192,6 +199,31 @@ class CacheService {
       }
     });
     unawaited(scheduleWaitingDownloads());
+  }
+
+  /// 把 connectivity_plus 7.x 的「全部网络类型」折算成一个代表类型。
+  ///
+  /// 判定原则：**只要有一条 WiFi 就算 WiFi**（双网卡/移动热点并存时，
+  /// 用户既连着 WiFi 又有移动数据是常态，按 wifi 判定才符合"仅 WiFi 下载"
+  /// 的直觉）；空列表与只含 none 都视为断网；否则按 wifi 以外的固定优先级
+  /// 取一个，避免调用方被迫关心多网卡语义。
+  @visibleForTesting
+  static ConnectivityResult representativeConnectivity(
+    List<ConnectivityResult> results,
+  ) {
+    if (results.contains(ConnectivityResult.wifi)) {
+      return ConnectivityResult.wifi;
+    }
+    if (results.contains(ConnectivityResult.ethernet)) {
+      return ConnectivityResult.ethernet;
+    }
+    if (results.contains(ConnectivityResult.mobile)) {
+      return ConnectivityResult.mobile;
+    }
+    if (results.contains(ConnectivityResult.vpn)) {
+      return ConnectivityResult.vpn;
+    }
+    return ConnectivityResult.none;
   }
 
   bool _connectivityAllowsDownload(ConnectivityResult result) {
@@ -234,8 +266,8 @@ class CacheService {
     }
     if (_cacheDir != null) return _cacheDir!;
     if (kIsWeb) return '';
-    final supportDir = await getApplicationSupportDirectory();
-    _cacheDir = '${supportDir.path}/movie_app/cache';
+    final cacheDir = await AppDataPaths.cacheRoot();
+    _cacheDir = cacheDir.path;
     await Directory(_cacheDir!).create(recursive: true);
     await _migrateFromLegacyTempCache();
     return _cacheDir!;
@@ -400,7 +432,8 @@ class CacheService {
     }
 
     if (_onlyWifi) {
-      final connectivity = await _connectivityChecker();
+      final connectivity =
+          representativeConnectivity(await _connectivityChecker());
       if (!_connectivityAllowsDownload(connectivity)) {
         debugPrint('非WiFi环境，暂停下载');
         return null;
@@ -741,7 +774,8 @@ class CacheService {
     }
 
     if (_onlyWifi) {
-      final connectivity = await _connectivityChecker();
+      final connectivity =
+          representativeConnectivity(await _connectivityChecker());
       if (!_connectivityAllowsDownload(connectivity)) {
         debugPrint('非WiFi环境，暂停下载');
         return null;

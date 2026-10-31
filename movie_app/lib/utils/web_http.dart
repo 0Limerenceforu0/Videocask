@@ -157,3 +157,39 @@ String webProxiedMediaUrl(String rawUrl) {
       _preferredProxyIndex < builders.length ? _preferredProxyIndex : 0;
   return builders[index](rawUrl);
 }
+
+/// 同 [webProxiedMediaUrl]，但把请求头透传给代理。
+///
+/// B 站这类**平台源**的直链带防盗链：不带 `User-Agent` 会 403（实测）。
+/// 浏览器不允许 `<video>` 自定义请求头，所以只能让代理补上——
+/// `tool/web_dev_server.py` 的 `/proxy` 支持 `ua` / `referer` / `origin` 查询参数。
+///
+/// ⚠️ 只有**自建 / 本地代理**支持这些参数，公共 CORS 代理（allorigins 等）会忽略，
+/// 因此网页端播放 B 站需要走 `tool/web_dev_server.py`（本项目既定部署方式）。
+String webProxiedMediaUrlWithHeaders(
+  String rawUrl,
+  Map<String, String> headers,
+) {
+  final base = webProxiedMediaUrl(rawUrl);
+  if (headers.isEmpty || base == rawUrl) return base;
+
+  String? pick(String key) {
+    for (final e in headers.entries) {
+      if (e.key.toLowerCase() == key.toLowerCase() && e.value.isNotEmpty) {
+        return e.value;
+      }
+    }
+    return null;
+  }
+
+  final params = <String>[];
+  final ua = pick('User-Agent');
+  if (ua != null) params.add('ua=${Uri.encodeComponent(ua)}');
+  final referer = pick('Referer');
+  if (referer != null) params.add('referer=${Uri.encodeComponent(referer)}');
+  final origin = pick('Origin');
+  if (origin != null) params.add('origin=${Uri.encodeComponent(origin)}');
+  if (params.isEmpty) return base;
+
+  return '$base&${params.join('&')}';
+}

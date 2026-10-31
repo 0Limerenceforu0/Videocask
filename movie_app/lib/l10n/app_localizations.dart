@@ -101,7 +101,7 @@ abstract class AppLocalizations {
   /// No description provided for @appTitle.
   ///
   /// In zh, this message translates to:
-  /// **'高清影视'**
+  /// **'罐子'**
   String get appTitle;
 
   /// No description provided for @appInitLoading.
@@ -169,12 +169,6 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'以下为多源聚合结果：优先按 IMDb/片名/年份匹配；英文资源旁显示本片中文名标签。'**
   String get detailMagnetSearchHint;
-
-  /// No description provided for @detailOpenMagnetSearch.
-  ///
-  /// In zh, this message translates to:
-  /// **'打开磁力搜索'**
-  String get detailOpenMagnetSearch;
 
   /// No description provided for @detailRelated.
   ///
@@ -277,6 +271,24 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'地区'**
   String get detailMagnetMetaRegion;
+
+  /// No description provided for @detailMagnetMetaGenre.
+  ///
+  /// In zh, this message translates to:
+  /// **'类型'**
+  String get detailMagnetMetaGenre;
+
+  /// No description provided for @detailMagnetDownload.
+  ///
+  /// In zh, this message translates to:
+  /// **'下载'**
+  String get detailMagnetDownload;
+
+  /// No description provided for @detailMagnetCopiedToast.
+  ///
+  /// In zh, this message translates to:
+  /// **'已复制磁力链接，可粘贴到下载工具'**
+  String get detailMagnetCopiedToast;
 
   /// No description provided for @detailMagnetResourceSection.
   ///
@@ -560,12 +572,6 @@ abstract class AppLocalizations {
   /// **'浏览在线字幕…'**
   String get detailPlayerSubtitleBrowseOnline;
 
-  /// No description provided for @detailPlayerSubtitleLoading.
-  ///
-  /// In zh, this message translates to:
-  /// **'正在搜索字幕…'**
-  String get detailPlayerSubtitleLoading;
-
   /// No description provided for @detailPlayerSubtitleNone.
   ///
   /// In zh, this message translates to:
@@ -686,11 +692,35 @@ abstract class AppLocalizations {
   /// **'类型'**
   String get filterLabelGenre;
 
+  /// No description provided for @filterLabelSubClass.
+  ///
+  /// In zh, this message translates to:
+  /// **'分类'**
+  String get filterLabelSubClass;
+
   /// No description provided for @filterLabelRegion.
   ///
   /// In zh, this message translates to:
   /// **'地区'**
   String get filterLabelRegion;
+
+  /// No description provided for @magnetSearchEmptyHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'磁力源未返回结果：可能网络不可达或该片暂无收录，可到「设置 → 磁力搜索源」逐项探测'**
+  String get magnetSearchEmptyHint;
+
+  /// No description provided for @magnetSearchTimeoutHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'磁力搜索超时，请检查网络后重试'**
+  String get magnetSearchTimeoutHint;
+
+  /// No description provided for @magnetSearchFailedHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'磁力搜索失败，请检查网络或磁力搜索源配置'**
+  String get magnetSearchFailedHint;
 
   /// No description provided for @navChannelMovies.
   ///
@@ -751,18 +781,6 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'精选'**
   String get categoryPortalModuleHighlights;
-
-  /// No description provided for @categoryPortalModuleMorePicks.
-  ///
-  /// In zh, this message translates to:
-  /// **'更多推荐'**
-  String get categoryPortalModuleMorePicks;
-
-  /// No description provided for @categoryPortalModuleKeepGoing.
-  ///
-  /// In zh, this message translates to:
-  /// **'继续浏览'**
-  String get categoryPortalModuleKeepGoing;
 
   /// No description provided for @categoryPortalModuleMore.
   ///
@@ -980,17 +998,11 @@ abstract class AppLocalizations {
   /// **'进入详情'**
   String get searchOpenDetail;
 
-  /// No description provided for @detailReplay.
+  /// No description provided for @searchMagnetChineseName.
   ///
   /// In zh, this message translates to:
-  /// **'重播'**
-  String get detailReplay;
-
-  /// No description provided for @detailEpisodeFinished.
-  ///
-  /// In zh, this message translates to:
-  /// **'本集已播放完毕'**
-  String get detailEpisodeFinished;
+  /// **'中文名'**
+  String get searchMagnetChineseName;
 
   /// No description provided for @detailHistoryOverlay.
   ///
@@ -1003,12 +1015,6 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'无法加载影片信息，请检查网络或在「源管理」中切换采集源后重试。'**
   String get detailLoadError;
-
-  /// No description provided for @detailBufferingMagnet.
-  ///
-  /// In zh, this message translates to:
-  /// **'正在加载磁力资源…'**
-  String get detailBufferingMagnet;
 
   /// No description provided for @detailBufferingConnect.
   ///
@@ -1549,6 +1555,336 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'移动网络下不自动下载，与缓存管理页开关同步'**
   String get settingsOnlyWifiCacheSubtitle;
+
+  /// No description provided for @settingsHwDecodeMode.
+  ///
+  /// In zh, this message translates to:
+  /// **'硬解档位'**
+  String get settingsHwDecodeMode;
+
+  /// No description provided for @settingsHwDecodeModeDesc.
+  ///
+  /// In zh, this message translates to:
+  /// **'高性能=零拷贝最省电，但少数机型会卡死/闪退；兼容=拷贝式最稳；关闭=纯软解兜底。不适配请手动改档，App 不会自动调整'**
+  String get settingsHwDecodeModeDesc;
+
+  /// No description provided for @settingsHwDecodeModeAuto.
+  ///
+  /// In zh, this message translates to:
+  /// **'自动（推荐）'**
+  String get settingsHwDecodeModeAuto;
+
+  /// No description provided for @settingsHwDecodeModeCopy.
+  ///
+  /// In zh, this message translates to:
+  /// **'兼容（硬件解码·拷贝）'**
+  String get settingsHwDecodeModeCopy;
+
+  /// No description provided for @settingsHwDecodeModeZeroCopy.
+  ///
+  /// In zh, this message translates to:
+  /// **'高性能（硬件解码·零拷贝）'**
+  String get settingsHwDecodeModeZeroCopy;
+
+  /// No description provided for @settingsHwDecodeModeOff.
+  ///
+  /// In zh, this message translates to:
+  /// **'关闭（软件解码）'**
+  String get settingsHwDecodeModeOff;
+
+  /// No description provided for @settingsVideoOutputMode.
+  ///
+  /// In zh, this message translates to:
+  /// **'视频输出后端'**
+  String get settingsVideoOutputMode;
+
+  /// No description provided for @settingsVideoOutputModeDesc.
+  ///
+  /// In zh, this message translates to:
+  /// **'泄漏已在引擎层统一修复，三种后端都不漏句柄；切换主要影响画面兼容性与功能（字幕/滤镜/截图）。出画异常时再换'**
+  String get settingsVideoOutputModeDesc;
+
+  /// No description provided for @settingsVoGpuNext.
+  ///
+  /// In zh, this message translates to:
+  /// **'新版渲染（推荐）'**
+  String get settingsVoGpuNext;
+
+  /// No description provided for @settingsVoGpuNextDesc.
+  ///
+  /// In zh, this message translates to:
+  /// **'默认推荐。GPU 渲染（libplacebo），功能最全（字幕/滤镜/截图都可用）。个别机型首启可能短暂黑屏，重开一次即恢复；持续黑屏再换「旧版渲染」'**
+  String get settingsVoGpuNextDesc;
+
+  /// No description provided for @settingsVoGpu.
+  ///
+  /// In zh, this message translates to:
+  /// **'旧版渲染（兼容兜底）'**
+  String get settingsVoGpu;
+
+  /// No description provided for @settingsVoGpuDesc.
+  ///
+  /// In zh, this message translates to:
+  /// **'传统 GPU 渲染（mpv 旧版 GL 路径）。同样走防泄漏桥接、不漏句柄；当「新版渲染」在你的机型上黑屏时用来兜底。色彩/映射不如新版精准'**
+  String get settingsVoGpuDesc;
+
+  /// No description provided for @settingsVoEmbed.
+  ///
+  /// In zh, this message translates to:
+  /// **'硬解直出（绕过渲染器）'**
+  String get settingsVoEmbed;
+
+  /// No description provided for @settingsVoEmbedDesc.
+  ///
+  /// In zh, this message translates to:
+  /// **'跳过 mpv 渲染器、由系统直接上屏。不漏句柄；代价：必须硬解（零拷贝）、内嵌字幕/OSD/截图/滤镜全部失效，旋转或全屏切换可能闪黑，HDR/10bit 兼容性差。前两项都出不了画时再用'**
+  String get settingsVoEmbedDesc;
+
+  /// No description provided for @homeCategoryFilterUnavailable.
+  ///
+  /// In zh, this message translates to:
+  /// **'当前采集源未提供类型/地区信息，此筛选暂不生效'**
+  String get homeCategoryFilterUnavailable;
+
+  /// No description provided for @detailSwitchSource.
+  ///
+  /// In zh, this message translates to:
+  /// **'换源'**
+  String get detailSwitchSource;
+
+  /// No description provided for @detailSwitchSourceSubtitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'各站影片 ID 不通用，换源是按片名在其他站重新搜索匹配'**
+  String get detailSwitchSourceSubtitle;
+
+  /// No description provided for @detailSwitchSourceSearching.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在其他源中查找同名影片…'**
+  String get detailSwitchSourceSearching;
+
+  /// No description provided for @detailSwitchSourceEmpty.
+  ///
+  /// In zh, this message translates to:
+  /// **'其他源没找到同名影片'**
+  String get detailSwitchSourceEmpty;
+
+  /// No description provided for @detailSwitchSourceExact.
+  ///
+  /// In zh, this message translates to:
+  /// **'同名同年'**
+  String get detailSwitchSourceExact;
+
+  /// No description provided for @detailSwitchSourceFuzzy.
+  ///
+  /// In zh, this message translates to:
+  /// **'同名'**
+  String get detailSwitchSourceFuzzy;
+
+  /// No description provided for @detailSwitchSourceEpisodes.
+  ///
+  /// In zh, this message translates to:
+  /// **'共 {count} 集'**
+  String detailSwitchSourceEpisodes(int count);
+
+  /// No description provided for @detailSwitchSourceProgress.
+  ///
+  /// In zh, this message translates to:
+  /// **'已从 {done}/{total} 个源取到结果（仍在加载更多）'**
+  String detailSwitchSourceProgress(int done, int total);
+
+  /// No description provided for @detailRouteSheetCount.
+  ///
+  /// In zh, this message translates to:
+  /// **'{count} 条线路'**
+  String detailRouteSheetCount(int count);
+
+  /// No description provided for @detailRouteSheetHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'选择要播放的线路；部分站同一部片子有多条线路'**
+  String get detailRouteSheetHint;
+
+  /// No description provided for @detailRouteSheetOnlyOne.
+  ///
+  /// In zh, this message translates to:
+  /// **'该影片只有 1 条播放线路'**
+  String get detailRouteSheetOnlyOne;
+
+  /// No description provided for @detailRouteSheetOnlyOneHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'这部影片在当前站只提供了一条播放线路。\n想换资源请用「换源」——它会到其它站按片名重新查找同一部片子。'**
+  String get detailRouteSheetOnlyOneHint;
+
+  /// No description provided for @detailMagnetNoPeers.
+  ///
+  /// In zh, this message translates to:
+  /// **'这个资源连不上任何节点'**
+  String get detailMagnetNoPeers;
+
+  /// No description provided for @detailMagnetNoPeersHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'做种的人可能都已下线。换一个磁力资源，或改用上方在线线路播放。'**
+  String get detailMagnetNoPeersHint;
+
+  /// No description provided for @detailMagnetPaginationCount.
+  ///
+  /// In zh, this message translates to:
+  /// **'共 {count} 条结果'**
+  String detailMagnetPaginationCount(String count);
+
+  /// No description provided for @detailMagnetPageSizeLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'每页 {size} 条'**
+  String detailMagnetPageSizeLabel(String size);
+
+  /// No description provided for @detailMagnetPrevPage.
+  ///
+  /// In zh, this message translates to:
+  /// **'上一页'**
+  String get detailMagnetPrevPage;
+
+  /// No description provided for @detailMagnetNextPage.
+  ///
+  /// In zh, this message translates to:
+  /// **'下一页'**
+  String get detailMagnetNextPage;
+
+  /// No description provided for @detailMagnetStageTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'磁力加载步骤'**
+  String get detailMagnetStageTitle;
+
+  /// No description provided for @detailMagnetStageInit.
+  ///
+  /// In zh, this message translates to:
+  /// **'启动 P2P 引擎'**
+  String get detailMagnetStageInit;
+
+  /// No description provided for @detailMagnetStageMeta.
+  ///
+  /// In zh, this message translates to:
+  /// **'解析种子元数据'**
+  String get detailMagnetStageMeta;
+
+  /// No description provided for @detailMagnetStagePeers.
+  ///
+  /// In zh, this message translates to:
+  /// **'连接节点'**
+  String get detailMagnetStagePeers;
+
+  /// No description provided for @detailMagnetStagePickFile.
+  ///
+  /// In zh, this message translates to:
+  /// **'选定视频文件'**
+  String get detailMagnetStagePickFile;
+
+  /// No description provided for @detailMagnetStageBuffer.
+  ///
+  /// In zh, this message translates to:
+  /// **'缓冲首段数据'**
+  String get detailMagnetStageBuffer;
+
+  /// No description provided for @detailMagnetStageHandoff.
+  ///
+  /// In zh, this message translates to:
+  /// **'交给播放器'**
+  String get detailMagnetStageHandoff;
+
+  /// No description provided for @detailMagnetStageFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'连接失败'**
+  String get detailMagnetStageFailed;
+
+  /// No description provided for @detailMagnetAttemptLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'第 {attempt} 次尝试'**
+  String detailMagnetAttemptLabel(String attempt);
+
+  /// No description provided for @detailMagnetStageProgress.
+  ///
+  /// In zh, this message translates to:
+  /// **'第 {step}/{total} 步 · {label}'**
+  String detailMagnetStageProgress(String step, String total, String label);
+
+  /// No description provided for @detailMagnetAutoRetry.
+  ///
+  /// In zh, this message translates to:
+  /// **'连不上，正在自动重试（第 {attempt} 次）…'**
+  String detailMagnetAutoRetry(String attempt);
+
+  /// No description provided for @detailMagnetAutoRetryStage.
+  ///
+  /// In zh, this message translates to:
+  /// **'正在自动重试第 {attempt} 次 · {stage}'**
+  String detailMagnetAutoRetryStage(String attempt, String stage);
+
+  /// No description provided for @detailMagnetEngineInitFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'P2P 引擎启动失败'**
+  String get detailMagnetEngineInitFailed;
+
+  /// No description provided for @detailMagnetMetaTimeout.
+  ///
+  /// In zh, this message translates to:
+  /// **'解析超时：没能从任何节点取到种子信息'**
+  String get detailMagnetMetaTimeout;
+
+  /// No description provided for @detailMagnetNoData.
+  ///
+  /// In zh, this message translates to:
+  /// **'连接超时：45 秒内没有下载到任何数据'**
+  String get detailMagnetNoData;
+
+  /// No description provided for @detailMagnetWaitingFrame.
+  ///
+  /// In zh, this message translates to:
+  /// **'已连上资源，正在等待画面…'**
+  String get detailMagnetWaitingFrame;
+
+  /// No description provided for @detailMagnetNoFrame.
+  ///
+  /// In zh, this message translates to:
+  /// **'数据在下载，但播放器一直读不出画面（时长 0:00）'**
+  String get detailMagnetNoFrame;
+
+  /// No description provided for @detailMagnetNoFrameNoData.
+  ///
+  /// In zh, this message translates to:
+  /// **'节点连上了，但一直没有数据下发（缓冲停住不动）'**
+  String get detailMagnetNoFrameNoData;
+
+  /// No description provided for @detailMagnetNoFrameHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'这个资源连上了却出不了画面，建议换一个磁力资源，或改用在线线路播放。'**
+  String get detailMagnetNoFrameHint;
+
+  /// No description provided for @detailMagnetExhaustedHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'这个资源用不了，建议换一个磁力资源，或改用在线线路播放。'**
+  String get detailMagnetExhaustedHint;
+
+  /// No description provided for @detailMagnetStreamLostHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'播放已中断，这个资源的节点可能都下线了。建议换一个磁力资源，或改用在线线路播放。'**
+  String get detailMagnetStreamLostHint;
+
+  /// No description provided for @detailMagnetSwitchResource.
+  ///
+  /// In zh, this message translates to:
+  /// **'换个资源'**
+  String get detailMagnetSwitchResource;
 }
 
 class _AppLocalizationsDelegate

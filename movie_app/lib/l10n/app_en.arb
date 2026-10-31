@@ -1,6 +1,6 @@
 {
   "@@locale": "en",
-  "appTitle": "Movie App",
+  "appTitle": "Guanzi",
   "appInitLoading": "Initializing…",
   "appInitRetry": "Retry",
   "appInitErrorTitle": "Startup failed",
@@ -12,7 +12,6 @@
   "detailPlayRoutes": "Play sources",
   "detailMagnetSearch": "Magnet search",
   "detailMagnetSearchHint": "Multi-source magnet results: IMDb/title/year match; Chinese title tag on English-named torrents.",
-  "detailOpenMagnetSearch": "Open magnet search",
   "detailRelated": "Related",
   "detailRelatedHint": "Related recommendations",
   "detailDesktopEpisodes": "Episodes",
@@ -30,6 +29,9 @@
   "detailMagnetMetaDirector": "Director",
   "detailMagnetMetaActors": "Cast",
   "detailMagnetMetaRegion": "Region",
+  "detailMagnetMetaGenre": "Genre",
+  "detailMagnetDownload": "Download",
+  "detailMagnetCopiedToast": "Magnet link copied to clipboard",
   "detailMagnetResourceSection": "Torrent info",
   "detailMagnetMetaResourceTitle": "Resource title",
   "detailMagnetMetaSource": "Source: {source}",
@@ -105,7 +107,6 @@
   "detailPlayerSubtitlePickFile": "Choose local subtitle file…",
   "detailPlayerSubtitleOff": "Use embedded / turn off external",
   "detailPlayerSubtitleBrowseOnline": "Browse online subtitles…",
-  "detailPlayerSubtitleLoading": "Searching subtitles…",
   "detailPlayerSubtitleNone": "No subtitles found",
   "detailPlayerSubtitleNoApiKey": "Add an OpenSubtitles API key in Settings first",
   "detailPlayerSubtitleApplyFailed": "Could not load subtitles",
@@ -140,7 +141,11 @@
     }
   },
   "filterLabelGenre": "Genre",
+  "filterLabelSubClass": "Category",
   "filterLabelRegion": "Region",
+  "magnetSearchEmptyHint": "No magnet source returned results. The network may be unreachable or this title may not be indexed. Probe each source in Settings > Magnet search sources.",
+  "magnetSearchTimeoutHint": "Magnet search timed out. Check your network and try again.",
+  "magnetSearchFailedHint": "Magnet search failed. Check your network or magnet source settings.",
   "navChannelMovies": "Movies",
   "navChannelTv": "TV Series",
   "navChannelVariety": "Variety",
@@ -158,8 +163,6 @@
   "searchWideAggregateHint": "Results combine enabled CMS sources, magnets, and history—same role as the static demo note.",
   "categoryPortalHotRankTitle": "Trending",
   "categoryPortalModuleHighlights": "Featured",
-  "categoryPortalModuleMorePicks": "More picks",
-  "categoryPortalModuleKeepGoing": "Keep exploring",
   "categoryPortalModuleMore": "More",
   "categoryPortalModuleMoreTooltip": "Browse this category on the home screen",
   "categoryPortalModuleTagged": "{genre} · Picks",
@@ -210,17 +213,19 @@
   "searchClearFilters": "Clear filters",
   "searchPlay": "Play",
   "searchOpenDetail": "Open detail",
-  "detailReplay": "Replay",
-  "detailEpisodeFinished": "This episode has finished",
+  "searchMagnetChineseName": "Chinese title",
   "detailHistoryOverlay": "Last watched ep. {episode} at {percent}%",
   "@detailHistoryOverlay": {
     "placeholders": {
-      "episode": { "type": "int" },
-      "percent": { "type": "String" }
+      "episode": {
+        "type": "int"
+      },
+      "percent": {
+        "type": "String"
+      }
     }
   },
   "detailLoadError": "Could not load title info. Check your network or switch source in Source Manager.",
-  "detailBufferingMagnet": "Loading magnet resource…",
   "detailBufferingConnect": "Connecting to stream…",
   "detailBuffering": "Buffering…",
   "detailPlaybackFailed": "Playback failed",
@@ -231,7 +236,9 @@
   "detailRouteLabel": "Source {index}",
   "@detailRouteLabel": {
     "placeholders": {
-      "index": { "type": "int" }
+      "index": {
+        "type": "int"
+      }
     }
   },
   "detailDlnaSearching": "Searching for devices on LAN…",
@@ -241,7 +248,9 @@
   "detailDlnaCastOkNamed": "Casting to {device}",
   "@detailDlnaCastOkNamed": {
     "placeholders": {
-      "device": { "type": "String" }
+      "device": {
+        "type": "String"
+      }
     }
   },
   "detailDlnaCastFailed": "Cast failed. Try another route or try again later.",
@@ -256,7 +265,9 @@
   "detailDlnaCastingNamed": "Casting · {device}",
   "@detailDlnaCastingNamed": {
     "placeholders": {
-      "device": { "type": "String" }
+      "device": {
+        "type": "String"
+      }
     }
   },
   "detailClose": "Close",
@@ -275,20 +286,28 @@
   "detailEpisodeLabel": "Episode {index}",
   "@detailEpisodeLabel": {
     "placeholders": {
-      "index": { "type": "int" }
+      "index": {
+        "type": "int"
+      }
     }
   },
   "detailEpisodeGridCount": "{count} episodes",
   "@detailEpisodeGridCount": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "detailEpisodeGridPageInfo": "Page {current} / {total}",
   "@detailEpisodeGridPageInfo": {
     "placeholders": {
-      "current": { "type": "int" },
-      "total": { "type": "int" }
+      "current": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
     }
   },
   "detailEpisodeGridPrevPage": "Previous page",
@@ -298,7 +317,9 @@
   "detailEpisodeGridJumpHint": "Episode number (1–{max})",
   "@detailEpisodeGridJumpHint": {
     "placeholders": {
-      "max": { "type": "int" }
+      "max": {
+        "type": "int"
+      }
     }
   },
   "detailEpisodeGridJumpConfirm": "Go",
@@ -310,13 +331,17 @@
   "detailCacheDownloadSelected": "Download selected ({count})",
   "@detailCacheDownloadSelected": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "detailCacheBatchQueued": "Added {count} download tasks",
   "@detailCacheBatchQueued": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "detailCacheBatchNone": "Selected episodes are already queued or cached",
@@ -350,14 +375,20 @@
   "cacheManagerUsedLabel": "Used: {used} / {max}",
   "@cacheManagerUsedLabel": {
     "placeholders": {
-      "used": { "type": "String" },
-      "max": { "type": "String" }
+      "used": {
+        "type": "String"
+      },
+      "max": {
+        "type": "String"
+      }
     }
   },
   "cacheManagerCompletedCount": "{count} videos cached",
   "@cacheManagerCompletedCount": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "cacheWebBanner": "Web does not support offline video downloads; an empty list is expected.",
@@ -367,10 +398,142 @@
   "cacheDownloadSpeed": "{speed}/s",
   "@cacheDownloadSpeed": {
     "placeholders": {
-      "speed": { "type": "String" }
+      "speed": {
+        "type": "String"
+      }
     }
   },
   "followCacheTabEmpty": "No downloads yet",
   "settingsOnlyWifiCache": "Download cache on Wi‑Fi only",
-  "settingsOnlyWifiCacheSubtitle": "Pauses downloads on cellular; synced with cache manager"
+  "settingsOnlyWifiCacheSubtitle": "Pauses downloads on cellular; synced with cache manager",
+  "settingsHwDecodeMode": "Hardware decode mode",
+  "settingsHwDecodeModeDesc": "Performance = zero-copy, most power-efficient but freezes/crashes on a few devices; Compatible = copy mode, most stable; Off = pure software fallback. Switch manually if incompatible; the app never auto-adjusts",
+  "settingsHwDecodeModeAuto": "Auto (recommended)",
+  "settingsHwDecodeModeCopy": "Compatible (hardware decode, copy)",
+  "settingsHwDecodeModeZeroCopy": "Performance (hardware decode, zero-copy)",
+  "settingsHwDecodeModeOff": "Off (software decode)",
+  "settingsVideoOutputMode": "Video output backend",
+  "settingsVideoOutputModeDesc": "The descriptor leak is fixed at the engine level; all three backends are leak-free. Switching mainly affects picture compatibility and features (subtitles/filters/screenshots). Only switch if rendering fails",
+  "settingsVoGpuNext": "New renderer (recommended)",
+  "settingsVoGpuNextDesc": "Recommended default. GPU rendering (libplacebo), full features (subtitles/filters/screenshots work). A few GPUs may briefly black-screen on first launch; reopen once to recover. If it keeps black-screening, switch to \"Legacy renderer\"",
+  "settingsVoGpu": "Legacy renderer (compatibility fallback)",
+  "settingsVoGpuDesc": "Traditional GPU rendering (mpv legacy GL path). Same leak-free bridge; use it as a fallback when \"New renderer\" black-screens on your device. Color/tone-mapping is less precise than the new one",
+  "settingsVoEmbed": "Hardware passthrough (bypasses renderer)",
+  "settingsVoEmbedDesc": "Bypasses mpv renderer; system composites directly. Leak-free; cost: HW decode only (zero-copy), embedded subtitles/OSD/screenshots/filters all disabled, rotation/fullscreen may flicker, poor HDR/10bit support. Use only when the other two cannot show a picture",
+  "homeCategoryFilterUnavailable": "This source provides no genre/region data, so this filter has no effect",
+  "detailSwitchSource": "Switch source",
+  "detailSwitchSourceSubtitle": "IDs differ across sites, so switching searches other sites by title",
+  "detailSwitchSourceSearching": "Searching other sources for this title…",
+  "detailSwitchSourceEmpty": "No other source has this title",
+  "detailSwitchSourceExact": "Same title & year",
+  "detailSwitchSourceFuzzy": "Same title",
+  "detailSwitchSourceEpisodes": "{count} episodes",
+  "@detailSwitchSourceEpisodes": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "detailSwitchSourceProgress": "Got results from {done}/{total} sources (still loading)",
+  "@detailSwitchSourceProgress": {
+    "placeholders": {
+      "done": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "detailRouteSheetCount": "{count} routes",
+  "@detailRouteSheetCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "detailRouteSheetHint": "Pick the route to play; some sites offer several for one title",
+  "detailRouteSheetOnlyOne": "This title has only 1 route here",
+  "detailRouteSheetOnlyOneHint": "This site offers just one route for this title.\nUse \"Switch source\" to look up the same title on other sites.",
+  "detailMagnetNoPeers": "No reachable peers for this torrent",
+  "detailMagnetNoPeersHint": "The seeders may all be offline. Pick another torrent, or use the online route above.",
+  "detailMagnetPaginationCount": "{count} results",
+  "@detailMagnetPaginationCount": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetPageSizeLabel": "{size} per page",
+  "@detailMagnetPageSizeLabel": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetPrevPage": "Previous page",
+  "detailMagnetNextPage": "Next page",
+  "detailMagnetStageTitle": "Magnet loading steps",
+  "detailMagnetStageInit": "Starting P2P engine",
+  "detailMagnetStageMeta": "Parsing torrent metadata",
+  "detailMagnetStagePeers": "Connecting to peers",
+  "detailMagnetStagePickFile": "Selecting video file",
+  "detailMagnetStageBuffer": "Buffering first chunk",
+  "detailMagnetStageHandoff": "Handing off to player",
+  "detailMagnetStageFailed": "Connection failed",
+  "detailMagnetAttemptLabel": "Attempt {attempt}",
+  "@detailMagnetAttemptLabel": {
+    "placeholders": {
+      "attempt": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetStageProgress": "Step {step}/{total} · {label}",
+  "@detailMagnetStageProgress": {
+    "placeholders": {
+      "step": {
+        "type": "String"
+      },
+      "total": {
+        "type": "String"
+      },
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetAutoRetry": "Can't connect — retrying automatically (attempt {attempt})…",
+  "@detailMagnetAutoRetry": {
+    "placeholders": {
+      "attempt": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetAutoRetryStage": "Auto-retry #{attempt} · {stage}",
+  "@detailMagnetAutoRetryStage": {
+    "placeholders": {
+      "attempt": {
+        "type": "String"
+      },
+      "stage": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetEngineInitFailed": "Failed to start the P2P engine",
+  "detailMagnetMetaTimeout": "Timed out: no peer returned the torrent metadata",
+  "detailMagnetNoData": "Timed out: no data downloaded within 45 seconds",
+  "detailMagnetWaitingFrame": "Connected — waiting for the first frame…",
+  "detailMagnetNoFrame": "Data is coming in, but the player can't decode any video (duration 0:00)",
+  "detailMagnetNoFrameNoData": "Peers connected, but no data is being sent (buffer stalled)",
+  "detailMagnetNoFrameHint": "This torrent connects but never produces a picture — pick another magnet, or use an online route.",
+  "detailMagnetExhaustedHint": "This torrent is unusable — pick another magnet, or use an online route.",
+  "detailMagnetStreamLostHint": "Playback stopped: the peers for this torrent may all be gone. Pick another magnet, or use an online route.",
+  "detailMagnetSwitchResource": "Pick another"
 }

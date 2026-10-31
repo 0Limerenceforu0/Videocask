@@ -3,6 +3,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import '../config/app_env.dart';
+import 'debug_log.dart';
 
 /// 全局错误处理服务
 class ErrorHandler {
@@ -63,7 +64,13 @@ class ErrorHandler {
     debugPrint(stackTraceMessage);
     debugPrint('====================\n');
 
-    // 可以在这里添加错误日志持久化逻辑
+    // 持久化到诊断日志（测试模式不打文件，避免污染）。
+    if (!AppEnv.isTestMode) {
+      DebugLog.log('Crash', errorMessage, flush: true);
+      if (stackTraceMessage.isNotEmpty) {
+        DebugLog.log('Crash', stackTraceMessage, flush: true);
+      }
+    }
   }
 
   /// 显示错误对话框

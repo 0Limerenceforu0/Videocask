@@ -187,11 +187,11 @@ class PlaylistPage extends StatelessWidget {
   }
 
   /// 显示创建播放列表对话框
-  void _showCreateDialog(BuildContext context) {
+  Future<void> _showCreateDialog(BuildContext context)  async {
     final controller = TextEditingController();
     final theme = Theme.of(context);
 
-    showDialog(
+    await showDialog(
       context: context,
       builder: (dialogContext) => AlertDialog(
         backgroundColor: theme.colorScheme.surface,
@@ -249,6 +249,7 @@ class PlaylistPage extends StatelessWidget {
         ],
       ),
     );
+    controller.dispose();
   }
 
   /// 显示操作选项底部弹窗
@@ -303,11 +304,11 @@ class PlaylistPage extends StatelessWidget {
   }
 
   /// 显示重命名对话框
-  void _showRenameDialog(BuildContext context, Playlist playlist) {
+  Future<void> _showRenameDialog(BuildContext context, Playlist playlist)  async {
     final controller = TextEditingController(text: playlist.name);
     final theme = Theme.of(context);
 
-    showDialog(
+    await showDialog(
       context: context,
       builder: (dialogContext) => AlertDialog(
         backgroundColor: theme.colorScheme.surface,
@@ -367,6 +368,7 @@ class PlaylistPage extends StatelessWidget {
         ],
       ),
     );
+    controller.dispose();
   }
 
   /// 显示删除确认对话框

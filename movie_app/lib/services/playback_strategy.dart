@@ -2,6 +2,7 @@
 class PlaybackStrategyConfig {
   const PlaybackStrategyConfig({
     required this.demuxerBufferBytes,
+    required this.demuxerMaxBytes,
     required this.hrSeek,
     required this.demuxerSeekableCache,
     required this.cacheSecs,
@@ -12,8 +13,11 @@ class PlaybackStrategyConfig {
     required this.scrubSeekThrottleMs,
   });
 
-  /// demuxer 读缓存字节数（[PlayerConfiguration.bufferSize]）
+  /// demuxer 读缓存字节数（[PlayerConfiguration.bufferSize] → mpv cache-size）
   final int demuxerBufferBytes;
+
+  /// mpv `demuxer-max-bytes`：demuxer 缓存字节硬上限，防止长时间播放内存堆积被 LMK 杀。
+  final int demuxerMaxBytes;
 
   /// mpv `hr-seek`：拖动时是否精确到非关键帧
   final String hrSeek;
@@ -43,7 +47,8 @@ class PlaybackStrategyConfig {
     switch (strategy) {
       case 'smooth':
         return const PlaybackStrategyConfig(
-          demuxerBufferBytes: 128 * 1024 * 1024,
+          demuxerBufferBytes: 32 * 1024 * 1024,
+          demuxerMaxBytes: 32 * 1024 * 1024,
           hrSeek: 'no',
           demuxerSeekableCache: 'yes',
           cacheSecs: 120,
@@ -55,7 +60,8 @@ class PlaybackStrategyConfig {
         );
       case 'quality':
         return const PlaybackStrategyConfig(
-          demuxerBufferBytes: 64 * 1024 * 1024,
+          demuxerBufferBytes: 16 * 1024 * 1024,
+          demuxerMaxBytes: 16 * 1024 * 1024,
           hrSeek: 'yes',
           demuxerSeekableCache: 'yes',
           cacheSecs: 60,
@@ -67,7 +73,8 @@ class PlaybackStrategyConfig {
         );
       default:
         return const PlaybackStrategyConfig(
-          demuxerBufferBytes: 96 * 1024 * 1024,
+          demuxerBufferBytes: 24 * 1024 * 1024,
+          demuxerMaxBytes: 24 * 1024 * 1024,
           hrSeek: 'default',
           demuxerSeekableCache: 'yes',
           cacheSecs: 90,

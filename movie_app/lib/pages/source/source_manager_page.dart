@@ -296,6 +296,7 @@ class _SourceManagerPageState extends State<SourceManagerPage> {
         ],
       ),
     );
+    controller.dispose();
 
     if (result != null && result.isNotEmpty) {
       // ignore: use_build_context_synchronously

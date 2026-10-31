@@ -129,27 +129,39 @@ class SpeedSelectorCompact extends StatelessWidget {
     final children =
         AppConstants.speedOptions.map(option).toList(growable: false);
 
+    // 倍速项可能较多（含 6/8/10x），竖向/横向紧凑面板都限制最大高度并允许滚动，
+    // 避免内容超出屏幕被裁切。
+    final maxHeight = vertical ? 360.0 : 168.0;
+
     return Material(
       color: Colors.black.withValues(alpha: 0.9),
       elevation: 6,
       borderRadius: BorderRadius.circular(8),
       clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(4),
-        child: vertical
-            ? Column(
-                mainAxisSize: MainAxisSize.min,
-                children: children,
-              )
-            : SizedBox(
-                width: 228,
-                child: Wrap(
-                  spacing: 2,
-                  runSpacing: 2,
-                  alignment: WrapAlignment.center,
-                  children: children,
-                ),
-              ),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        child: Scrollbar(
+          thumbVisibility: vertical,
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: vertical
+                  ? Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: children,
+                    )
+                  : SizedBox(
+                      width: 228,
+                      child: Wrap(
+                        spacing: 2,
+                        runSpacing: 2,
+                        alignment: WrapAlignment.center,
+                        children: children,
+                      ),
+                    ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -214,37 +226,37 @@ Future<void> _showSpeedPopover({
   final screen = media.size;
   final padding = media.padding;
 
-  var panelOffset = Offset(
-    screen.width - (vertical ? 68 : 236),
-    screen.height - padding.bottom - (vertical ? 168 : 96),
-  );
+    var panelOffset = Offset(
+      screen.width - (vertical ? 68 : 236),
+      screen.height - padding.bottom - (vertical ? 360 : 168),
+    );
 
-  if (anchorBox != null && anchorBox.hasSize) {
-    final anchor = anchorBox.localToGlobal(Offset.zero) & anchorBox.size;
-    if (vertical) {
-      const panelW = 60.0;
-      const panelH = 268.0;
-      var top = anchor.top - panelH - 8;
-      if (top < padding.top + 8) {
-        top = anchor.bottom + 8;
+    if (anchorBox != null && anchorBox.hasSize) {
+      final anchor = anchorBox.localToGlobal(Offset.zero) & anchorBox.size;
+      if (vertical) {
+        const panelW = 60.0;
+        const panelH = 360.0;
+        var top = anchor.top - panelH - 8;
+        if (top < padding.top + 8) {
+          top = anchor.bottom + 8;
+        }
+        panelOffset = Offset(
+          (anchor.right - panelW).clamp(8.0, screen.width - panelW - 8),
+          top.clamp(padding.top + 8, screen.height - panelH - padding.bottom - 8),
+        );
+      } else {
+        const panelW = 236.0;
+        const panelH = 168.0;
+        var top = anchor.top - panelH - 6;
+        if (top < padding.top + 8) {
+          top = anchor.bottom + 6;
+        }
+        panelOffset = Offset(
+          (anchor.right - panelW).clamp(8.0, screen.width - panelW - 8),
+          top.clamp(padding.top + 8, screen.height - panelH - padding.bottom - 8),
+        );
       }
-      panelOffset = Offset(
-        (anchor.right - panelW).clamp(8.0, screen.width - panelW - 8),
-        top.clamp(padding.top + 8, screen.height - panelH - padding.bottom - 8),
-      );
-    } else {
-      const panelW = 236.0;
-      const panelH = 76.0;
-      var top = anchor.top - panelH - 6;
-      if (top < padding.top + 8) {
-        top = anchor.bottom + 6;
-      }
-      panelOffset = Offset(
-        (anchor.right - panelW).clamp(8.0, screen.width - panelW - 8),
-        top.clamp(padding.top + 8, screen.height - panelH - padding.bottom - 8),
-      );
     }
-  }
 
   await showGeneralDialog<void>(
     context: context,

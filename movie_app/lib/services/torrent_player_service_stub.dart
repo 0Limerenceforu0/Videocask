@@ -35,8 +35,25 @@ class TorrentPlayerService with ChangeNotifier {
   int _peers = 0;
   int get peers => _peers;
 
+  /// 节点数展示值（Web 占位：恒「0」，保留与 IO 实现同形的 API）。
+  String get peersDisplay => formatSwarmCount(_peers);
+
   int _seeds = 0;
   int get seeds => _seeds;
+
+  /// 做种数展示值（Web 占位：恒「0」，保留与 IO 实现同形的 API）。
+  String get seedsDisplay => formatSwarmCount(_seeds);
+
+  /// 在连节点数（Web 占位：恒 0，保留与 IO 实现同形的 API）。
+  int _activePeers = 0;
+  int get activePeers => _activePeers;
+  String get activePeersDisplay => formatSwarmCount(_activePeers);
+
+  /// Web 端没有真实 P2P 引擎（走云端代理），永远不存在「连不上节点」。
+  bool get handoverWithoutPeers => false;
+
+  /// 与 IO 实现同形的空实现（Web 端没有死种结论可清）。
+  void clearDeadSwarm() {}
 
   String? _streamUrl;
   String? get streamUrl => _streamUrl;
@@ -116,6 +133,7 @@ class TorrentPlayerService with ChangeNotifier {
     _uploadSpeed = 0;
     _peers = 0;
     _seeds = 0;
+    _activePeers = 0;
     _bufferPct = 0;
     _etaSeconds = -1;
     _streamStage = 0;
@@ -127,11 +145,26 @@ class TorrentPlayerService with ChangeNotifier {
   String get downloadSpeedFormatted => '0 B/s';
   String get uploadSpeedFormatted => '0 B/s';
 
+  /// Web 端无引擎可释放；保留与 IO 版一致的 `Future<void> dispose()` 签名，
+  /// 避免调用方落到 [ChangeNotifier.dispose]（void）上。
+  ///
+  /// 幂等：单例可能被应用退出路径与测试析构多次调用，重复 super.dispose()
+  /// 后再 notifyListeners 会抛断言。
+  bool _released = false;
+
+  @override
+  Future<void> dispose() async {
+    if (_released) return;
+    _released = true;
+    super.dispose();
+  }
+
   String get progressFormatted => '0.0%';
   String get etaFormatted => '--';
   String get metaWaitFormatted => '';
 
   void _setState(TorrentPlayState state, String error) {
+    if (_released) return;
     _state = state;
     _errorMessage = error;
     notifyListeners();

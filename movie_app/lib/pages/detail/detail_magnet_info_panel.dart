@@ -154,6 +154,12 @@ class DetailMagnetInfoPanel extends StatelessWidget {
             value: region,
             colors: colors,
           ),
+        if (movie.genres.isNotEmpty)
+          _MetaRow(
+            label: l10n.detailMagnetMetaGenre,
+            value: movie.genres.join(' / '),
+            colors: colors,
+          ),
       ],
     );
   }

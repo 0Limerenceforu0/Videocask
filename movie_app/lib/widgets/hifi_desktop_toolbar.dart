@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -19,6 +20,15 @@ abstract final class HiFiDesktopToolbar {
   }) {
     final l10n = AppLocalizations.of(context)!;
 
+    // 手机（Android/iOS）任意宽度都有底部导航的「关注 / 我的」入口，顶栏这两个
+    // 图标纯属重复；且 6 个图标与标题并排在 360dp 逻辑宽下 RenderFlex 右溢出
+    // （实测溢出 84px，release 下表现为最右图标被裁切）。桌面端无底部导航，
+    // 「关注 / 我的」仅能经顶栏进入，保留全部图标。
+    final isMobilePlatform = switch (defaultTargetPlatform) {
+      TargetPlatform.android || TargetPlatform.iOS => true,
+      _ => false,
+    };
+
     return [
       if (includeSearchIcon)
         IconButton(
@@ -26,16 +36,18 @@ abstract final class HiFiDesktopToolbar {
           onPressed: () => AppRoutes.toSearch(context),
           tooltip: l10n.toolbarSearch,
         ),
-      IconButton(
-        icon: const Icon(Icons.subscriptions_outlined),
-        onPressed: () => AppRoutes.toFollow(context),
-        tooltip: l10n.toolbarFollow,
-      ),
-      IconButton(
-        icon: const Icon(Icons.person_outline),
-        onPressed: () => AppRoutes.toProfile(context),
-        tooltip: l10n.toolbarProfile,
-      ),
+      if (!isMobilePlatform)
+        IconButton(
+          icon: const Icon(Icons.subscriptions_outlined),
+          onPressed: () => AppRoutes.toFollow(context),
+          tooltip: l10n.toolbarFollow,
+        ),
+      if (!isMobilePlatform)
+        IconButton(
+          icon: const Icon(Icons.person_outline),
+          onPressed: () => AppRoutes.toProfile(context),
+          tooltip: l10n.toolbarProfile,
+        ),
       IconButton(
         icon: const Icon(Icons.settings_outlined),
         onPressed: () => AppRoutes.toSettings(context),

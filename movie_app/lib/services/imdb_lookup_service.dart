@@ -82,6 +82,29 @@ class ImdbLookupService {
     String? bestId;
     double bestScore = 0;
 
+    // 片名本身对上的候选（`战狼` vs `War Wolf` 这种跨语言不算）。
+    //
+    // 为什么单独记（2026-10-28 真实接口数据实测）：中文查询在 IMDb 联想里
+    // 几乎没有同文字标题命中，`_scoreCandidate` 会给**每一条**拉丁标题候选
+    // 加 130 分「跨语言」分，此时排序实际上只剩「全球热度」一个变量 ——
+    // 搜「我不是药神」时 Little Fockers（2010，rank 3943）拿 290 分，
+    // 正确结果 Dying to Survive（2018，rank 24278）只有 278 分，于是整个
+    // 磁力列表变成《Little Fockers》且贴上「我不是药神」的中文名。
+    // 所以中文查询在没有年份命中时，只接受「标题真的对上」的候选。
+    String? bestIdLabelMatched;
+    double bestScoreLabelMatched = 0;
+
+    // 年份命中的候选单独记一份。
+    //
+    // 为什么必须分开记（2026-10-28 真机实测）：搜「战狼」时 IMDb 联想返回
+    // `Logan(2017)` 和 `Wolf Warrior(2015)`，豆瓣已给出正确年份 2015，但
+    // `Logan` 靠"全球热度"加分拿到 401 分，压过"年份命中"的 258 分 →
+    // 整个磁力列表全变成《金刚狼》且还贴上「战狼」中文名。
+    // 年份是"同一部片"最硬的证据，绝不能被热度盖过去，所以这里做**硬优先**：
+    // 只要存在达到阈值的年份命中候选，就只用它，不再看热度最高者。
+    String? bestIdOnYear;
+    double bestScoreOnYear = 0;
+
     for (final q in queries) {
       try {
         final url = Uri.parse(
@@ -121,17 +144,105 @@ class ImdbLookupService {
             bestScore = score;
             bestId = id.toLowerCase();
           }
+          final qn = q.toLowerCase().trim();
+          final ln = label.toLowerCase().trim();
+          final labelMatched = ln.isNotEmpty &&
+              qn.isNotEmpty &&
+              (ln == qn || ln.contains(qn) || qn.contains(ln));
+          if (labelMatched && score > bestScoreLabelMatched) {
+            bestScoreLabelMatched = score;
+            bestIdLabelMatched = id.toLowerCase();
+          }
+          if (_yearMatches(y, itemYear) && score > bestScoreOnYear) {
+            bestScoreOnYear = score;
+            bestIdOnYear = id.toLowerCase();
+          }
         }
       } catch (e) {
         debugPrint('IMDb 联想失败 ($q): $e');
       }
     }
 
-    if (bestId != null && bestScore >= 72) {
-      debugPrint('IMDb 解析: $primaryTitle -> $bestId (score=$bestScore)');
-      return bestId;
+    // 硬优先：年份命中者优先，其次才是热度最高者。
+    //
+    // 中文查询且没有年份命中时，热度分不可信（见 bestIdLabelMatched 的注释），
+    // 只接受标题真的对上的候选；对不上就返回 null，让调用方回退片名搜索 ——
+    // 宁可「没有磁力资源」，也不能把别的电影贴到这部片头上。
+    final cjkQuery = _cjkPattern.hasMatch(primaryTitle);
+    final chosenId = chooseCandidate(
+      cjkQuery: cjkQuery,
+      bestId: bestId,
+      bestScore: bestScore,
+      labelMatchedId: bestIdLabelMatched,
+      labelMatchedScore: bestScoreLabelMatched,
+      yearId: bestIdOnYear,
+      yearScore: bestScoreOnYear,
+      threshold: 72,
+    );
+
+    if (chosenId != null) {
+      debugPrint(
+        'IMDb 解析: $primaryTitle -> $chosenId '
+        '(score=${chosenId == bestIdOnYear ? bestScoreOnYear : bestScore})',
+      );
+      return chosenId;
     }
     return null;
+  }
+
+  /// 中文查询的最终裁决：年份命中 > 标题命中 > （仅非中文查询）热度最高。
+  ///
+  /// 中文查询在 IMDb 联想里几乎拿不到同文字标题，热门候选会靠「跨语言 +130」
+  /// 与「全球排名分」堆到 290 分左右，正确条目反而可能只有 278 分。
+  /// 因此中文查询在没有年份命中时**只**接受标题对上的候选。
+  @visibleForTesting
+  static String? chooseCandidate({
+    required bool cjkQuery,
+    required String? bestId,
+    required double bestScore,
+    required String? labelMatchedId,
+    required double labelMatchedScore,
+    required String? yearId,
+    required double yearScore,
+    double threshold = 72,
+  }) {
+    final hasYearHit = yearId != null && yearScore >= threshold;
+    final trustLabelHint = cjkQuery && !hasYearHit;
+    return chooseId(
+      bestId: trustLabelHint ? labelMatchedId : bestId,
+      bestScore: trustLabelHint ? labelMatchedScore : bestScore,
+      yearId: yearId,
+      yearScore: yearScore,
+      threshold: threshold,
+    );
+  }
+
+  /// 在「热度最高」与「年份命中」之间做最终裁决；供回归测试直接驱动。
+  ///
+  /// 年份命中**优先**：热度是全球指标，和"是不是同一部片"无关；年份是硬约束。
+  /// 只有年份命中侧没有任何候选达到阈值时，才退回热度最高者。
+  @visibleForTesting
+  static String? chooseId({
+    required String? bestId,
+    required double bestScore,
+    required String? yearId,
+    required double yearScore,
+    required double threshold,
+  }) {
+    final useYearHit = yearId != null && yearScore >= threshold;
+    final id = useYearHit ? yearId : bestId;
+    final score = useYearHit ? yearScore : bestScore;
+    if (id == null || score < threshold) return null;
+    return id;
+  }
+
+  /// 年份是否构成"同一部片"的硬证据（仅在双方都是 4 位年份时成立）。
+  static bool _yearMatches(String? yearHint, int? itemYear) {
+    final yh = yearHint ?? '';
+    return yh.length == 4 &&
+        RegExp(r'^\d{4}$').hasMatch(yh) &&
+        itemYear != null &&
+        yh == itemYear.toString();
   }
 
   static bool _isTitleId(String id) =>
@@ -237,6 +348,9 @@ class ImdbLookupService {
 
     Map<String, dynamic>? bestItem;
     double bestScore = 0;
+    // 年份命中硬优先（同 resolveForVideoTitle 的理由）。
+    Map<String, dynamic>? bestItemOnYear;
+    double bestScoreOnYear = 0;
 
     for (final q in queries) {
       try {
@@ -278,27 +392,42 @@ class ImdbLookupService {
             bestScore = score;
             bestItem = item;
           }
+          if (_yearMatches(y, itemYear) && score > bestScoreOnYear) {
+            bestScoreOnYear = score;
+            bestItemOnYear = item;
+          }
         }
       } catch (e) {
         debugPrint('IMDb 补全失败 ($q): $e');
       }
     }
 
-    if (bestItem == null || bestScore < 65) return null;
+    // 年份命中的候选优先（阈值同为 65）。
+    final chosenId = chooseId(
+      bestId: bestItem?['id']?.toString(),
+      bestScore: bestScore,
+      yearId: bestItemOnYear?['id']?.toString(),
+      yearScore: bestScoreOnYear,
+      threshold: 65,
+    );
+    if (chosenId == null) return null;
 
-    final id = bestItem['id']!.toString().toLowerCase();
-    final label = bestItem['l']?.toString() ?? '';
+    final Map<String, dynamic> picked =
+        (chosenId == bestItemOnYear?['id']?.toString() ? bestItemOnYear : bestItem)!;
+
+    final id = picked['id']!.toString().toLowerCase();
+    final label = picked['l']?.toString() ?? '';
     if (label.isEmpty) return null;
 
     String? poster;
-    final img = bestItem['i'];
+    final img = picked['i'];
     if (img is Map) {
       poster = img['imageUrl']?.toString();
     }
 
-    final iy = bestItem['y'];
+    final iy = picked['y'];
     final yearStr = iy is int ? '$iy' : (iy?.toString() ?? '');
-    final starring = bestItem['s']?.toString();
+    final starring = picked['s']?.toString();
 
     return ImdbMagnetEnrichment(
       imdbId: id,

@@ -1,0 +1,18 @@
+{
+  "comment": "HLS 广告拦截规则（用户可维护）。改完保存即可生效，无需改代码。",
+  "howToUse": {
+    "blockedHosts": "广告分片所在 CDN 域名（子串匹配）。适合『异域名广告』——把广告域名填进来，所有该域名的分片一律屏蔽。",
+    "blockedUrlSubstrings": "分片 URL 里出现即判广告的特征串，如 '/adzone/'、'_ad_'。子串匹配较宽泛，确认不会误伤正片再填。",
+    "blockedPathSegments": "URL 路径段精确匹配（推荐）。如 'adjump' 命中 /video/adjump/time/xxx.ts。按整段比对，不会像子串那样误伤 downloads/ 之类。",
+    "localContrastRatio": "中插局部对比灵敏度：广告块时长 < 两侧正片该比例（默认 0.6）即判广告。越小越保守。仅在整集被切成 ≤8 块时生效。",
+    "maxAdBlockSeconds": "中插广告块时长上限（秒，默认 60）。调大可拦更长的贴片（如 90s），代价是正片分段被误删的风险上升。",
+    "disableBuiltinPathSegments": "置 true 可关闭内置路径特征（排查误删时用）。默认开启。"
+  },
+  "note": "内置已默认启用一组实测广告目录名（adjump / preroll / postroll / midroll / advert 等），无需手工填写。怀疑误删时可把 disableBuiltinPathSegments 设为 true 验证是否由它引起。代码另有 50% 总量上限兜底，不会把整集删光。",
+  "blockedHosts": [],
+  "blockedUrlSubstrings": [],
+  "blockedPathSegments": [],
+  "localContrastRatio": 0.6,
+  "maxAdBlockSeconds": 60,
+  "disableBuiltinPathSegments": false
+}

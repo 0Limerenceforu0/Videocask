@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:movie_app/l10n/app_localizations.dart';
 import 'package:movie_app/l10n/app_localizations_zh.dart';
 import 'package:movie_app/models/cache_item.dart';
 import 'package:movie_app/models/movie.dart';

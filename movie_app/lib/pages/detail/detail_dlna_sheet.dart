@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../l10n/app_localizations.dart';
@@ -40,7 +41,9 @@ class DetailDlnaSheet {
     DetailDlnaPresentation presentation =
         DetailDlnaPresentation.compactBottomSheet,
   }) async {
-    if (!Platform.isAndroid) return;
+    // kIsWeb 必须放在前面：Web 上 dart:io 的 Platform 一取值就抛
+    // Unsupported operation: Platform._operatingSystem。
+    if (kIsWeb || !Platform.isAndroid) return;
 
     final l10n = AppLocalizations.of(context)!;
     final resolve = await urlResolver.resolve(

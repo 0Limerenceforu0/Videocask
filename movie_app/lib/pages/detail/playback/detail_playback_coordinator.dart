@@ -76,6 +76,24 @@ class DetailPlaybackCoordinator {
     session.playhead.setExplicit(position, durationCap: duration);
   }
 
+  /// 采纳播放器实际上报位置作为权威进度（承认现实）。
+  ///
+  /// 场景：历史续播点在新片源上失效 → open 的 seek 抛错 → 改从头播，播放器
+  /// 从 0 正常推进，但权威进度仍钉在失效的旧续播点上（实测 2944s vs 实际
+  /// 167s），进度条长时间显示错误位置，续播记录也会被污染。
+  ///
+  /// 偏差在 [tolerance] 内视为抖动不做处理；[reported] 为 0（尚未上报）时忽略。
+  bool adoptPlayerPosition(
+    Duration reported, {
+    Duration tolerance = const Duration(seconds: 5),
+  }) {
+    if (reported <= Duration.zero) return false;
+    final current = session.playhead.authoritative;
+    if ((current - reported).abs() <= tolerance) return false;
+    session.playhead.setExplicit(reported);
+    return true;
+  }
+
   void onOpenSucceeded() {
     session.markPlaying();
   }
@@ -123,5 +141,10 @@ class DetailPlaybackCoordinator {
 
   Duration? preserveForRouteSwitch({Duration? duration}) {
     return session.playhead.preserveForMediaSwitch(duration: duration);
+  }
+
+  /// 释放协调器持有的会话资源（幂等）。
+  void dispose() {
+    session.dispose();
   }
 }

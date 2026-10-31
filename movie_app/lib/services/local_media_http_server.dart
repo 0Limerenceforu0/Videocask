@@ -9,6 +9,8 @@ import 'hls_ad_filter.dart';
 import 'hls_segment_crypto.dart';
 import 'media_fetch_headers.dart';
 import 'm3u8_playlist_resolver.dart';
+import 'proxy_eviction.dart';
+import 'debug_log.dart';
 
 /// Parses `#EXTINF` durations from an m3u8 media playlist.
 List<double> parseM3u8ExtinfDurations(String content) {
@@ -51,34 +53,82 @@ class LocalMediaHttpServer {
   final Map<String, _AdFreePlaylist> _adFreePlaylists = {};
   int _tokenSeq = 0;
 
+  // ===== FD 泄漏定位用诊断计数器（只加日志，不改业务行为）=====
+  // 背景：真机曾出现 fd 以 ~23 个/秒单调增长至 3 万+ 直至 SIGABRT，而播放器回收
+  // 兜底未能回收，怀疑泄漏点不在 Player 而在本代理的连接。这里用「在途请求数」
+  // 来证明或否证：若请求都正常收尾，在途应维持在个位数。
+  int _reqTotal = 0;
+  int _reqInFlight = 0;
+  static const int _reqLogEvery = 50;
+
+  /// 打印本代理的连接/会话快照，与 [Play] 心跳里的 fd 数对照即可定位泄漏归属。
+  void _logConnectionSnapshot() {
+    DebugLog.log(
+      'Proxy',
+      '快照: 请求累计=$_reqTotal 在途=$_reqInFlight '
+          'hls会话=${_hlsSessions.length} 去广告列表=${_adFreePlaylists.length} '
+          '远程代理=${_remoteProxies.length} 本地文件=${_files.length} '
+          'fd=${_fdCountForDiag()}',
+      flush: true,
+    );
+  }
+
+  /// 仅供诊断：读取本进程 fd 数（web 不支持，返回 -1）。
+  int _fdCountForDiag() {
+    if (kIsWeb) return -1;
+    try {
+      return Directory('/proc/self/fd').listSync().length - 2;
+    } catch (_) {
+      return -1;
+    }
+  }
+
+  /// 幂等守卫：dispose 可能被应用退出路径与测试析构多次调用。
+  bool _released = false;
+
   final M3u8PlaylistResolver _playlistResolver = M3u8PlaylistResolver();
 
-  Future<String?> serveFilePath(String filePath) async {
+  /// 把本地文件暴露为 HTTP URL。
+  ///
+  /// [useLanIp] = true（默认）返回局域网地址，供电视等**外部设备**访问；
+  /// false 时返回回环地址 127.0.0.1，供**本机**访问（局域网 IP 在安卓 Wi-Fi
+  /// 客户端隔离下访问本机不稳定，会导致间歇失败）。
+  Future<String?> serveFilePath(String filePath, {bool useLanIp = true}) async {
     if (kIsWeb) return null;
     final file = File(filePath);
     if (!await file.exists()) return null;
     await _ensureStarted();
     final port = _port;
-    final lanIp = await _lanIp();
-    if (port == null || lanIp == null) return null;
+    if (port == null) return null;
+    final host = useLanIp ? await _lanIp() : '127.0.0.1';
+    if (host == null) return null;
 
     final token = 'f${++_tokenSeq}';
     _files[token] = _ServedFile(
       file: file,
       contentType: _mimeForPath(filePath),
     );
-    return 'http://$lanIp:$port/media/$token';
+    _evictServedFiles();
+    return 'http://$host:$port/media/$token';
   }
 
   /// 远程 MP4 等直链：由手机代拉（带 Referer），电视访问局域网地址。
-  Future<String?> serveRemoteMedia(String mediaUrl) async {
+  ///
+  /// [useLanIp] = true（默认）返回局域网地址供外部设备访问；false 时返回回环
+  /// 地址 127.0.0.1，供**本机**播放使用（部分源有防盗链，直连会被 403，
+  /// 经本机代理带上 Referer 才能正常拉取）。
+  Future<String?> serveRemoteMedia(
+    String mediaUrl, {
+    bool useLanIp = true,
+  }) async {
     if (kIsWeb) return null;
     final trimmed = mediaUrl.trim();
     if (trimmed.isEmpty) return null;
     await _ensureStarted();
     final port = _port;
-    final lanIp = await _lanIp();
-    if (port == null || lanIp == null) return null;
+    if (port == null) return null;
+    final host = useLanIp ? await _lanIp() : '127.0.0.1';
+    if (host == null) return null;
 
     final token = 'r${++_tokenSeq}';
     _remoteProxies[token] = _RemoteMediaProxy(
@@ -86,7 +136,8 @@ class LocalMediaHttpServer {
       headers: MediaFetchHeaders.forUrl(trimmed),
       contentType: _mimeForPath(trimmed),
     );
-    return 'http://$lanIp:$port/proxy/$token';
+    _evictRemoteProxies();
+    return 'http://$host:$port/proxy/$token';
   }
 
   /// HLS：手机代理 m3u8 + 分片（解决电视无法访问 CDN / 不支持 HLS 直链）。
@@ -98,12 +149,58 @@ class LocalMediaHttpServer {
     if (trimmed.isEmpty) return null;
     try {
       final playlist = await _playlistResolver.resolve(trimmed);
-      return _serveHlsProxyForPlaylist(playlist);
+      // 投屏到电视等外部设备：必须用局域网地址供电视访问本机代理。
+      return _serveHlsProxyForPlaylist(playlist, useLanIp: true);
     } catch (e) {
       debugPrint('serveHlsPlaylist failed: $e');
       return null;
     }
   }
+
+  /// 本机播放用的 HLS 代理入口（回环地址 127.0.0.1）。
+  ///
+  /// 与 [serveHlsPlaylist] 的区别是**主机地址**：
+  /// - [serveHlsPlaylist] 固定用局域网 IP，供电视等**外部设备**访问本机代理；
+  /// - 本方法用回环地址，供**本机**播放器访问。局域网 IP（192.168.x.x）在安卓
+  ///   Wi-Fi 客户端隔离/路由下访问本机不稳定，会导致分片拉取间歇失败、
+  ///   libmpv 原生崩溃（表现为随机闪退），因此本机播放必须走回环。
+  ///
+  /// 同样返回 `http://127.0.0.1:<port>/hls/<token>/index.m3u8`。
+  Future<String?> serveHlsPlaylistOnLoopback(String playlistUrl) async {
+    if (kIsWeb) return null;
+    final trimmed = playlistUrl.trim();
+    if (trimmed.isEmpty) return null;
+    try {
+      final playlist = await _playlistResolver.resolve(trimmed);
+      return _serveHlsProxyForPlaylist(playlist);
+    } catch (e) {
+      debugPrint('serveHlsPlaylistOnLoopback failed: $e');
+      return null;
+    }
+  }
+
+  /// 诊断：当前 HLS 代理会话数量（上限 [_maxHlsSessions]，超出即淘汰最旧）。
+  /// 供自动化测试断言 LRU 上限生效，也便于排查长时间会话的资源增长。
+  int get hlsSessionCount => _hlsSessions.length;
+
+  /// 诊断：当前远程代理数量（上限 [_maxRemoteProxies]，超出即淘汰最旧）。
+  int get remoteProxyCount => _remoteProxies.length;
+
+  /// 诊断：当前静态去广告播放列表数量（上限 [_maxAdFreePlaylists]）。
+  int get adFreePlaylistCount => _adFreePlaylists.length;
+
+  /// 诊断：当前**在途**请求数（已进入 `_handleRequest` 但尚未收尾）。
+  ///
+  /// fd 泄漏归属判定用：请求正常收尾时该值应回落到 0；若持续爬升，说明有请求
+  /// 没走完（远端响应未 drain / 本地响应未 close / 客户端断开未被感知），
+  /// 那么 fd 泄漏就在本代理；若始终为个位数，则本代理清白、泄漏在别处。
+  int get inFlightRequestCount => _reqInFlight;
+
+  /// 诊断：累计处理过的请求总数（与 [inFlightRequestCount] 对照看收尾率）。
+  int get totalRequestCount => _reqTotal;
+
+  /// 诊断：本进程当前打开的 fd 数（web 或无 /proc 时返回 -1）。
+  int get debugFdCount => _fdCountForDiag();
 
   /// 在线播放去广告：把远端 m3u8 换成本地地址。
   ///
@@ -122,6 +219,7 @@ class LocalMediaHttpServer {
     try {
       final playlist = await _playlistResolver.resolve(trimmed);
       if (playlist.segmentUrls.isEmpty || !playlist.hasAdRemoved) {
+        DebugLog.log('Proxy', '去广告: 无广告或列表为空，直连原始地址');
         return null;
       }
       if (playlist.isEncrypted) {
@@ -131,6 +229,12 @@ class LocalMediaHttpServer {
             'HLS 去广告(加密流全量代理): $trimmed -> $proxied '
             '(剔除 ${playlist.removedAdSegments} 片/'
             '${playlist.removedAdSeconds.toStringAsFixed(1)}s)',
+          );
+          DebugLog.log(
+            'Proxy',
+            '去广告(全量加密代理) url=$trimmed -> $proxied '
+                '剔除 ${playlist.removedAdSegments}片/'
+                '${playlist.removedAdSeconds.toStringAsFixed(1)}s',
           );
           return proxied;
         }
@@ -156,6 +260,12 @@ class LocalMediaHttpServer {
         '(剔除 ${playlist.removedAdSegments} 片/'
         '${playlist.removedAdSeconds.toStringAsFixed(1)}s)',
       );
+      DebugLog.log(
+        'Proxy',
+        '去广告(列表代理) url=$trimmed -> token=a$token '
+            '剔除 ${playlist.removedAdSegments}片/'
+            '${playlist.removedAdSeconds.toStringAsFixed(1)}s',
+      );
       return 'http://127.0.0.1:$port/adfree/$token/index.m3u8';
     } catch (e) {
       debugPrint('serveAdFreeHls failed: $e');
@@ -166,19 +276,64 @@ class LocalMediaHttpServer {
   /// 静态去广告播放列表数量上限（超出淘汰最旧的，防长时间会话内存增长）。
   static const _maxAdFreePlaylists = 8;
 
+  /// 本地文件服务条目数量上限。
+  ///
+  /// `_files` 的 key 单调递增（`f1`/`f2`…），条目持有 `File` 引用；不设上限
+  /// 会随换片/换源无限增长，是典型的无界缓存。
+  static const _maxServedFiles = 32;
+
+  void _evictServedFiles() {
+    // 只摘引用即可：`_ServedFile.file` 未持有独立 OS 句柄（读取走 openRead 流，
+    // 由管道自己关闭）。在途请求持有本地引用，淘汰不影响其继续传输。
+    evictOldest(_files, _maxServedFiles);
+  }
+
   void _evictAdFreePlaylists() {
     while (_adFreePlaylists.length > _maxAdFreePlaylists) {
       _adFreePlaylists.remove(_adFreePlaylists.keys.first);
     }
   }
 
-  Future<String?> _serveHlsProxyForPlaylist(M3u8MediaPlaylist playlist) async {
+  /// 代理会话/远程代理数量上限（超出淘汰最旧的，防长时间会话 fd/HttpClient 无限累积）。
+  static const _maxHlsSessions = 8;
+  static const _maxRemoteProxies = 8;
+
+  void _evictHlsSessions() {
+    for (final entry in evictOldest(_hlsSessions, _maxHlsSessions)) {
+      unawaited(entry.value.close());
+    }
+  }
+
+  void _evictRemoteProxies() {
+    for (final entry in evictOldest(_remoteProxies, _maxRemoteProxies)) {
+      entry.value.httpClient.close(force: true);
+    }
+  }
+
+  /// [useLanIp] = true 时返回局域网地址（投屏到电视等外部设备访问本机代理）；
+  /// 默认 false 用回环地址 127.0.0.1（本机播放）。
+  ///
+  /// 本机播放必须用回环地址：局域网 IP（192.168.x.x）在安卓 Wi-Fi 客户端隔离/
+  /// 路由下对「本机网卡 IP」的访问不稳定，会导致分片拉取间歇失败、libmpv 原生
+  /// 崩溃（表现为随机闪退）。投屏场景由外部设备访问，才需要局域网地址。
+  Future<String?> _serveHlsProxyForPlaylist(
+    M3u8MediaPlaylist playlist, {
+    bool useLanIp = false,
+  }) async {
     if (kIsWeb) return null;
     if (playlist.segmentUrls.isEmpty) return null;
     await _ensureStarted();
     final port = _port;
-    final lanIp = await _lanIp();
-    if (port == null || lanIp == null) return null;
+    if (port == null) return null;
+
+    final String host;
+    if (useLanIp) {
+      final lan = await _lanIp();
+      if (lan == null) return null;
+      host = lan;
+    } else {
+      host = '127.0.0.1';
+    }
 
     final token = 'h${++_tokenSeq}';
     final session = _HlsProxySession(
@@ -197,7 +352,8 @@ class LocalMediaHttpServer {
     );
     _hlsSessions[token] = session;
     session.prefetchAhead(-1);
-    return 'http://$lanIp:$port/hls/$token/index.m3u8';
+    _evictHlsSessions();
+    return 'http://$host:$port/hls/$token/index.m3u8';
   }
 
   Future<String?> _lanIp() async {
@@ -213,6 +369,8 @@ class LocalMediaHttpServer {
   }
 
   Future<void> _handleRequest(HttpRequest request) async {
+    _reqTotal++;
+    _reqInFlight++;
     try {
       if (request.method != 'GET' && request.method != 'HEAD') {
         request.response.statusCode = HttpStatus.methodNotAllowed;
@@ -263,6 +421,14 @@ class LocalMediaHttpServer {
         request.response.statusCode = HttpStatus.internalServerError;
         await request.response.close();
       } catch (_) {}
+    } finally {
+      _reqInFlight--;
+      // 每 _reqLogEvery 个请求打一次快照：若在途请求持续爬升，说明有请求没走完
+      // （响应未关闭 / 远端响应未 drain），即为 fd 泄漏来源；若始终为个位数，
+      // 则本代理清白，泄漏在别处（播放器 / 引擎）。
+      if (_reqTotal % _reqLogEvery == 0) {
+        _logConnectionSnapshot();
+      }
     }
   }
 
@@ -300,12 +466,6 @@ class LocalMediaHttpServer {
       return;
     }
     final port = _port!;
-    final lanIp = await _lanIp();
-    if (lanIp == null) {
-      request.response.statusCode = HttpStatus.serviceUnavailable;
-      await request.response.close();
-      return;
-    }
 
     final targetDuration = session.segmentDurations.isEmpty
         ? 10
@@ -318,12 +478,16 @@ class LocalMediaHttpServer {
       '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:$targetDuration\n'
       '#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n',
     );
+    // 分片 URL 沿用请求到达时的 host（本机播放→127.0.0.1，投屏→局域网 IP），
+    // 保证与索引同域，避免硬编码单一地址在任一种场景下拉不到分片。
+    final authority = request.requestedUri.authority;
+    final segmentHost = authority.isNotEmpty ? authority : '127.0.0.1:$port';
     for (var i = 0; i < session.segmentUrls.length; i++) {
       final duration = i < session.segmentDurations.length
           ? session.segmentDurations[i]
           : 10.0;
       buffer.writeln('#EXTINF:${duration.toStringAsFixed(3)},');
-      buffer.writeln('http://$lanIp:$port/hls/$token/$i');
+      buffer.writeln('http://$segmentHost/hls/$token/$i');
     }
     buffer.writeln('#EXT-X-ENDLIST');
 
@@ -393,6 +557,7 @@ class LocalMediaHttpServer {
       await _writeSegmentPayload(request, payload);
     } catch (e) {
       debugPrint('HLS segment $index failed: $e');
+      DebugLog.log('Proxy', '分片加载失败 index=$index err=$e', flush: true);
       request.response.statusCode = HttpStatus.badGateway;
       await request.response.close();
     }
@@ -403,14 +568,21 @@ class LocalMediaHttpServer {
     _HlsProxySession session,
     int index,
   ) async {
+    HttpClientResponse? res;
     try {
       final req = await session.httpClient.getUrl(
         Uri.parse(session.segmentUrls[index]),
       );
       _applyRequestHeaders(req, session.headers);
-      final res = await req.close();
-      if (res.statusCode != HttpStatus.ok) {
-        request.response.statusCode = res.statusCode;
+      final r = await req.close();
+      res = r;
+      if (r.statusCode != HttpStatus.ok) {
+        request.response.statusCode = r.statusCode;
+        // 远端响应必须 drain，否则底层 socket 不归还连接池 → fd 泄漏；
+        // 长播中遇 CDN 限流/临时错误会反复累积，最终耗尽 → SIGABRT。
+        try {
+          await r.drain();
+        } catch (_) {}
         await request.response.close();
         return true;
       }
@@ -418,7 +590,7 @@ class LocalMediaHttpServer {
       request.response.headers.set('Content-Type', 'video/mp2t');
       request.response.headers.set('Access-Control-Allow-Origin', '*');
       request.response.headers.set('Accept-Ranges', 'none');
-      final length = res.contentLength;
+      final length = r.contentLength;
       if (length >= 0) {
         request.response.contentLength = length;
       }
@@ -426,10 +598,18 @@ class LocalMediaHttpServer {
         await request.response.close();
         return true;
       }
-      await request.response.addStream(res);
+      await request.response.addStream(r);
       await request.response.close();
       return true;
     } catch (e) {
+      // 客户端中途断开（快进/切集）时 addStream 可能抛异常，必须 drain 释放底层
+      // socket，否则该 fd 长期残留，长时间播放后累积耗尽 → SIGABRT。
+      try {
+        await res?.drain();
+      } catch (_) {}
+      try {
+        await request.response.close();
+      } catch (_) {}
       debugPrint('HLS segment stream $index failed, fallback to cache: $e');
       return false;
     }
@@ -506,6 +686,7 @@ class LocalMediaHttpServer {
     String contentType,
     HttpClient client,
   ) async {
+    HttpClientResponse? res;
     try {
       final range = request.headers.value(HttpHeaders.rangeHeader);
       final req = await client.getUrl(Uri.parse(url));
@@ -513,7 +694,7 @@ class LocalMediaHttpServer {
       if (range != null) {
         req.headers.set(HttpHeaders.rangeHeader, range);
       }
-      final res = await req.close();
+      res = await req.close();
       request.response.statusCode = res.statusCode;
       var hasContentType = false;
       res.headers.forEach((name, values) {
@@ -537,8 +718,14 @@ class LocalMediaHttpServer {
       await request.response.close();
     } catch (e) {
       debugPrint('Remote proxy failed: $e');
-      request.response.statusCode = HttpStatus.badGateway;
-      await request.response.close();
+      // 异常分支：远端响应（若有）必须 drain，否则底层 socket 残留 → fd 泄漏。
+      try {
+        await res?.drain();
+      } catch (_) {}
+      try {
+        request.response.statusCode = HttpStatus.badGateway;
+        await request.response.close();
+      } catch (_) {}
     }
   }
 
@@ -562,6 +749,10 @@ class LocalMediaHttpServer {
   }
 
   Future<void> dispose() async {
+    // 幂等：单例可能被应用退出路径与测试析构多次调用；
+    // 二次 close 会话/服务端存在抛 StateError 的风险。
+    if (_released) return;
+    _released = true;
     _files.clear();
     for (final proxy in _remoteProxies.values) {
       proxy.httpClient.close(force: true);
@@ -658,7 +849,7 @@ class _HlsProxySession {
       final index = currentIndex + offset;
       if (index < 0 || index >= segmentUrls.length) continue;
       if (_cache.containsKey(index) || _loading.containsKey(index)) continue;
-      unawaited(loadSegment(index));
+      unawaited(loadSegment(index).catchError((_, __) => Uint8List(0)));
     }
   }
 
@@ -690,6 +881,16 @@ class _HlsProxySession {
     LocalMediaHttpServer._applyRequestHeaders(req, headers);
     final res = await req.close();
     if (res.statusCode != HttpStatus.ok) {
+      // 先 drain 释放底层 socket，否则该响应占用一个 fd 泄漏。
+      try {
+        await res.drain();
+      } catch (_) {}
+      DebugLog.log(
+        'Proxy',
+        '分片下载 HTTP 异常 index=$index '
+        'sourceIndex=${sourceIndexFor(index)} code=${res.statusCode}',
+        flush: true,
+      );
       throw HttpException('Segment $index HTTP ${res.statusCode}');
     }
     final bytes = await consolidateHttpClientResponseBytes(res);

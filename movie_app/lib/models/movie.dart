@@ -54,6 +54,22 @@ class Movie {
   /// 类型标签（如：动作, 科幻, 爱情）
   final List<String> genres;
 
+  /// 仅来自 `vod_class` 的**纯类型标签**（不含 `fromCmsJson` 插入的 `type_name`）。
+  ///
+  /// 列表接口（`ac=list`）普遍只返回 8 个字段，**没有 `vod_class`**（2026-10-21
+  /// 实测 lzi / ffzy，加 `h` 参数也无效），此时 [genres] 里只有分类名
+  /// （如「国产动漫」）。拿分类名去比「热血」这种细分筛选词会把整个类目清空。
+  /// 该列表为空 ⇒ 源没告诉我们类型，筛选时应放行而非排除。
+  final List<String> genreTags;
+
+  /// 源站分类名（`type_name`，如「国产动漫」「海外剧」「动作片」）。
+  ///
+  /// 用于判断条目是否真的属于当前 Tab 的类目：采集站子类里会混进异类
+  /// （实测 lzi「海外动漫」第 1 条是印度真人剧，bfzy「连续剧」里有动画
+  /// 电影），轮播按评分挑选时异类会被顶到 banner 上 —— 用户看到的就是
+  /// 「动漫 Tab 顶部放着剧集简介」。空串表示源没给分类名（未知 ≠ 不属于）。
+  final String typeName;
+
   /// 地区
   final String region;
 
@@ -108,6 +124,8 @@ class Movie {
     this.backdrop = '',
     this.rating = 0.0,
     this.genres = const [],
+    this.genreTags = const [],
+    this.typeName = '',
     this.region = '',
     this.year = '',
     this.director = '',
@@ -169,6 +187,10 @@ class Movie {
         .where((e) => e.isNotEmpty)
         .toList();
 
+    // 仅来自 `vod_class` 的类型（不含下面插入的 `type_name`），用于筛选匹配：
+    // 分类名（「国产动漫」）不是类型标签，拿它去比「热血」这类筛选词会误杀。
+    final genreTags = List<String>.from(genres);
+
     // 将type_name也添加到类型中（如果不在已有类型中）
     final typeName = json['type_name']?.toString() ?? '';
     if (typeName.isNotEmpty && !genres.contains(typeName)) {
@@ -223,6 +245,8 @@ class Movie {
       cover: json['vod_pic']?.toString() ?? '',
       rating: rating,
       genres: genres,
+      genreTags: genreTags,
+      typeName: typeName,
       region: json['vod_area']?.toString() ?? '',
       year: json['vod_year']?.toString() ?? '',
       director: json['vod_director']?.toString() ?? '',
@@ -492,6 +516,8 @@ class Movie {
     String? backdrop,
     double? rating,
     List<String>? genres,
+    List<String>? genreTags,
+    String? typeName,
     String? region,
     String? year,
     String? director,
@@ -515,6 +541,8 @@ class Movie {
       backdrop: backdrop ?? this.backdrop,
       rating: rating ?? this.rating,
       genres: genres ?? this.genres,
+      genreTags: genreTags ?? this.genreTags,
+      typeName: typeName ?? this.typeName,
       region: region ?? this.region,
       year: year ?? this.year,
       director: director ?? this.director,

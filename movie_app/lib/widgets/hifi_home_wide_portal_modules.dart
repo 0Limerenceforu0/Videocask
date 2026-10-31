@@ -151,7 +151,11 @@ class HiFiHomeWidePortalModules extends StatelessWidget {
             rankMovies: _rankMovies(pool, kind),
             wide: true,
             filterChips: _chipRow(context, kind: kind, l10n: l10n),
-            onMorePressed: () => AppRoutes.toChannelPortal(context, kind),
+            // 模块「更多」进入该分类的完整列表页（可一直往下刷新加载）。
+            onMorePressed: () => AppRoutes.toCategoryList(
+              context,
+              category: kind.categoryApiValue,
+            ),
             moreTooltip: l10n.categoryPortalModuleMore,
           ),
       ],

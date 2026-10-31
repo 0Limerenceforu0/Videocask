@@ -109,4 +109,68 @@ void main() {
       expect(coordinator.authoritativePosition, Duration.zero);
     });
   });
+
+  group('adoptPlayerPosition', () {
+    test('续播点失效导致权威值脱节时对齐到实际上报', () {
+      final coordinator = DetailPlaybackCoordinator();
+      // 权威值钉在失效的旧续播点（2944s），播放器实际从头播到 167s。
+      coordinator.session.playhead.setExplicit(const Duration(seconds: 2944));
+
+      final changed = coordinator.adoptPlayerPosition(
+        const Duration(seconds: 167),
+      );
+
+      expect(changed, isTrue);
+      expect(coordinator.authoritativePosition, const Duration(seconds: 167));
+    });
+
+    test('偏差在容差内视为抖动不改写', () {
+      final coordinator = DetailPlaybackCoordinator();
+      coordinator.session.playhead.setExplicit(const Duration(seconds: 600));
+
+      final changed = coordinator.adoptPlayerPosition(
+        const Duration(seconds: 603),
+      );
+
+      expect(changed, isFalse);
+      expect(coordinator.authoritativePosition, const Duration(seconds: 600));
+    });
+
+    test('播放器尚未上报(0)时忽略', () {
+      final coordinator = DetailPlaybackCoordinator();
+      coordinator.session.playhead.setExplicit(const Duration(seconds: 600));
+
+      final changed = coordinator.adoptPlayerPosition(Duration.zero);
+
+      expect(changed, isFalse);
+      expect(coordinator.authoritativePosition, const Duration(seconds: 600));
+    });
+
+    test('容差大于偏差时拒绝采纳（迟到的小幅旧位置不拽回用户）', () {
+      final coordinator = DetailPlaybackCoordinator();
+      // 用户刚拖到 27:00，mpv 稍后可能先报出略旧的 26:30。
+      coordinator.session.playhead.setExplicit(const Duration(minutes: 27));
+
+      final changed = coordinator.adoptPlayerPosition(
+        const Duration(minutes: 26, seconds: 30),
+        tolerance: const Duration(minutes: 1),
+      );
+
+      expect(changed, isFalse);
+      expect(coordinator.authoritativePosition, const Duration(minutes: 27));
+    });
+
+    test('偏差远超容差时仍采纳（续播点彻底失效的兜底）', () {
+      final coordinator = DetailPlaybackCoordinator();
+      coordinator.session.playhead.setExplicit(const Duration(minutes: 27));
+
+      final changed = coordinator.adoptPlayerPosition(
+        const Duration(minutes: 3),
+        tolerance: const Duration(minutes: 1),
+      );
+
+      expect(changed, isTrue);
+      expect(coordinator.authoritativePosition, const Duration(minutes: 3));
+    });
+  });
 }

@@ -50,22 +50,51 @@ class DlnaService {
   DeviceManager? _deviceManager;
   StreamSubscription<Map<String, DLNADevice>>? _deviceSub;
 
+  /// 幂等守卫：dispose 可能被应用退出路径与测试析构多次调用。
+  bool _released = false;
+
+  /// 搜索超时定时器句柄：必须持有才能取消（旧实现丢弃句柄，stopSearch
+  /// 取消不掉，面板每开合一次泄漏一个 12s 定时器 + 捕获单例的闭包）。
+  Timer? _searchTimeoutTimer;
+
+  /// 进行中的搜索对应的 Completer：stopSearch 时完成它，
+  /// 防止旧调用方的 future 永久挂起（其唯一完成者就是那个定时器）。
+  Completer<List<DlnaDevice>>? _searchCompleter;
+
+  /// 设备管理器工厂：默认真实实现；测试注入假实现以避开 UDP 1900 绑定。
+  DLNAManager Function() createManager = DLNAManager.new;
+
   static const int searchTimeoutSec = 12;
 
   Future<List<DlnaDevice>> searchDevices({
     Duration timeout = const Duration(seconds: searchTimeoutSec),
   }) async {
-    if (_isSearching) return _devices;
+    // 已有搜索在进行：返回当前设备的**快照**（旧实现返回内部列表本体，
+    // 调用方手里的列表会被后续 syncDevices 改写）。
+    if (_isSearching) return List<DlnaDevice>.from(_devices);
+
+    // 先停旧搜索：取消其定时器并完成其 completer（旧 caller 拿到旧快照），
+    // 必须早于置 _isSearching，否则会被 stopSearch 复位。
+    stopSearch();
 
     _isSearching = true;
     _devices.clear();
 
+    final completer = Completer<List<DlnaDevice>>();
+    _searchCompleter = completer;
+
+    void finish(List<DlnaDevice> result) {
+      _searchTimeoutTimer?.cancel();
+      _searchTimeoutTimer = null;
+      _searchCompleter = null;
+      _isSearching = false;
+      if (!completer.isCompleted) completer.complete(result);
+    }
+
     try {
-      stopSearch();
-      _manager = DLNAManager();
+      _manager = createManager();
       _deviceManager = await _manager!.start();
 
-      final completer = Completer<List<DlnaDevice>>();
       void syncDevices(Map<String, DLNADevice> map) {
         _devices
           ..clear()
@@ -90,22 +119,29 @@ class DlnaService {
 
       _deviceSub = _deviceManager!.devices.stream.listen(syncDevices);
 
-      Timer(timeout, () {
-        if (!completer.isCompleted) {
-          completer.complete(List<DlnaDevice>.from(_devices));
-        }
+      _searchTimeoutTimer = Timer(timeout, () {
+        _searchTimeoutTimer = null;
+        finish(List<DlnaDevice>.from(_devices));
       });
 
       return completer.future;
     } catch (e) {
       debugPrint('搜索DLNA设备失败: $e');
+      finish(_devices);
       return _devices;
-    } finally {
-      _isSearching = false;
     }
   }
 
   void stopSearch() {
+    _searchTimeoutTimer?.cancel();
+    _searchTimeoutTimer = null;
+    // 完成挂起的搜索：旧调用方立即拿到当前设备快照，不会永久挂起。
+    final pending = _searchCompleter;
+    _searchCompleter = null;
+    _isSearching = false;
+    if (pending != null && !pending.isCompleted) {
+      pending.complete(List<DlnaDevice>.from(_devices));
+    }
     _deviceSub?.cancel();
     _deviceSub = null;
     _manager?.stop();
@@ -251,6 +287,9 @@ class DlnaService {
   }
 
   void dispose() {
+    // 幂等：单例可能被应用退出路径与测试析构多次调用。
+    if (_released) return;
+    _released = true;
     stopSearch();
     unawaited(disconnectDevice());
   }

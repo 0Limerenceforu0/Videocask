@@ -15,7 +15,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
 
     <application
-        android:label="高清影视"
+        android:label="罐子"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:extractNativeLibs="true"
@@ -46,6 +46,16 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="movieapp" />
+            </intent-filter>
+            <!-- 外部磁力链接直接唤起：在浏览器/聊天软件里点 magnet:?xt=urn:btih:...
+                 → 系统「打开方式」出现本 App → DeepLinkStreamService 收到
+                 magnet: URI → 进磁力详情并自动起播（见 routes.handleDeepLinkForRouter）。
+                 与 movieapp:// 同属 VIEW 过滤器，单 Activity 多过滤器互不干扰。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="magnet" />
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

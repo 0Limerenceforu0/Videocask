@@ -224,7 +224,48 @@ class DetailComponents {
     String etaFormatted = '--',
     String metaWait = '',
     bool webFallback = false,
+    int activePeers = -1,
+    // 45s 缓冲窗口结束时一个节点都没连上（见
+    // TorrentPlayerService.handoverWithoutPeers）。此时继续转圈只会让用户
+    // 对着黑屏干等 —— 改成明确的「这个资源连不上任何节点」+ 操作建议。
+    bool deadSwarm = false,
+    String? deadSwarmMessage,
+    String? deadSwarmHint,
+    // 2026-10-28：用户反馈「一直显示加载中，不知道走到哪一步」。
+    // 传入阶段信息后，标题行改成「第 N/M 步 · 当前阶段」，不再是转圈黑盒。
+    //
+    // 同日二次调整（用户：「提示每次显示一行就行了」）：原先的逐条清单
+    // 一次占 6 行，在详情页 ~300dp 的小播放器里几乎盖住半个画面。现在
+    // 只显示**当前这一步**（[stageProgressLabel]），历史步骤与后续步骤都不列，
+    // 进度感交给下方细进度条。
+    int torrentStage = 0,
+    int stageTotal = 0,
+    String stageProgressLabel = '',
+    int attempt = 1,
+    String attemptLabel = '',
+    // 2026-10-31：磁力解析/起流最长要等 45s，而此前**没有中途取消入口** ——
+    // 用户只能对着进度条干等，或整页退出（把详情页一起关掉）。传入后卡片
+    // 右上角会出现一个紧凑的「停止」。
+    VoidCallback? onStop,
   }) {
+    final showStages = stageTotal > 0 &&
+        torrentStage > 0 &&
+        stageProgressLabel.trim().isNotEmpty &&
+        // 已判定「这个资源连不上节点」时，结论优先：不再让步骤假装在推进。
+        !deadSwarm;
+
+    final rawMessage = torrentMessage.trim();
+    final String primaryText;
+    if (deadSwarm) {
+      primaryText = deadSwarmMessage ?? '这个资源连不上任何节点';
+    } else if (showStages) {
+      primaryText = stageProgressLabel.trim();
+    } else if (rawMessage.isEmpty) {
+      primaryText = webFallback ? '云端代理加载中…' : '准备中…';
+    } else {
+      primaryText = rawMessage;
+    }
+
     return Positioned(
       left: 12,
       right: 12,
@@ -243,30 +284,58 @@ class DetailComponents {
             // 第一行：阶段 + 速度 + 节点
             Row(
               children: [
-                SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                    color: Colors.white,
-                    strokeWidth: 2,
-                    value: bufferPct > 0 ? bufferPct / 100 : null,
+                if (deadSwarm)
+                  const Icon(
+                    Icons.error_outline_rounded,
+                    size: 16,
+                    color: Color(0xFFFF8A80),
+                  )
+                else
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 2,
+                      value: bufferPct > 0 ? bufferPct / 100 : null,
+                    ),
                   ),
-                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    torrentMessage.trim().isEmpty
-                        ? (webFallback ? '云端代理加载中…' : '准备中…')
-                        : torrentMessage.trim(),
+                    primaryText,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
+                    style: TextStyle(
+                      color: deadSwarm
+                          ? const Color(0xFFFF8A80)
+                          : Colors.white,
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
+                // 「第 N 次尝试」：自动重试时必须让用户看见，
+                // 否则第二次等待看起来和卡死没区别。
+                if (attempt > 1 && attemptLabel.isNotEmpty) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFB74D).withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      attemptLabel,
+                      style: const TextStyle(
+                        color: Color(0xFFFFB74D),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
                 if (downloadSpeed > 0) ...[
                   const SizedBox(width: 8),
                   _TorrentStatChip(
@@ -274,60 +343,104 @@ class DetailComponents {
                     text: '${_formatBytes(downloadSpeed)}/s',
                   ),
                 ],
+                // 「停止」入口（播放器只有 ~300dp 高，必须紧凑：不给大图标、
+                // 不给 chip 背景，就一个 12 号文字热区）。
+                if (onStop != null) ...[
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: onStop,
+                    behavior: HitTestBehavior.opaque,
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      child: Text(
+                        '停止',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
-            const SizedBox(height: 6),
             // 第二行：节点 / 缓冲 / ETA
-            Row(
-              children: [
-                if (peers > 0)
-                  _TorrentStatChip(
-                    icon: Icons.people_alt_outlined,
-                    text: '节点 $peers',
-                  ),
-                if (peers > 0) const SizedBox(width: 6),
-                if (seeds > 0) ...[
-                  _TorrentStatChip(
-                    icon: Icons.upload_rounded,
-                    text: '做种 $seeds',
-                    color: const Color(0xFF80E27E),
-                  ),
-                  const SizedBox(width: 6),
+            if (activePeers >= 0 || bufferPct > 0 || metaWait.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  // 真实在连节点数（activePeers，来自流状态，libtorrent 无条件算）。
+                  // 替代旧的「peers（torrent status 恒为 -1 永不显示）」——
+                  // 等待期至少让用户看到「连接中…」而非黑盒转圈。
+                  if (activePeers >= 0) ...[
+                    _TorrentStatChip(
+                      icon: Icons.people_alt_outlined,
+                      text: activePeers > 0 ? '节点 $activePeers' : '连接中…',
+                      color: activePeers > 0
+                          ? Colors.white70
+                          : const Color(0xFFFFB74D),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  // 做种：仅在有真实节点（activePeers>=0）且 seeds>0 时显示，
+                  // 否则 -1 会误显示「做种 -1」。
+                  if (activePeers >= 0 && seeds > 0) ...[
+                    _TorrentStatChip(
+                      icon: Icons.upload_rounded,
+                      text: '做种 $seeds',
+                      color: const Color(0xFF80E27E),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  if (bufferPct > 0) ...[
+                    _TorrentStatChip(
+                      icon: Icons.layers_outlined,
+                      text: '缓冲 $bufferPct%',
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  if (etaFormatted.isNotEmpty && etaFormatted != '--') ...[
+                    _TorrentStatChip(
+                      icon: Icons.timer_outlined,
+                      text: 'ETA $etaFormatted',
+                    ),
+                  ],
+                  const Spacer(),
+                  if (metaWait.isNotEmpty)
+                    _TorrentStatChip(
+                      icon: Icons.hourglass_empty_rounded,
+                      text: '解析 $metaWait',
+                      color: metaWait.contains('m')
+                          ? const Color(0xFFFFB74D)
+                          : Colors.white70,
+                    ),
                 ],
-                if (bufferPct > 0) ...[
-                  _TorrentStatChip(
-                    icon: Icons.layers_outlined,
-                    text: '缓冲 $bufferPct%',
-                  ),
-                  const SizedBox(width: 6),
-                ],
-                if (etaFormatted.isNotEmpty && etaFormatted != '--') ...[
-                  _TorrentStatChip(
-                    icon: Icons.timer_outlined,
-                    text: 'ETA $etaFormatted',
-                  ),
-                ],
-                const Spacer(),
-                if (metaWait.isNotEmpty && metaWait.isNotEmpty)
-                  _TorrentStatChip(
-                    icon: Icons.hourglass_empty_rounded,
-                    text: '解析 $metaWait',
-                    color: metaWait.contains('m')
-                        ? const Color(0xFFFFB74D)
-                        : Colors.white70,
-                  ),
-              ],
-            ),
+              ),
+            ],
+            // 只留当前这一步（见上方 primaryText），不再列历史/后续步骤。
             const SizedBox(height: 8),
             // 进度条：解析 25% / 缓冲 50% / 播放 100%（按 step）
-            ClipRRect(
+            if (deadSwarm)
+              Text(
+                deadSwarmHint ?? '做种的人可能都已下线。换一个磁力资源，或改用上方在线线路播放。',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 12,
+                  height: 1.45,
+                ),
+              )
+            else
+              ClipRRect(
               borderRadius: BorderRadius.circular(2),
               child: LinearProgressIndicator(
-                value: bufferPct > 0
-                    ? (bufferPct / 100).clamp(0.02, 1.0)
-                    : (torrentStep <= 0
-                        ? 0.05
-                        : (torrentStep / 4).clamp(0.05, 1.0)),
+                value: showStages
+                    ? (torrentStage / (stageTotal + 1)).clamp(0.05, 1.0)
+                    : bufferPct > 0
+                        ? (bufferPct / 100).clamp(0.02, 1.0)
+                        : (torrentStep <= 0
+                            ? 0.05
+                            : (torrentStep / 4).clamp(0.05, 1.0)),
                 minHeight: 3,
                 backgroundColor: Colors.white.withValues(alpha: 0.18),
                 valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),

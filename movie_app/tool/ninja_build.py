@@ -27,8 +27,8 @@ OUT_DIR = BUILD_DIR + r"\bundle"
 
 env = {
     "SYSTEMROOT": r"C:\Windows",
-    "TEMP": r"C:\Users\Wang\AppData\Local\Temp",
-    "TMP": r"C:\Users\Wang\AppData\Local\Temp",
+    "TEMP": r"D:\flutter_test_tmp",
+    "TMP": r"D:\flutter_test_tmp",
     "PATH": ";".join([
         MSVC + r"\bin\Hostx64\x64",
         SDK + r"\bin\\" + SDKVER + r"\x64",   # rc.exe / mt.exe / midlrt
@@ -104,8 +104,63 @@ def run(label, cmd, cwd=PROJECT):
     return r.returncode
 
 
+def sync_version_config():
+    """把 pubspec.yaml 的 version 同步进 windows/flutter/ephemeral/generated_config.cmake。
+
+    该文件由 flutter 工具在 `flutter build windows` 时生成，而本脚本全程不跑
+    flutter build windows（MSBuild 会崩），cmake configure 时 include 的仍是
+    旧值 → RC 编译出的 exe 嵌旧版本号。这里按 pubspec 重写版本行，保证
+    VERSIONINFO 与 pubspec 一致（升版本后必须重打 Windows 才会带上新版本号）。
+    """
+    import re
+    pubspec = os.path.join(PROJECT, "pubspec.yaml")
+    with open(pubspec, encoding="utf-8") as f:
+        m = re.search(r"^version:\s*(\d+)\.(\d+)\.(\d+)\+(\d+)", f.read(), re.M)
+    if not m:
+        print("!! pubspec.yaml 里解析不到 version（应为 x.y.z+build 形式）")
+        return
+    major, minor, patch, build = m.groups()
+    cfg = os.path.join(
+        PROJECT, "windows", "flutter", "ephemeral", "generated_config.cmake"
+    )
+    if not os.path.exists(cfg):
+        print("!! 找不到 generated_config.cmake:", cfg)
+        return
+    with open(cfg, encoding="utf-8") as f:
+        text = f.read()
+    new_values = {
+        "FLUTTER_VERSION": "%s.%s.%s+%s" % (major, minor, patch, build),
+        "FLUTTER_VERSION_MAJOR": major,
+        "FLUTTER_VERSION_MINOR": minor,
+        "FLUTTER_VERSION_PATCH": patch,
+        "FLUTTER_VERSION_BUILD": build,
+    }
+    for key, val in new_values.items():
+        text, n = re.subn(
+            r'set\(%s "[^"]*" PARENT_SCOPE\)' % key,
+            'set(%s "%s" PARENT_SCOPE)' % (key, val),
+            text,
+        )
+        if n == 0:
+            print("!! generated_config.cmake 里没找到 %s 定义" % key)
+    with open(cfg, "w", encoding="utf-8") as f:
+        f.write(text)
+    print(
+        "已同步 generated_config.cmake 版本: %s.%s.%s+%s"
+        % (major, minor, patch, build)
+    )
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "build"
+    # CMake 不把 windows/runner/resources/app_icon.ico 视为 .rc 的依赖，
+    # 只换 ico 不会触发 RC 重编译，exe 里嵌的还是旧图标。
+    # 这里删掉旧的 *.rc.res 产物，强制用最新 ico 重编资源。
+    import glob
+    for stale in glob.glob(os.path.join(BUILD_DIR, "**", "*.rc.res"), recursive=True):
+        print(f"删除旧 RC 产物（强制重编图标资源）: {stale}")
+        os.remove(stale)
+    sync_version_config()
     if run("cmake configure", CONFIGURE_CMD) != 0:
         sys.exit(1)
     if mode == "configure":
@@ -114,6 +169,15 @@ def main():
         sys.exit(1)
     if run("cmake install", [CMAKE, "--install", BUILD_DIR, "--config", "Release"]) != 0:
         sys.exit(1)
+    # CMake 目标名不支持中文，故在 install 之后做文件级改名：
+    # 把 movie_app.exe / movie_app.pdb 改名为「罐子」，仅影响文件名，不影响功能。
+    for ext in (".exe", ".pdb"):
+        src = os.path.join(OUT_DIR, "movie_app" + ext)
+        if os.path.exists(src):
+            dst = os.path.join(OUT_DIR, "罐子" + ext)
+            if os.path.exists(dst):
+                os.remove(dst)
+            os.rename(src, dst)
     # 汇总 bundle 内容
     if os.path.isdir(OUT_DIR):
         print("\n=== bundle 内容 ===")

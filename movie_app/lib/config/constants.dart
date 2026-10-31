@@ -4,10 +4,10 @@ class AppConstants {
   AppConstants._();
 
   /// 应用名称
-  static const String appName = '高清影视';
+  static const String appName = '罐子';
 
   /// 应用版本
-  static const String appVersion = '1.0.0';
+  static const String appVersion = '1.1.3';
 
   /// 默认API超时时间（毫秒）—— 10秒，减少用户等待
   static const int apiTimeout = 30000;
@@ -56,6 +56,16 @@ class AppConstants {
   static const String keyDefaultSpeed = 'default_speed';
   static const String keyDefaultQuality = 'default_quality';
   static const String keyHardwareDecode = 'hardware_decode';
+
+  /// 硬件解码档位（见 `hw_decode_policy.dart` 的 `HwDecodeMode`）。
+  /// 空串 = 跟随平台默认档位。
+  static const String keyHwDecodeMode = 'hw_decode_mode';
+
+  /// 视频输出后端（见 `video_output_policy.dart` 的 `VideoOutputMode`）。
+  /// 空串 = 跟随默认档位（gpu-next / 新版渲染；fd 泄漏已在引擎层通过
+  /// SurfaceTexture 桥接统一修复，与 `--vo` 无关）。
+  static const String keyVideoOutputMode = 'video_output_mode';
+
   static const String keyAutoPlayNext = 'auto_play_next';
   static const String keyAutoPlayOnDetailEnter = 'auto_play_on_detail_enter';
   static const String keyOnlyWifiCache = 'only_wifi_cache';
@@ -65,6 +75,9 @@ class AppConstants {
   static const String keyPlaybackStrategy = 'playback_strategy';
   static const String keyPreloadNextEpisode = 'preload_next_episode';
   static const String keyPlaybackPrefetch = 'playback_prefetch';
+
+  /// HLS 去广告总开关（默认开；个别片源误删时用户可关）
+  static const String keyHlsAdFilter = 'hls_ad_filter';
 
   /// 旧键名，仅用于读取迁移
   static const String keyWifiPlaybackPrefetch = 'wifi_playback_prefetch';
@@ -168,6 +181,9 @@ class AppConstants {
     2.0,
     3.0,
     4.0,
+    6.0,
+    8.0,
+    10.0,
   ];
 
   /// 清晰度选项

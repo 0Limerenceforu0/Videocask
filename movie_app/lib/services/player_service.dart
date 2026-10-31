@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -7,6 +8,43 @@ import 'playback_strategy.dart';
 import 'playback_start_seek_exception.dart';
 // mpv 专有能力按平台分发（Web 上 NativePlayer 无相关方法）
 import 'player_mpv.dart';
+import 'debug_log.dart';
+import 'hw_decode_policy.dart';
+import 'video_output_policy.dart';
+import 'player_listeners.dart';
+import 'resource_scope.dart';
+import 'storage_service.dart';
+
+/// Android 视频输出配置 —— 🔴 FD 泄漏修复的锁死点。
+///
+/// 2026-10-23 荣耀70真机实测：SurfaceProducer（默认）每送显一帧漏 1 个
+/// `anon_inode:sync_file` fd（+22~24/s，约 24 分钟耗尽 32768 崩溃）；
+/// SurfaceTexture 路径 5 分钟 31 点采样斜率 +0.000/s。
+/// 机制与证据链见 [PlayerService._videoControllerConfig] 内注释。
+///
+/// 提取为顶层函数的原因：测试宿主是 Windows，`Platform.isAndroid` 恒为
+/// false，走不到 `_videoControllerConfig` 的 Android 分支——不提取就无法
+/// 用回归测试锁死 `enableAndroidSurfaceProducer: false`。
+/// 锁死测试：test/services/player_service_test.dart
+/// 「FD 泄漏修复锁死（SurfaceTexture 路径）」组。摘修复即红。
+VideoControllerConfiguration androidVideoControllerConfig({
+  required String? vo,
+  required String? hwdec,
+}) {
+  return VideoControllerConfiguration(
+    vo: vo,
+    hwdec: hwdec,
+    // false = SurfaceTexture 老路径（FD 泄漏修复，荣耀70实测 +0.000/s）。
+    // 矩阵测试期间可被 debugSurfaceProducerOverride 临时覆盖（见下）。
+    enableAndroidSurfaceProducer: PlayerService.debugSurfaceProducerOverride ?? false,
+  );
+}
+
+/// ===== FD 泄漏矩阵测试通道（仅 debug 构建；2026-10-23 新增）=====
+///
+/// 真机排列组合实验用：deeplink `movieapp://testcfg?sp=...&gpuapi=...` 设置。
+/// 不持久化——重启即失效，每次测试由脚本重新下发，不会污染正式包行为
+/// （release 构建里这两个字段恒 null，行为与没有它们时完全一致）。
 
 /// 播放器服务
 ///
@@ -20,47 +58,90 @@ class PlayerService {
 
   PlaybackStrategyConfig get strategyConfig => _strategyConfig;
 
+  /// 矩阵测试专用：覆盖 SurfaceProducer 开关（null=修复默认 false）。
+  ///
+  /// 由 debug deeplink（movieapp://testcfg?sp=true|false）写 Hive，
+  /// [init] 时读取。**必须持久化**：早期版本用纯内存静态变量，被
+  /// 「testcfg → force-stop → 冷启」流程中的重启冲掉，白跑一整批
+  /// （2026-10-23 实测教训）。release 构建里 Hive 无此 key，恒 null。
+  static bool? debugSurfaceProducerOverride;
+
+  /// 矩阵测试专用：覆盖 mpv `gpu-api`（null=mpv 自选）。同落 Hive。
+  static String? debugGpuApiOverride;
+
+  /// 清理矩阵测试 override（测试批次结束后调用，恢复修复默认行为）。
+  static void clearDebugOverrides() {
+    debugSurfaceProducerOverride = null;
+    debugGpuApiOverride = null;
+  }
+
+  /// 从 Hive 读取矩阵测试 override（[init] 调用；release 下两个 key 不存在）。
+  static void _loadDebugOverridesFromStorage() {
+    try {
+      final storage = StorageService();
+      final sp = storage.getSetting('debug_surface_producer');
+      debugSurfaceProducerOverride = (sp == 'true' || sp == 'false') ? sp == 'true' : null;
+      final api = storage.getSetting('debug_gpu_api');
+      debugGpuApiOverride = (api == 'vulkan' || api == 'opengl') ? api : null;
+    } catch (_) {
+      // 存储不可用（如 Web/测试宿主）时静默保持 null，不影响正常播放。
+    }
+  }
+
   /// 播放器实例
   Player? _player;
 
   /// 视频控制器
   VideoController? _videoController;
 
-  /// 播放器流订阅列表
-  final List<StreamSubscription<dynamic>> _subscriptions = [];
+  /// 本次播放器实例所持有的资源（订阅 / 播放器 / 控制器）。
+  ///
+  /// 用 [ResourceScope] 统一管理：回收重建 = 释放旧作用域 + 建新作用域，
+  /// 释放顺序保证「订阅先于播放器」死亡，避免回调打到已销毁对象。
+  ResourceScope _scope = ResourceScope(name: 'player');
 
-  /// 播放状态回调
-  Function(bool)? onPlayingChanged;
+  /// 播放状态变化（多播）。
+  ///
+  /// 改为多播的原因：播放器实例会被回收重建，若外部直接订阅
+  /// `player.stream.playing`，订阅会挂在已 dispose 的旧实例上，表现为
+  /// 「回收一次，进度/状态永久冻结」。订阅服务而非实例，重建后自动恢复。
+  final PlayerEventChannel<bool> playingChanged = PlayerEventChannel<bool>();
 
-  /// 位置更新回调
-  Function(Duration)? onPositionChanged;
+  /// 位置更新（多播，内部已按 200ms 节流）。
+  final PlayerEventChannel<Duration> positionChanged =
+      PlayerEventChannel<Duration>();
 
-  /// 时长更新回调
-  Function(Duration)? onDurationChanged;
+  /// 时长更新（多播）。
+  final PlayerEventChannel<Duration> durationChanged =
+      PlayerEventChannel<Duration>();
 
-  /// 缓冲状态回调
-  Function(bool)? onBufferingChanged;
+  /// 缓冲状态变化（多播）。
+  final PlayerEventChannel<bool> bufferingChanged = PlayerEventChannel<bool>();
 
-  /// 缓冲进度回调
-  Function(Duration)? onBufferChanged;
+  /// 缓冲进度更新（多播）。
+  final PlayerEventChannel<Duration> bufferChanged =
+      PlayerEventChannel<Duration>();
 
-  /// 播放完成回调
-  Function()? onCompleted;
+  /// 播放完成（多播）。
+  final PlayerEventChannel<int> completed = PlayerEventChannel<int>();
 
-  /// 错误回调
-  Function(String)? onError;
+  /// 播放错误（多播）。
+  final PlayerEventChannel<String> error = PlayerEventChannel<String>();
 
-  /// 播放倍速（与 [Player.stream.rate] 同步）
-  Function(double)? onRateChanged;
+  /// 播放倍速变化（多播）。
+  final PlayerEventChannel<double> rateChanged = PlayerEventChannel<double>();
 
-  /// 音频码率（bits/s，来自 mpv `audio-bitrate`，可能为 null）
-  Function(double?)? onAudioBitrateChanged;
+  /// 音频码率变化（多播，bits/s）。
+  final PlayerEventChannel<double?> audioBitrateChanged =
+      PlayerEventChannel<double?>();
 
-  /// 视频分辨率
-  Function(int? width, int? height)? onVideoSizeChanged;
+  /// 视频分辨率变化（多播）。
+  final PlayerEventChannel<(int?, int?)> videoSizeChanged =
+      PlayerEventChannel<(int?, int?)>();
 
-  /// 当前显示的内嵌字幕行
-  Function(List<String> lines)? onSubtitle;
+  /// 内嵌字幕行变化（多播）。
+  final PlayerEventChannel<List<String>> subtitle =
+      PlayerEventChannel<List<String>>();
 
   int? _lastVideoWidth;
   int? _lastVideoHeight;
@@ -76,6 +157,38 @@ class PlayerService {
 
   Future<void>? _playChain;
   bool _disposed = false;
+
+  /// 当前播放的媒体 URL（回收重建后续播用）
+  String? _currentUrl;
+
+  /// 当前硬件解码档位（回收重建后恢复用）。
+  HwDecodeMode _hwDecodeMode = HwDecodeMode.disabled;
+
+  /// 当前硬件解码档位（对外只读）。
+  HwDecodeMode get hwDecodeMode => _hwDecodeMode;
+
+  /// 服务是否已被 [dispose] 永久销毁（单例语义：一旦销毁不再可用）。
+  ///
+  /// 页面级关闭请用 [releasePlayerInstance]——只释放播放器实例，
+  /// 服务保持可懒重建；误调 [dispose] 会让后续所有播放入口静默短路。
+  bool get isDisposed => _disposed;
+
+  /// 硬解运行时探测到的实际后端（如 `mediacodec-copy`）；null = 尚未探测。
+  ///
+  /// 仅作诊断展示（日志/缓存），不参与任何自动改档逻辑。
+  String? _observedHwDecBackend;
+
+  /// 实际探测到的后端（诊断用）。
+  String? get observedHwDecBackend => _observedHwDecBackend;
+
+  /// 播放器实例被回收重建后通知 UI（Video widget 需重绑 controller）
+  void Function()? onPlayerRecreated;
+
+  /// 回收重建计数（UI 用作 Video widget 的 key，强制重建以干净释放旧 controller）
+  int recycleEpoch = 0;
+
+  /// 回收进行中（防重入）
+  bool _recycling = false;
 
   /// 自动播放下一集
   bool _autoPlayNext = true;
@@ -96,100 +209,146 @@ class PlayerService {
   Future<void> init() async {
     if (_player != null) return;
 
+    // 矩阵测试 override 先读盘（debug deeplink 写入；release 下无 key 恒 null）。
+    _loadDebugOverridesFromStorage();
+
     _player = Player(
       configuration: PlayerConfiguration(
         bufferSize: _strategyConfig.demuxerBufferBytes,
       ),
     );
-    await _applyMpvTuning(hardwareDecode: true);
+    // 硬解档位沿用当前生效值（由设置层下发），**不**在这里硬编码关闭。
+    await _applyMpvTuning();
+    // 矩阵测试专用：显式指定 mpv gpu-api（vulkan/opengl），仅 debug 下发。
+    // gpu-api 是 mpv 初始化期选项，必须在 open 媒体前设置才生效；
+    // 仅 vo=gpu-next 时该属性有意义（vo=gpu 老渲染器只有 GL）。
+    if (debugGpuApiOverride != null) {
+      try {
+        await setMpvProperty(_player!, 'gpu-api', debugGpuApiOverride!);
+        DebugLog.log(
+          'Play',
+          '矩阵测试: gpu-api 覆盖为 ${debugGpuApiOverride}',
+          flush: true,
+        );
+      } catch (e) {
+        DebugLog.log(
+          'Play',
+          '矩阵测试: gpu-api 覆盖失败 $e',
+          flush: true,
+        );
+      }
+    }
     // 显式设置音量为最大，确保有声音
     await _player!.setVolume(100.0);
-    _videoController = VideoController(_player!);
+    _videoController = VideoController(
+      _player!,
+      configuration: _videoControllerConfig(),
+    );
 
+    _wireStreams();
+  }
+
+  /// 订阅播放器各状态流（init 与回收重建复用）。
+  ///
+  /// 所有订阅都注册进 [_scope]，回收时随作用域一并释放，**不会**残留
+  /// 挂在已 dispose 的旧 Player 实例上。
+  void _wireStreams() {
     // 监听播放状态
-    _subscriptions.add(
+    _scope.addSubscription(
       _player!.stream.playing.listen((playing) {
-        onPlayingChanged?.call(playing);
+        playingChanged.emit(playing);
       }),
+      label: 'stream:playing',
     );
 
     // 监听位置（节流：每200ms更新一次UI）
-    _subscriptions.add(
+    _scope.addSubscription(
       _player!.stream.position.listen((position) {
         final now = DateTime.now().millisecondsSinceEpoch;
         if (now - _lastPositionUpdateMs < _positionThrottleMs) return;
         _lastPositionUpdateMs = now;
-        onPositionChanged?.call(position);
+        positionChanged.emit(position);
       }),
+      label: 'stream:position',
     );
 
     // 监听时长
-    _subscriptions.add(
+    _scope.addSubscription(
       _player!.stream.duration.listen((duration) {
-        onDurationChanged?.call(duration);
+        durationChanged.emit(duration);
       }),
+      label: 'stream:duration',
     );
 
     // 监听缓冲状态
-    _subscriptions.add(
+    _scope.addSubscription(
       _player!.stream.buffering.listen((buffering) {
-        onBufferingChanged?.call(buffering);
+        bufferingChanged.emit(buffering);
       }),
+      label: 'stream:buffering',
     );
 
     // 监听缓冲进度
-    _subscriptions.add(
+    _scope.addSubscription(
       _player!.stream.buffer.listen((buffer) {
-        onBufferChanged?.call(buffer);
+        bufferChanged.emit(buffer);
       }),
+      label: 'stream:buffer',
     );
 
     // 监听完成
-    _subscriptions.add(
-      _player!.stream.completed.listen((completed) {
-        if (completed) {
-          onCompleted?.call();
+    _scope.addSubscription(
+      _player!.stream.completed.listen((isCompleted) {
+        if (isCompleted) {
+          completed.emit(0);
         }
       }),
+      label: 'stream:completed',
     );
 
     // 监听错误
-    _subscriptions.add(
-      _player!.stream.error.listen((error) {
-        onError?.call(error.toString());
+    _scope.addSubscription(
+      _player!.stream.error.listen((err) {
+        error.emit(err.toString());
       }),
+      label: 'stream:error',
     );
 
-    _subscriptions.add(
+    _scope.addSubscription(
       _player!.stream.rate.listen((rate) {
-        onRateChanged?.call(rate);
+        rateChanged.emit(rate);
       }),
+      label: 'stream:rate',
     );
 
-    _subscriptions.add(
+    _scope.addSubscription(
       _player!.stream.audioBitrate.listen((bitrate) {
-        onAudioBitrateChanged?.call(bitrate);
+        audioBitrateChanged.emit(bitrate);
       }),
+      label: 'stream:audioBitrate',
     );
 
-    _subscriptions.add(
+    _scope.addSubscription(
       _player!.stream.width.listen((w) {
         _lastVideoWidth = w;
         _emitVideoSizeIfReady();
       }),
+      label: 'stream:width',
     );
 
-    _subscriptions.add(
+    _scope.addSubscription(
       _player!.stream.height.listen((h) {
         _lastVideoHeight = h;
         _emitVideoSizeIfReady();
       }),
+      label: 'stream:height',
     );
 
-    _subscriptions.add(
+    _scope.addSubscription(
       _player!.stream.subtitle.listen((lines) {
-        onSubtitle?.call(lines);
+        subtitle.emit(lines);
       }),
+      label: 'stream:subtitle',
     );
   }
 
@@ -205,7 +364,7 @@ class PlayerService {
     final h = _lastVideoHeight;
     if (w == null || h == null || w <= 0 || h <= 0) return;
     await _syncVideoRotate();
-    onVideoSizeChanged?.call(w, h);
+    videoSizeChanged.emit((w, h));
   }
 
   Future<void> _syncVideoRotate() async {
@@ -219,9 +378,20 @@ class PlayerService {
   }
 
   /// 播放视频；[startAt] 非空时先 open 再 seek，避免从 0 起播后 position 流把 UI 打回开头。
-  Future<void> play(String url, {Duration? startAt}) async {
+  Future<void> play(
+    String url, {
+    Duration? startAt,
+  }) async {
+    // 回收进行中时，外部播放请求需等待回收完成（回收会 dispose 当前 Player），
+    // 否则可能与回收竞态：在已被销毁的 Player 上 open → 未捕获异常。
+    while (_recycling) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
     final previous = _playChain;
-    final current = _playInternal(url, startAt: startAt);
+    final current = _playInternal(
+      url,
+      startAt: startAt,
+    );
     _playChain = current;
     if (previous != null) {
       try {
@@ -237,8 +407,12 @@ class PlayerService {
     }
   }
 
-  Future<void> _playInternal(String url, {Duration? startAt}) async {
+  Future<void> _playInternal(
+    String url, {
+    Duration? startAt,
+  }) async {
     if (_disposed) return;
+    _currentUrl = url;
     if (_player == null) {
       await init();
     }
@@ -248,16 +422,26 @@ class PlayerService {
       _subtitleDelaySeconds = 0;
       await _applySubtitleDelay();
     }
+    final media = Media(url);
     final resume = startAt != null && startAt > Duration.zero ? startAt : null;
+    DebugLog.log(
+      'Play',
+      'playInternal startAt=${startAt?.inSeconds ?? -1}s '
+          'branch=${resume != null ? 'resume(open+seek)' : 'open(play:true)'}',
+    );
     if (resume != null) {
-      await _player!.open(Media(url), play: false);
+      await _player!.open(media, play: false);
+      if (_disposed) return;
+      // 网络 HLS 流打开初期 duration 尚未就绪，立刻 seek 会落空（位置停在 0），
+      // 表现为「进度条显示续播点、画面却从开头播」。等流可定位后再 seek。
+      await waitUntilSeekable(resume);
       if (_disposed) return;
       await _seekForOpenStart(resume);
       if (_disposed) return;
       await _player!.play();
       return;
     }
-    await _player!.open(Media(url), play: true);
+    await _player!.open(media, play: true);
   }
 
   /// open 后 seek 到续播点；失败则抛 [PlaybackStartSeekException]（禁止静默从 0 播）。
@@ -279,6 +463,12 @@ class PlayerService {
     debugPrint(
       'startAt seek failed: target=${target.inSeconds}s actual=${actual.inSeconds}s',
     );
+    DebugLog.log(
+      'Play',
+      'openStart seek FAILED target=${target.inSeconds}s '
+          'actual=${actual.inSeconds}s -> 抛 PlaybackStartSeekException',
+      flush: true,
+    );
     throw PlaybackStartSeekException(target, actual);
   }
 
@@ -290,6 +480,28 @@ class PlayerService {
     if (target <= const Duration(seconds: 5)) return true;
     return (actual - target).abs() <= tolerance ||
         actual >= target - const Duration(seconds: 5);
+  }
+
+  /// 等流可定位：duration 已知且不小于 [target] 时返回；否则在 [timeout] 后返回（部分
+  /// 网络流不上报 duration，由调用方继续重试 seek）。用于续播开场，避免 0 位 seek 落空。
+  Future<void> waitUntilSeekable(
+    Duration target, {
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    if (_player == null) return;
+    final startedAt = DateTime.now();
+    while (DateTime.now().difference(startedAt) < timeout) {
+      if (_disposed || _player == null) return;
+      final dur = _player!.state.duration;
+      if (dur > Duration.zero && dur >= target) return;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    final finalDur = _player?.state.duration ?? Duration.zero;
+    DebugLog.log(
+      'Play',
+      'waitUntilSeekable done target=${target.inSeconds}s '
+          'dur=${finalDur.inSeconds}s',
+    );
   }
 
   /// 外挂字幕的时间轴偏移（秒）。正数 = 字幕延后出现。
@@ -352,17 +564,42 @@ class PlayerService {
     await _player?.play();
   }
 
-  /// 按用户播放策略与硬件解码开关调优 mpv。
+  /// 按用户播放策略与硬件解码档位调优 mpv。
+  ///
+  /// [hwDecodeMode] 是**权威档位**（设置层下发的用户选定档位，App 不自动降档），
+  /// 应用它会同时刷新 mpv 的 `hwdec` 属性。
   Future<void> applyPlaybackStrategy(
     PlaybackStrategyConfig config, {
-    required bool hardwareDecode,
+    required HwDecodeMode hwDecodeMode,
+    VideoOutputMode? videoOutputMode,
   }) async {
     _strategyConfig = config;
+    if (_hwDecodeMode != hwDecodeMode) {
+      _hwDecodeMode = hwDecodeMode;
+    }
+    // vo **只在创建 VideoController 时生效**（见 [_videoControllerConfig]）：
+    // `_applyMpvTuning` 里没有 vo 这一项，改完档位若不重建控制器，
+    // 用户的设置要等到下次冷启动才生效。
+    // 比较的是**实际生效**的后端（mediacodec_embed + 软解会回落 gpu）。
+    final previousVo = _effectiveVoMode();
+    if (videoOutputMode != null) {
+      _videoOutputMode = videoOutputMode;
+    }
     if (_player == null) return;
-    await _applyMpvTuning(hardwareDecode: hardwareDecode);
+    if (_effectiveVoMode() != previousVo) {
+      DebugLog.log(
+        'Play',
+        '视频输出后端切换为 ${mpvVoValue(_effectiveVoMode())}，重建播放器以生效',
+        flush: true,
+      );
+      // 重建会重建 VideoController（带上新 vo）并回到原进度继续播。
+      await recyclePlayer();
+      return;
+    }
+    await _applyMpvTuning();
   }
 
-  Future<void> _applyMpvTuning({required bool hardwareDecode}) async {
+  Future<void> _applyMpvTuning() async {
     if (kIsWeb || _player == null) return;
 
     final c = _strategyConfig;
@@ -370,8 +607,9 @@ class PlayerService {
       'hr-seek': c.hrSeek,
       'demuxer-seekable-cache': c.demuxerSeekableCache,
       'cache-secs': '${c.cacheSecs}',
+      'demuxer-max-bytes': '${c.demuxerMaxBytes}',
       'network-timeout': '${c.networkTimeoutSecs}',
-      'hwdec': hardwareDecode ? 'auto-safe' : 'no',
+      'hwdec': mpvHwDecValue(_hwDecodeMode),
     };
 
     for (final entry in props.entries) {
@@ -381,6 +619,220 @@ class PlayerService {
         debugPrint('mpv setProperty ${entry.key} failed: $e');
       }
     }
+    await _persistHwDecodeState();
+  }
+
+  /// 把当前硬解档位落盘到日志目录（`hwdec_state.txt`）。
+  ///
+  /// 原生崩溃处理器（`crash_handler.cpp`）在写崩溃栈时会附带这个文件，
+  /// 于是「这次崩溃是否发生在硬解会话中」可被**自动**判定，
+  /// 不必靠用户口述或事后猜测。
+  Future<void> _persistHwDecodeState() async {
+    try {
+      final dir = DebugLog.directory;
+      if (dir == null) return;
+      final file = File(
+        '${dir.path}${Platform.pathSeparator}hwdec_state.txt',
+      );
+      await file.writeAsString(
+        'mode=${_hwDecodeMode.name} '
+        'mpv=${mpvHwDecValue(_hwDecodeMode)} '
+        'observed=${_observedHwDecBackend ?? "unknown"} '
+        'timestamp=${DateTime.now().millisecondsSinceEpoch}',
+        flush: true,
+      );
+    } catch (e) {
+      debugPrint('persist hwdec state failed: $e');
+    }
+  }
+
+  /// 最近一次记录的「解码档位 + 视频输出后端」签名（避免重复刷日志）。
+  String? _lastVoSignature;
+
+  /// 视频输出后端（mpv `--vo`）。Android 默认 `gpu`（与 media_kit 默认一致）。
+  ///
+  /// ⚠️ 2026-10-22 定位到的**本项目自身缺陷**：此前创建 `VideoController` 从未
+  /// 传 configuration，于是 media_kit 在 `AndroidVideoController.create` 里用
+  /// 自己的默认值把 mpv 的 `vo` / `hwdec` **整个覆盖**掉：
+  /// ```dart
+  /// 'vo': 'null', 'hwdec': configuration.hwdec!, ...  // 默认 hwdec = auto-safe
+  /// ```
+  /// 结果：设置里选的档位（包括"关闭硬解"）在每次新建/重建播放器后都被重置，
+  /// 日志里却因为软解档位不打探测日志而看不出来 —— 用户以为在测软解，实际仍在硬解。
+  VideoOutputMode _videoOutputMode = defaultVideoOutputMode;
+
+  /// 当前生效的视频输出后端（供日志/诊断读）。
+  VideoOutputMode get videoOutputMode => _videoOutputMode;
+
+  /// 运行时切换视频输出后端；切换后需重建 `VideoController` 才会生效，
+  /// 因此这里直接走一次回收重建（调用方是设置页时播放器通常处于空闲态）。
+  Future<void> setVideoOutputMode(VideoOutputMode mode) async {
+    if (mode == _videoOutputMode) return;
+    _videoOutputMode = mode;
+    DebugLog.log('Play', '视频输出后端切换为 ${mpvVoValue(mode)}', flush: true);
+    if (_player != null && _currentUrl != null) {
+      await recyclePlayer();
+    }
+  }
+
+  /// 实际生效的视频输出后端。
+  ///
+  /// 名义档位可能被当前解码方式改写：软解下 `mediacodec_embed` 走不了 Surface
+  /// 直出，实际是 `gpu`。凡是要「按后端做判断」的地方（诊断日志、vo 生效值）
+  /// 都必须用这个值，用名义档位会得出错误结论。
+  VideoOutputMode _effectiveVoMode() {
+    if (voRequiresHardwareDecode(_videoOutputMode) &&
+        _hwDecodeMode == HwDecodeMode.disabled) {
+      return VideoOutputMode.gpu;
+    }
+    return _videoOutputMode;
+  }
+
+  /// 创建 `VideoController` 时必须显式给出的 vo / hwdec。
+  ///
+  /// 不传 = 交给 media_kit 默认值 = 我们设置的档位被静默覆盖（见
+  /// [_videoOutputBackend] 注释）。桌面端保持 media_kit 默认（返回 null）。
+  /// 非 Android（桌面/Web）保持 media_kit 的平台默认值，不要塞 Android 的 vo。
+  VideoControllerConfiguration _videoControllerConfig() {
+    if (kIsWeb || !Platform.isAndroid) {
+      return const VideoControllerConfiguration();
+    }
+    final mode = _effectiveVoMode();
+    var hwdecMode = _hwDecodeMode;
+    if (voRequiresHardwareDecode(_videoOutputMode)) {
+      if (hwdecMode == HwDecodeMode.disabled) {
+        // 软解时 mpv 不能走 Surface 直出 → _effectiveVoMode 已回落 gpu。
+      } else if (hwdecMode != HwDecodeMode.mediaCodecZeroCopy) {
+        // mediacodec_embed 要求 hwdec=mediacodec（零拷贝直出 Surface）；
+        // copy 模式帧已拷回 CPU，走不了这条路径。
+        hwdecMode = HwDecodeMode.mediaCodecZeroCopy;
+      }
+    }
+    // 🔴 FD 泄漏修复（2026-10-23 荣耀70真机实测生效）：Android 禁用
+    // SurfaceProducer，走 SurfaceTexture 老路径。
+    //
+    // 机制：media_kit 默认 SurfaceProducer（API 33+ 由 ImageReader 支撑），
+    // Adreno GL 驱动每次 eglSwapBuffers 都会建一个 sync_file fence，而
+    // Flutter 引擎 SurfaceProducer 消费侧不关它 → 每送显一帧漏 1 个 fd
+    // （≈帧率 24/s），约 24 分钟耗尽 RLIMIT_NOFILE(32768) → SIGSEGV。
+    // libplacebo 的 sync 修复（c93aa134）只覆盖其内部 sync 对象，管不到
+    // eglSwapBuffers→Surface 这条送显末端；SurfaceTexture 路径由 GLConsumer
+    // 按帧消费，fence 随 BufferQueue 正常回收。
+    //
+    // 真机对照实验（HONOR 70 / 骁龙 778G+ / Adreno 642L / Android 14）：
+    //   SurfaceProducer（默认）: sync_file +22~24/s（正式包日志基线）
+    //   SurfaceTexture（本设置）: 5 分钟 31 点采样 59~61 震荡，斜率 +0.000/s
+    // 同场验证：初始播放与换集切换均正常出画，未见黑屏。
+    //
+    // 渲染后端约束（2026-10-23 双机终版定论，勿再反复）：
+    //   - 荣耀 70（Adreno 642L / Android 14）：引擎实际后端 = Impeller-OpenGLES
+    //     （Vulkan Impeller 起不来、回退 GLES，无 "Using the Skia" 行）。
+    //     SurfaceTexture 老桥在 Impeller-GLES 下实测出画正常 + 零泄漏。
+    //   - 新机（Adreno 830 / Android 16）：引擎实际后端 = Impeller-Vulkan
+    //     （android_context_vk_impeller.cc → Using the Impeller rendering
+    //     backend (Vulkan)）。9 组矩阵里 SurfaceTexture 6 组全部出画且零泄漏，
+    //     **推翻了「Vulkan 不支持老桥」的旧假设**——SurfaceTexture 在 Vulkan
+    //     Impeller 下同样可用。
+    //   - 结论：SurfaceTexture 是 GLES 与 Vulkan 两种 Impeller 后端通用的安全桥；
+    //     真正仍在漏的是 SurfaceProducer（无论 vo），已用
+    //     enableAndroidSurfaceProducer:false 锁死。media_kit dartdoc 称
+    //     SurfaceTexture「仅 Skia 有效」属过时保守，以真机实测为准。
+    //   - ⚠️ 判定 Flutter 后端只能看引擎日志（vk_impeller / gl_impeller 行），
+    //     dumpsys gfxinfo 的 "Pipeline=Skia (OpenGL)" 是 HWUI 层，证明不了
+    //     FlutterView(SurfaceView) 引擎内部后端（此坑 2026-10-23 踩过两次）。
+    //   换 Flutter 大版本或换机型时，复测「当前后端 + 本路径」这一格。
+    // 实现锁死在顶层函数 androidVideoControllerConfig（测试可直接断言）。
+    return androidVideoControllerConfig(
+      vo: mpvVoValue(mode),
+      hwdec: mpvHwDecValue(hwdecMode),
+    );
+  }
+
+  Future<void> probeVideoOutput() async {
+    if (kIsWeb || _player == null) return;
+    final vo = await _safeMpvProperty('current-vo');
+    final api = await _safeMpvProperty('gpu-api');
+    final hwdec = await _safeMpvProperty('hwdec-current');
+    final signature = '$_hwDecodeMode|$vo|$api|$hwdec';
+    if (signature == _lastVoSignature) return;
+    _lastVoSignature = signature;
+    // mpv 实际生效值优先于我们下发的值（下发值可能被底层覆盖）。
+    DebugLog.log(
+      'Play',
+      '视频输出: 档位=$_hwDecodeMode hwdec-current=${hwdec ?? '?'} '
+      'current-vo=${vo ?? '?'} gpu-api=${api ?? '?'}',
+      flush: true,
+    );
+    // 哨兵：设置说软解、mpv 却仍在硬解 = 我们的档位没真正生效。
+    // 2026-10-22 就是因为缺这条校验，把「软解没生效」误读成「软解也泄漏」。
+    final actual = hwdec?.trim();
+    if (_hwDecodeMode == HwDecodeMode.disabled &&
+        actual != null &&
+        actual.isNotEmpty &&
+        actual != 'no') {
+      DebugLog.log(
+        'Play',
+        '⚠️ 档位要求软解但 mpv 实际为 $actual —— 档位未生效（检查 '
+        'VideoController 是否传了 configuration）',
+        flush: true,
+      );
+    }
+    // 落盘实际生效的渲染后端：原生崩溃文件会附带它（见 crash_handler.cpp），
+    // 于是「这次崩溃用的哪个后端」不用靠猜。
+    // 2026-10-22：这份 `last_vo.txt` 曾因自动兜底机制被删而变成**陈旧文件**
+    // （内容还停在几天前），差点据此误判当前后端。
+    _persistVideoOutputState(vo, api, hwdec);
+  }
+
+  /// 把实际生效的渲染后端写入日志目录的 `last_vo.txt`。
+  void _persistVideoOutputState(
+    String? vo,
+    String? api,
+    String? hwdec,
+  ) {
+    try {
+      final dir = DebugLog.directory;
+      if (dir == null) return;
+      final file = File(
+        '${dir.path}${Platform.pathSeparator}last_vo.txt',
+      );
+      file.writeAsStringSync(
+        'vo=${vo ?? "?"} '
+        'gpu-api=${api ?? "?"} '
+        'hwdec-current=${hwdec ?? "?"} '
+        'mode=${_hwDecodeMode.name} '
+        'timestamp=${DateTime.now().millisecondsSinceEpoch}',
+        flush: true,
+      );
+    } catch (e) {
+      debugPrint('persist vo state failed: $e');
+    }
+  }
+
+  /// 读一个可能不被当前 mpv 构建支持的属性（不支持时返回 null，不抛异常）。
+  Future<String?> _safeMpvProperty(String name) async {
+    try {
+      return await getMpvProperty(_player!, name);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 把 mpv 的帧率写进日志（fd 泄漏排查专用）。
+  ///
+  /// 2026-10-23：真机日志显示 fd 泄漏速率稳定在 ~24/s，与「每送显一帧漏一个
+  /// fd」的假设吻合，但日志里**没有任何帧率数据**，该假设只能靠猜。这里补记
+  /// `estimated-vf-fps`（实际送显帧率）与 `container-fps`（容器帧率），下次
+  /// 真机复现时可直接比对「泄漏 fd/s ≈ 送显帧率」是否成立。
+  Future<void> probeFrameRate() async {
+    if (kIsWeb || _player == null) return;
+    final vf = await _safeMpvProperty('estimated-vf-fps');
+    final cf = await _safeMpvProperty('container-fps');
+    if (vf == null && cf == null) return;
+    DebugLog.log(
+      'Play',
+      '帧率: estimated-vf-fps=${vf ?? '?'} container-fps=${cf ?? '?'}',
+    );
   }
 
   /// 跳转到指定位置（精确 seek，松手时用）
@@ -453,11 +905,9 @@ class PlayerService {
         await pendingPlay;
       } catch (_) {}
     }
-    // 取消所有流订阅
-    for (final sub in _subscriptions) {
-      await sub.cancel();
-    }
-    _subscriptions.clear();
+
+    // 统一释放：作用域内含全部流订阅 + 播放器 + 控制器，逆序释放且单项失败隔离。
+    await _scope.dispose();
 
     // 停止并释放播放器
     await _player?.stop();
@@ -465,6 +915,108 @@ class PlayerService {
     _player = null;
     _videoController = null;
     _playChain = null;
+
+    // 事件通道随服务一起失效，清空以免外部持有残留引用。
+    playingChanged.clear();
+    positionChanged.clear();
+    durationChanged.clear();
+    bufferingChanged.clear();
+    bufferChanged.clear();
+    completed.clear();
+    error.clear();
+    rateChanged.clear();
+    audioBitrateChanged.clear();
+    videoSizeChanged.clear();
+    subtitle.clear();
+  }
+
+  /// 释放旧 Player/VideoController 并新建实例续播。
+  ///
+  /// 仅用于运行时手动切换视频输出后端（vo）—— 改变 vo 必须重建 VideoController
+  /// 才会生效。事件通道不重建，外部订阅者持续有效。
+  Future<void> recyclePlayer() async {
+    if (_recycling || _disposed || _player == null) return;
+    final url = _currentUrl;
+    if (url == null || url.isEmpty) return;
+    _recycling = true;
+    try {
+      final wasPlaying = _player!.state.playing;
+      final pos = _player!.state.position;
+      final rate = _playbackSpeed;
+      await _scope.dispose();
+      await _player!.stop().catchError((_) {});
+      await _player!.dispose().catchError((_) {});
+      _player = null;
+      _videoController = null;
+
+      _scope = ResourceScope(name: 'player');
+      _player = Player(
+        configuration: PlayerConfiguration(
+          bufferSize: _strategyConfig.demuxerBufferBytes,
+        ),
+      );
+      await _applyMpvTuning();
+      // 矩阵测试专用：回收重建后同样要重新下发 gpu-api 覆盖（新 Player）。
+      if (debugGpuApiOverride != null) {
+        try {
+          await setMpvProperty(_player!, 'gpu-api', debugGpuApiOverride!);
+        } catch (_) {}
+      }
+      await _player!.setVolume(100.0);
+      _videoController = VideoController(
+        _player!,
+        configuration: _videoControllerConfig(),
+      );
+      _wireStreams();
+
+      recycleEpoch++;
+      onPlayerRecreated?.call();
+
+      if (wasPlaying) {
+        await _playInternal(url, startAt: pos > Duration.zero ? pos : null);
+      } else {
+        await _player!.open(Media(url), play: false);
+        if (pos > Duration.zero) {
+          await waitUntilSeekable(pos);
+          await _seekForOpenStart(pos);
+        }
+      }
+      if (rate != 1.0) {
+        await _player!.setRate(rate);
+      }
+    } catch (e) {
+      DebugLog.log('Play', 'recyclePlayer 失败: $e', flush: true);
+    } finally {
+      _recycling = false;
+    }
+  }
+
+  /// 释放播放器**实例**（mpv Player/VideoController + 全部流订阅），服务保持可用。
+  ///
+  /// 与 [dispose] 的分界：本服务是**单例**，页面级关闭（退出详情页）只应释放
+  /// 播放器实例以回收 mpv 占用的内存/fd，**不允许**把单例标记为已销毁——
+  /// `_disposed` 一旦置位便无任何路径复位，之后所有播放入口静默短路，
+  /// 表现为「再打开任何视频都没反应」。单例的生死只归应用退出路径
+  /// （`PlayerProvider.dispose` → [dispose]）。
+  ///
+  /// 语义等价于「回收但不续播」：新建作用域、置空实例；下次播放经 [init]
+  /// 懒重建（`init` 对 `_player == null` 会重建实例并重新接流）。
+  /// 事件通道不动，因此外部订阅者（详情页 / 迷你播放器）持续有效。
+  Future<void> releasePlayerInstance() async {
+    final pendingPlay = _playChain;
+    if (pendingPlay != null) {
+      try {
+        await pendingPlay;
+      } catch (_) {}
+    }
+    await _scope.dispose();
+    await _player?.stop().catchError((_) {});
+    await _player?.dispose().catchError((_) {});
+    _player = null;
+    _videoController = null;
+    _playChain = null;
+    _currentUrl = null;
+    DebugLog.log('Play', 'releasePlayerInstance: 实例已释放，服务保持可用');
   }
 
   /// 获取播放器实例

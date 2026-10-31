@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../services/player_service.dart';
 
@@ -17,8 +16,8 @@ enum PlayerStatus {
 class PlayerProvider extends ChangeNotifier {
   final PlayerService _playerService = PlayerService();
 
-  /// Stream 订阅列表，用于在 dispose 时取消
-  final List<StreamSubscription<dynamic>> _subscriptions = [];
+  /// 是否已初始化（防止重复订阅事件通道）。
+  bool _initialized = false;
 
   /// 当前播放状态
   PlayerStatus _status = PlayerStatus.idle;
@@ -146,59 +145,48 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   /// 初始化
+  ///
+  /// 订阅的是 [PlayerService] 的**事件通道**（多播），而不是某个 Player 实例的
+  /// stream —— 播放器实例被回收重建后通道依然有效，本 Provider 无需重新订阅，
+  /// 也就不会出现「回收一次，进度/时长永久冻结」。
   Future<void> init() async {
+    if (_initialized) return;
+    _initialized = true;
+
     await _playerService.init();
     _autoPlayNext = _playerService.autoPlayNext;
     _playbackSpeed = _playerService.playbackSpeed;
 
-    // Web 端播放器不可用，跳过监听器设置
-    if (kIsWeb || _playerService.player == null) return;
+    _playerService.positionChanged.add(_handlePosition);
+    _playerService.durationChanged.add(_handleDuration);
+    _playerService.bufferChanged.add(_handleBuffer);
+    _playerService.playingChanged.add(_handlePlaying);
+    _playerService.completed.add(_handleCompleted);
+  }
 
-    // 监听播放位置
-    _subscriptions.add(
-      _playerService.player!.stream.position.listen((pos) {
-        _position = pos;
-        notifyListeners();
-      }),
-    );
+  void _handlePosition(Duration pos) {
+    _position = pos;
+    notifyListeners();
+  }
 
-    // 监听总时长
-    _subscriptions.add(
-      _playerService.player!.stream.duration.listen((dur) {
-        _duration = dur;
-        notifyListeners();
-      }),
-    );
+  void _handleDuration(Duration dur) {
+    _duration = dur;
+    notifyListeners();
+  }
 
-    // 监听缓冲
-    _subscriptions.add(
-      _playerService.player!.stream.buffer.listen((buf) {
-        _bufferedPosition = buf;
-        notifyListeners();
-      }),
-    );
+  void _handleBuffer(Duration buf) {
+    _bufferedPosition = buf;
+    notifyListeners();
+  }
 
-    // 监听播放状态
-    _subscriptions.add(
-      _playerService.player!.stream.playing.listen((isPlaying) {
-        if (isPlaying) {
-          _status = PlayerStatus.playing;
-        } else {
-          _status = PlayerStatus.paused;
-        }
-        notifyListeners();
-      }),
-    );
+  void _handlePlaying(bool isPlaying) {
+    _status = isPlaying ? PlayerStatus.playing : PlayerStatus.paused;
+    notifyListeners();
+  }
 
-    // 监听完成
-    _subscriptions.add(
-      _playerService.player!.stream.completed.listen((completed) {
-        if (completed) {
-          _status = PlayerStatus.completed;
-          notifyListeners();
-        }
-      }),
-    );
+  void _handleCompleted(int _) {
+    _status = PlayerStatus.completed;
+    notifyListeners();
   }
 
   /// 开始播放
@@ -218,16 +206,6 @@ class PlayerProvider extends ChangeNotifier {
     notifyListeners();
 
     await _playerService.startPlaying(url);
-  }
-
-  /// 播放/暂停
-  Future<void> togglePlayPause() async {
-    if (_status == PlayerStatus.playing) {
-      await _playerService.pause();
-    } else {
-      // 这里应该有一个url参数，但我们没有存储当前播放的url
-      // 暂时先不实现
-    }
   }
 
   /// 跳转
@@ -286,12 +264,13 @@ class PlayerProvider extends ChangeNotifier {
   /// 释放资源
   @override
   void dispose() {
-    // 取消所有 Stream 订阅
-    for (final sub in _subscriptions) {
-      sub.cancel();
-    }
-    _subscriptions.clear();
-    _playerService.dispose();
+    // 从事件通道摘除本页注册的监听（多播：只摘自己的，不影响其它消费者）。
+    _playerService.positionChanged.remove(_handlePosition);
+    _playerService.durationChanged.remove(_handleDuration);
+    _playerService.bufferChanged.remove(_handleBuffer);
+    _playerService.playingChanged.remove(_handlePlaying);
+    _playerService.completed.remove(_handleCompleted);
+    unawaited(_playerService.dispose());
     super.dispose();
   }
 }

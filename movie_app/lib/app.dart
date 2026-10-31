@@ -20,12 +20,14 @@ import 'services/storage_service.dart';
 import 'services/auth_service.dart';
 import 'services/api_service.dart';
 import 'services/search_service.dart';
-import 'services/player_service.dart';
 import 'services/cache_service.dart';
 import 'services/sync_service.dart';
 import 'l10n/app_localizations.dart';
 import 'widgets/material_app_deep_link_child.dart';
 import 'services/deep_link_stream_service.dart';
+import 'services/dlna_service.dart';
+import 'services/local_media_http_server.dart';
+import 'services/torrent_player_service.dart';
 
 /// 应用程序配置
 class MovieApp extends StatefulWidget {
@@ -46,6 +48,25 @@ class _MovieAppState extends State<MovieApp> {
   void initState() {
     super.initState();
     _initialize();
+  }
+
+  /// 应用级单例的收尾释放。
+  ///
+  /// 这些单例的 `dispose()` 原本没有任何调用方（单例生命周期=应用生命周期，
+  /// 平时无泄漏；但热重启/测试装配-卸载周期里会残留）。统一在此收口。
+  /// 注意：进程被系统直接杀死时不会走这里，靠各单例内部的状态自愈。
+  bool _singletonsReleased = false;
+
+  @override
+  void dispose() {
+    if (!_singletonsReleased) {
+      _singletonsReleased = true;
+      unawaited(DeepLinkStreamService.instance.dispose());
+      DlnaService().dispose();
+      unawaited(TorrentPlayerService().dispose());
+      unawaited(LocalMediaHttpServer.instance.dispose());
+    }
+    super.dispose();
   }
 
   /// 初始化应用
@@ -70,11 +91,33 @@ class _MovieAppState extends State<MovieApp> {
         SearchService().init(),
         if (!kIsWeb) CacheService().init() else Future.value(),
         SyncService().init(),
-        PlayerService().init(),
       ]);
 
       // API服务初始化现在是异步的
       await ApiService().init();
+
+      // 磁力 P2P 引擎预热（不阻塞启动链，并行于后续 provider 初始化）。
+      //
+      // 为什么放在这里而不是 provider 链尾：libtorrent session 创建后的
+      // DHT 引导在受限网络下要 ~12s 才完成（UDP 引导节点超时重试），
+      // tracker announce 队列也要几秒铺开。若等用户点「磁力播放」才 init，
+      // 这 12s 全落在首次起播的关键路径上 —— 用户观感就是「首次加载分钟级」。
+      // 提前到启动期，用户浏览/搜索的十几秒里 DHT 已 bootstrap 完，
+      // 点播放时直接进元数据阶段。
+      //
+      // 🔴 2026-10-24 实测教训：这个预热**必须尽量早**。放在 provider 链尾时，
+      // 磁力深链冷启动会在整条链跑完之前就进播放流程（play 早于预热
+      // ~10s），预热形同虚设；更糟的是它与播放流程的 init 竞态
+      // （cacert.pem 重命名相撞 → PathNotFoundException → 误置 error 态）。
+      // 竞态本身已由服务层 init() 的 Future 去重根治；位置前移是为了让
+      // 预热真正跑在用户操作之前。
+      //
+      // 约束：只创建 session + 下发配置，不 addMagnet、不起流，
+      // 空闲 session 开销可忽略；单例 init() 幂等 + 去重，用户真播放时
+      // 再次调用直接命中也无害。
+      if (!kIsWeb && !AppEnv.isTestMode) {
+        unawaited(TorrentPlayerService().init());
+      }
 
       // 设置状态栏样式（仅移动端，不阻塞）
       if (!kIsWeb) {
@@ -256,6 +299,11 @@ class _MovieAppState extends State<MovieApp> {
               await cacheProvider.init();
               if (!context.mounted) return;
               await playlistProvider.init();
+
+              // 磁力 P2P 引擎预热已前移至 [_initialize]（ApiService().init()
+              // 之后立即触发）。放在这里太晚：磁力深链冷启时播放流程远早于
+              // 本条链跑完，预热既没起到作用，还与播放 init 竞态
+              // （2026-10-24 实测，已通过服务层 Future 去重根治）。
             });
           }
 

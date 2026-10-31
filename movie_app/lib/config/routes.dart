@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -24,7 +25,10 @@ import '../services/torrent_search_service.dart';
 import '../utils/torrent_title_display.dart';
 import 'channel_portal_kind.dart';
 import 'constants.dart';
+import 'magnet_probe_deeplink.dart';
+import 'test_config_deeplink.dart';
 import '../pages/channel/category_portal_page.dart';
+import '../pages/catalog/category_list_page.dart';
 import '../providers/movie_provider.dart';
 
 Uri _normalizeIncomingDeepLink(Uri uri) {
@@ -94,6 +98,9 @@ class AppRoutes {
   static const String playlistDetail = '/playlist/:id';
   static const String follow = '/follow';
 
+  /// 分类完整列表页（模块「更多」的去处）
+  static const String catalog = '/catalog';
+
   /// 设计稿 `design-v3-android-intro-collapsed-icons-only` 可交互复刻（静态演示）
   static const String designAndroidIntroV3 = '/design-android-intro-v3';
 
@@ -107,6 +114,18 @@ class AppRoutes {
   /// 全局路由配置
   static final GoRouter router = GoRouter(
     initialLocation: home,
+    // 🔴 必须显式忽略平台默认路由。
+    // go_router（实测 13.2.5）的 `_effectiveInitialLocation` 在
+    // `overridePlatformDefaultLocation == false` 时，**即使传了 initialLocation**，
+    // 也仍会执行：
+    //   Uri.parse(WidgetsBinding.instance.platformDispatcher.defaultRouteName)
+    // 而 Android 的 `defaultRouteName` 就是启动 intent 的 data URI
+    // （形如 `movieapp://detail?id=123`）。一旦该 URI 不符合 URI 规范
+    // （例如带前导空格/换行），`Uri.parse` 直接抛 FormatException，且抛在
+    // **widget build 期间**（GoRouter 构造 → _MovieAppState.build）→ 整个 App 红屏。
+    // 我们的深链统一由 `DeepLinkStreamService` + `AppRoutes.handleDeepLinkForRouter`
+    // 处理，路由器的初始位置就该固定为 home，不采纳平台默认值。
+    overridePlatformDefaultLocation: true,
     debugLogDiagnostics: false,
     observers: [detailRouteObserver],
     routes: [
@@ -226,6 +245,22 @@ class AppRoutes {
         name: 'follow',
         pageBuilder: _fadeUpBuilder((context, state) => const FollowPage()),
       ),
+      // 分类完整列表（首页 / 频道页模块「更多」的去处）
+      GoRoute(
+        path: catalog,
+        name: 'catalog',
+        pageBuilder: _fadeUpBuilder((context, state) {
+          final q = state.uri.queryParameters;
+          return CategoryListPage(
+            category: q['category'] ??
+                (AppConstants.categories.isNotEmpty
+                    ? AppConstants.categories.first
+                    : '电影'),
+            initialGenre: q['genre'] ?? '全部',
+            initialRegion: q['region'] ?? '全部',
+          );
+        }),
+      ),
       ...ChannelPortalKind.values.map(
         (k) => GoRoute(
           path: k.path,
@@ -235,13 +270,16 @@ class AppRoutes {
           ),
         ),
       ),
-      GoRoute(
-        path: designAndroidIntroV3,
-        name: 'designAndroidIntroV3',
-        pageBuilder: _fadeUpBuilder(
-          (context, state) => const AndroidIntroDesignV3Page(),
+      // 设计稿参考页：仅调试构建可达。用 collection-if 让 AOT/dart2js 把它
+      // 整页 tree-shake 掉，发布包不再带这 836 行调试 UI。
+      if (kDebugMode)
+        GoRoute(
+          path: designAndroidIntroV3,
+          name: 'designAndroidIntroV3',
+          pageBuilder: _fadeUpBuilder(
+            (context, state) => const AndroidIntroDesignV3Page(),
+          ),
         ),
-      ),
     ],
     // 错误页面
     errorBuilder: (context, state) => Scaffold(
@@ -291,9 +329,34 @@ class AppRoutes {
   /// - movieapp://home
   /// 无 [BuildContext] 的深度链接入口（如 `app_links` 流），与 [handleDeepLink] 行为一致。
   static Future<void> handleDeepLinkForRouter(GoRouter router, Uri uri) async {
+    // 外部磁力链接（`magnet:?xt=urn:btih:...&dn=...`）：浏览器/聊天软件里点
+    // magnet 链接 → 系统「打开方式」选本 App → app_links 投递到这里 →
+    // 直达磁力详情并自动起播。与 [toMagnetTorrentDetail] 同一落地页，
+    // 区别只在入口没有 BuildContext，push 走 GoRouter 本体。
+    if (uri.scheme == 'magnet') {
+      await _openMagnetDeepLink(router, uri);
+      return;
+    }
+
     final u = _normalizeIncomingDeepLink(uri);
     final path = u.path;
     final params = u.queryParameters;
+
+    // FD 泄漏矩阵测试配置入口（仅 debug 构建处理，release 走 default 回首页）。
+    if (path == '/testcfg' || path == 'testcfg') {
+      final summary = await applyTestConfigDeeplink(u);
+      debugPrint('[deeplink] $summary');
+      router.go(home);
+      return;
+    }
+
+    // 磁力播放自检（仅 debug；四段计时 + 真实拉流，结果写 DebugLog）。
+    if (path == '/magnetprobe' || path == 'magnetprobe') {
+      final summary = await runMagnetProbeDeeplink(u);
+      debugPrint('[deeplink] $summary');
+      router.go(home);
+      return;
+    }
 
     switch (path) {
       case '/detail':
@@ -407,6 +470,69 @@ class AppRoutes {
     );
   }
 
+  /// 外部磁力深链（`magnet:?xt=urn:btih:...&dn=...`）→ 磁力详情并自动起播。
+  ///
+  /// 为什么单独开一条路而不是复用 [toMagnetTorrentDetail]：深链到达时没有
+  /// BuildContext（`app_links` 流在服务层），push 只能走 [GoRouter] 本体；
+  /// MovieProvider 快照经 `navigatorKey.currentContext` 取，冷启动时当前没有
+  /// CMS 详情，快照推送是空操作，不影响。
+  ///
+  /// btih 只用于详情 id / 历史去重，**不参与起播**——libtorrent 直接吃 magnet
+  /// URI，所以 32 位 base32 哈希（`extractBtih` 只认 40 位 hex）也放行，
+  /// 仅在做不出合法 btih 时退回哈希 id。
+  static Future<void> _openMagnetDeepLink(GoRouter router, Uri uri) async {
+    final magnet = uri.toString();
+    if (!magnet.startsWith('magnet:?')) {
+      debugPrint('[deeplink] 非法 magnet 链接，忽略: $magnet');
+      router.go(home);
+      return;
+    }
+
+    final btih = TorrentSearchService.extractBtih(magnet) ??
+        'h${magnet.hashCode.abs()}';
+
+    // dn 参数是资源显示名（磁力规范要求百分号编码，Uri 已解码）；
+    // 缺失/为空时回退 btih，详情页仍可正常起播。
+    final dn = (uri.queryParameters['dn'] ?? '').trim();
+    final displayName = dn.isNotEmpty ? dn : btih;
+    final title = splitTorrentDisplayTitle(displayName);
+    final torrent = TorrentInfo(
+      name: displayName,
+      size: 0,
+      seeders: 0,
+      leechers: 0,
+      magnetUri: magnet,
+      source: '外部链接',
+    );
+    final movie = Movie(
+      id: btih,
+      sourceId: AppConstants.magnetDetailSourceId,
+      name: title.primary.isNotEmpty ? title.primary : btih,
+      alias: title.secondary ?? '',
+      description: '磁力：外部链接',
+      // 与 toMagnetTorrentDetail 对齐：dn 里带 (1994) 这类年份时解析出来，
+      // 磁力补全搜索用它提高命中率。
+      year: yearInParentheses(displayName) ?? '',
+      playRoutes: const [],
+    );
+
+    final ctx = router.routerDelegate.navigatorKey.currentContext;
+    if (ctx != null) {
+      ctx.read<MovieProvider>().pushDetailSnapshot();
+    }
+    await router.push(
+      Uri(path: detail, queryParameters: <String, String>{
+        'id': btih,
+        'sourceId': AppConstants.magnetDetailSourceId,
+      }).toString(),
+      extra: DetailRouteExtra(
+        movie: movie,
+        initialMagnetUri: magnet,
+        torrent: torrent,
+      ),
+    );
+  }
+
   /// 从观看历史进入详情（磁力源会带上 [WatchHistory.magnetUri] 以恢复播放）
   static void toDetailFromHistory(BuildContext context, WatchHistory h) {
     toDetail(
@@ -466,10 +592,13 @@ class AppRoutes {
         descBuf.writeln();
         descBuf.writeln(releaseLine);
       }
+      // 磁力资源主标题必须是数据源/接口返回的真实种子名（title.primary），
+      // 而不是 CMS 影片名 —— 否则用户根本认不出这条磁力是不是自己搜的。
+      // CMS 影片名降级为别名（alias），与副标题/已有别名并列。
       final aliasParts = <String>[
-        if (title.primary.isNotEmpty &&
-            title.primary.trim() != enrichFrom.name.trim())
-          title.primary.trim(),
+        if (enrichFrom.name.trim().isNotEmpty &&
+            enrichFrom.name.trim() != title.primary.trim())
+          enrichFrom.name.trim(),
         if (title.secondary != null && title.secondary!.trim().isNotEmpty)
           title.secondary!.trim(),
         if (enrichFrom.alias.trim().isNotEmpty) enrichFrom.alias.trim(),
@@ -477,8 +606,9 @@ class AppRoutes {
       movie = Movie(
         id: btih,
         sourceId: AppConstants.magnetDetailSourceId,
-        name:
-            enrichFrom.name.trim().isNotEmpty ? enrichFrom.name : title.primary,
+        name: title.primary.trim().isNotEmpty
+            ? title.primary.trim()
+            : enrichFrom.name,
         alias: aliasParts.join(' · '),
         cover: enrichFrom.cover.trim().isNotEmpty ? enrichFrom.cover : '',
         backdrop:
@@ -572,6 +702,24 @@ class AppRoutes {
   /// 进入高保真频道占位页（电影 / 连续剧 / …）
   static void toChannelPortal(BuildContext context, ChannelPortalKind kind) {
     context.push(kind.path);
+  }
+
+  /// 进入某分类的完整列表页（首页 / 频道页模块标题右侧「更多」的去处）。
+  static void toCategoryList(
+    BuildContext context, {
+    required String category,
+    String genre = '全部',
+    String region = '全部',
+  }) {
+    final uri = Uri(
+      path: catalog,
+      queryParameters: <String, String>{
+        'category': category,
+        'genre': genre,
+        'region': region,
+      },
+    );
+    context.push(uri.toString());
   }
 
   /// 打开 Android 详情设计稿复刻页

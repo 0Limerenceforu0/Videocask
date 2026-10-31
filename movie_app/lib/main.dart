@@ -8,7 +8,10 @@ import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
 import 'config/pending_deep_link.dart';
+import 'services/app_lifecycle_logger.dart';
+import 'services/debug_log.dart';
 import 'services/error_handler.dart';
+import 'services/subtitle_ai_service.dart';
 import 'utils/web_splash_stub.dart'
     if (dart.library.js_interop) 'utils/web_splash_web.dart' as web_splash;
 
@@ -16,6 +19,9 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   ErrorHandler().init();
+
+  // 诊断日志：先于 runApp 初始化，保证启动期异常也能被记录。
+  await DebugLog.init();
 
   // media_kit 在 Web 上同样必须初始化（Web 后端映射到 HTML <video> + hls.js）。
   MediaKit.ensureInitialized();
@@ -29,7 +35,13 @@ void main() async {
     PendingDeepLink.registerFromArguments(Platform.executableArguments);
   }
 
+  // 触发 SubtitleAiService 单例，自动注册在线 / 离线(sherpa_onnx) / 浏览器三种后端。
+  SubtitleAiService();
+
   runApp(const MovieApp());
+
+  // 记录前后台切换，用于区分「系统杀后台」与「前台原生崩溃」。
+  AppLifecycleLogger().attach();
 
   // Web 端：首帧渲染完成后移除 index.html 里的启动占位层（"正在加载..."）。
   // 该占位层若不摘除会一直盖在 Flutter 视图上方，表现为永久灰屏

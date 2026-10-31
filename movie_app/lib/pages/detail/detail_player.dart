@@ -11,11 +11,23 @@ import '../../services/torrent_player_service.dart';
 import '../../models/movie.dart';
 import '../../providers/history_provider.dart';
 import '../../utils/playback_throughput.dart';
+import '../../utils/magnet_episode_parser.dart';
+import '../../services/debug_log.dart';
+import 'dart:io';
+import 'package:flutter/services.dart';
 
 import 'playback/playback_lifecycle.dart';
 import 'playback/detail_playback_coordinator.dart';
 import 'playback/playhead_authority.dart';
+import 'playback/stall_detection.dart';
+import 'playback/discontinuity_recovery_policy.dart';
 import 'playback_error_type.dart';
+
+/// 纠偏（discontinuity 恢复 seek）连续失败上限：达到即放弃本次 open 的纠偏。
+///
+/// 断网时 mpv 会把读不到的 HLS 流报成「提前播完」，触发纠偏；而纠偏 seek 在
+/// 死流上必然落空，形成每 30s 一次的无效循环（2026-10-21 模拟器实测）。
+const int kMaxDiscontinuityRecoveryAttempts = 3;
 
 /// 播放器相关逻辑
 class DetailPlayer {
@@ -344,6 +356,41 @@ class DetailPlayer {
   int torrentStep = 0;
   String torrentMessage = '';
 
+  /// 磁力准备的**细粒度阶段**（2026-10-28 用户要求「告诉我走到哪一步」）。
+  ///
+  /// 与 [torrentStep] 的分工：[torrentStep] 是给旧逻辑看的粗粒度开关，
+  /// 这里是要**逐条打勾显示给用户**的清单，共 6 步：
+  /// 1 启动 P2P 引擎 / 2 解析种子元数据 / 3 连接节点 /
+  /// 4 选定视频文件 / 5 缓冲首段数据 / 6 交给播放器起播
+  ///
+  /// 0=未开始，-1=失败。
+  int torrentStage = 0;
+
+  /// 当前是第几次尝试（1=首次，2=首次失败后的自动二次尝试）。
+  ///
+  /// 磁力「连不上直接断开」的观感来自：首次失败后我们只留一句错误，
+  /// 用户不知道能不能再等一等。现在首轮失败会自动重来一轮（重新 addMagnet，
+  /// 换端口/tracker 重新打洞），并把这个轮次显示出来。
+  int torrentAttempt = 1;
+
+  /// 是否正处于「自动二次尝试」窗口（UI 明说第 2 次尝试，而不是继续转圈）。
+  bool magnetRetrying = false;
+
+  /// 已把流交给播放器、正在等它出第一帧画面（看门狗窗口）。
+  ///
+  /// 2026-10-28 真机反馈：「磁力资源这个没有时长的黑屏，一直黑屏，换一个
+  /// 资源能播放」。表现是 mpv 已经 open 了流，但既没有时长也没有画面
+  /// （0:00 / 0:00），我们这边因为「缓冲 > 0 就算成功」而彻底放手，
+  /// 于是永远黑着。这里标记等待窗口，让 UI 明说在等画面，超时则由
+  /// [DetailMagnetPlayback] 转成一次失败并自动重试。
+  bool magnetWaitingFirstFrame = false;
+
+  /// 上一次磁力失败的原因是「播放器读不出画面」（而不是连不上节点）。
+  ///
+  /// 错误卡片据此换一句更准确的建议：连不上 → 建议换资源；
+  /// 读不出画面 → 可能是封装/编码不被支持，同样建议换资源。
+  bool magnetNoFrameFailure = false;
+
   // ========== AB循环播放相关 ==========
 
   /// AB循环起始点（A点）
@@ -395,6 +442,18 @@ class DetailPlayer {
   DateTime? _lastDiscontinuityRecoveryAt;
   bool _discontinuityRecoveryInFlight = false;
 
+  /// 纠偏失败计数与放弃判定（连续失败达上限即停止纠偏，见策略类注释）。
+  final DiscontinuityRecoveryPolicy _discontinuityRecovery =
+      DiscontinuityRecoveryPolicy(maxAttempts: kMaxDiscontinuityRecoveryAttempts);
+
+  /// 最近一次用户主动 seek 的时刻；刚拖过进度条的一小段时间内禁止「采纳
+  /// 实际上报」，否则 mpv 迟到的旧位置报告会把用户刚拖到的进度拽回去。
+  DateTime? _lastExplicitSeekAt;
+
+  /// 用户主动 seek 后禁止采纳上报的保护窗口。
+  static const Duration kAdoptGuardAfterExplicitSeek = Duration(seconds: 10);
+  Timer? _heartbeatTimer;
+
   /// 初始化播放器（并发安全，多次调用只会执行一次）
   Future<void> ensureInitialized() {
     return _initializeFuture ??= _setupPlayerCallbacks();
@@ -406,115 +465,247 @@ class DetailPlayer {
   Future<void> _setupPlayerCallbacks() async {
     await playerService.init();
 
-    // 监听播放器状态
-    playerService.onPositionChanged = (pos) {
-      if (_shouldIgnoreResumePositionReport(pos)) return;
-      final action = playback.ingestPlayerPosition(pos, duration: duration);
-      switch (action) {
-        case PlayheadTickAction.accept:
-          position = pos;
-        case PlayheadTickAction.ignoreBackward:
-          break;
-        case PlayheadTickAction.discontinuity:
-          _scheduleDiscontinuityRecovery();
-      }
-      position = playback.authoritativePosition;
-      final total = duration;
-      if (total > Duration.zero) {
-        onPlaybackProgress?.call(playback.authoritativePosition, total);
-      }
-      _notifyUiThrottled();
-    };
+    // 播放器后端（media_kit/libmpv）原生库已在 Player() 构造时加载，可能注册了它自己的
+    // 信号处理器覆盖掉我们的。播放器就绪后重新断言原生崩溃处理器，抢回注册权。
+    await _reassertCrashHandler();
 
-    playerService.onDurationChanged = (duration) {
-      this.duration = duration;
-      if (duration > Duration.zero) {
-        playback.onOpenSucceeded();
-        _applyPendingResume(duration);
-      }
-      _notifyUiThrottled();
-    };
+    // 监听播放器状态。
+    //
+    // 订阅的是 **PlayerService 的事件通道**（多播），不是某个 Player 实例的
+    // stream —— 播放器实例被回收重建时通道不失效，本页无需重新订阅，
+    // 也就不会出现「回收一次，进度永久冻结」。
+    playerService.positionChanged.add(_handlePositionChanged);
+    playerService.durationChanged.add(_handleDurationChanged);
+    playerService.playingChanged.add(_handlePlayingChanged);
+    playerService.bufferingChanged.add(_handleBufferingChanged);
+    playerService.bufferChanged.add(_handleBufferChanged);
+    playerService.rateChanged.add(_handleRateChanged);
+    playerService.audioBitrateChanged.add(_handleAudioBitrateChanged);
+    playerService.videoSizeChanged.add(_handleVideoSizeChanged);
+    playerService.subtitle.add(_handleSubtitleChanged);
+    playerService.error.add(_handlePlayerError);
+    playerService.completed.add(_handleCompleted);
 
-    playerService.onPlayingChanged = (playing) {
-      isPlaying = playing;
-      if (playing) {
-        playback.onOpenSucceeded();
-      }
-      _notifyUiImmediate();
-    };
-
-    playerService.onBufferingChanged = (buffering) {
-      isBuffering = buffering;
-      onBufferingChangedUi?.call(buffering);
-      _notifyUiImmediate();
-    };
-
-    playerService.onBufferChanged = (buffer) {
-      bufferedPosition = buffer;
-      final now = DateTime.now().millisecondsSinceEpoch;
-      cacheSpeed = _throughputEstimator.update(
-        buffer: buffer,
-        wallMs: now,
-        audioBitrateBps: audioBitrateBps,
-        videoWidth: videoWidth,
-        videoHeight: videoHeight,
-      );
-      _notifyUiThrottled();
-    };
-
-    playerService.onRateChanged = (rate) {
-      playbackSpeed = rate;
-      _notifyUiThrottled();
-    };
-
-    playerService.onAudioBitrateChanged = (bps) {
-      audioBitrateBps = bps;
-    };
-
-    playerService.onVideoSizeChanged = (w, h) {
-      if (w == null || h == null || w <= 0 || h <= 0) return;
-      videoWidth = w;
-      videoHeight = h;
-      videoRotate = playerService.videoRotate;
-      onVideoDimensionsChanged?.call(w, h);
-      _notifyUiThrottled();
-    };
-
-    playerService.onSubtitle = (lines) {
-      currentSubtitleText =
-          lines.map((s) => s.trim()).where((s) => s.isNotEmpty).join('\n');
-      if (showSubtitles) {
-        _notifyUiThrottled();
-      }
-    };
-
-    // 监听播放器错误
-    playerService.onError = (error) {
-      playerErrorMessage = error;
-      playbackErrorType = PlaybackErrorType.networkOrPlayer;
-      playback.onPlaybackError();
-      _notifyUiImmediate();
-    };
-
-    playerService.onCompleted = () {
-      if (playback.isPrematureComplete(duration)) {
-        debugPrint(
-          'Ignoring premature completed at '
-          '${playback.authoritativePosition.inSeconds}s / ${duration.inSeconds}s',
-        );
-        unawaited(_recoverFromDiscontinuity(playback.authoritativePosition));
-        return;
-      }
-      isPlaying = false;
-      playback.onPlaybackEnded(duration: duration);
-      if (duration > Duration.zero) {
-        position = playback.authoritativePosition;
-      }
-      onPlaybackEnded?.call();
+    playerService.onPlayerRecreated = () {
       _notifyUiImmediate();
     };
 
     unawaited(_syncBrightnessFromSystem());
+
+    // 心跳：稳态播放不打日志，崩在无 [Crash] 的原生崩溃时无法判断「活了多久」。
+    // 每 30s 记一次位置/时长/缓冲，下次崩溃日志末尾的时间戳即可定位存活时长与崩溃点。
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (_) => _heartbeat());
+  }
+
+  void _handlePositionChanged(Duration pos) {
+    if (_shouldIgnoreResumePositionReport(pos)) return;
+    // seek 期间 mpv 可能报告 seek 前的旧位置，此时若更新 authoritative
+    // 会导致 seek 完成后被误判为 discontinuity。因此 seeking 期间直接忽略。
+    if (playback.lifecycle == PlaybackLifecycle.seeking) return;
+    final action = playback.ingestPlayerPosition(pos, duration: duration);
+    switch (action) {
+      case PlayheadTickAction.accept:
+        position = pos;
+      case PlayheadTickAction.ignoreBackward:
+        break;
+      case PlayheadTickAction.discontinuity:
+        _scheduleDiscontinuityRecovery();
+    }
+    position = playback.authoritativePosition;
+    final total = duration;
+    if (total > Duration.zero) {
+      onPlaybackProgress?.call(playback.authoritativePosition, total);
+    }
+    _notifyUiThrottled();
+  }
+
+  void _handleDurationChanged(Duration duration) {
+    this.duration = duration;
+    if (duration > Duration.zero) {
+      playback.onOpenSucceeded();
+      _applyPendingResume(duration);
+    }
+    _notifyUiThrottled();
+  }
+
+  void _handlePlayingChanged(bool playing) {
+    isPlaying = playing;
+    if (playing) {
+      playback.onOpenSucceeded();
+    }
+    _notifyUiImmediate();
+  }
+
+  void _handleBufferingChanged(bool buffering) {
+    isBuffering = buffering;
+    onBufferingChangedUi?.call(buffering);
+    _notifyUiImmediate();
+  }
+
+  void _handleBufferChanged(Duration buffer) {
+    bufferedPosition = buffer;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    cacheSpeed = _throughputEstimator.update(
+      buffer: buffer,
+      wallMs: now,
+      audioBitrateBps: audioBitrateBps,
+      videoWidth: videoWidth,
+      videoHeight: videoHeight,
+    );
+    _notifyUiThrottled();
+  }
+
+  void _handleRateChanged(double rate) {
+    playbackSpeed = rate;
+    _notifyUiThrottled();
+  }
+
+  void _handleAudioBitrateChanged(double? bps) {
+    audioBitrateBps = bps;
+  }
+
+  void _handleVideoSizeChanged((int?, int?) size) {
+    final (w, h) = size;
+    if (w == null || h == null || w <= 0 || h <= 0) return;
+    videoWidth = w;
+    videoHeight = h;
+    videoRotate = playerService.videoRotate;
+    onVideoDimensionsChanged?.call(w, h);
+    _notifyUiThrottled();
+  }
+
+  void _handleSubtitleChanged(List<String> lines) {
+    currentSubtitleText =
+        lines.map((s) => s.trim()).where((s) => s.isNotEmpty).join('\n');
+    if (showSubtitles) {
+      _notifyUiThrottled();
+    }
+  }
+
+  /// HLS 开播期 mpv 常报「Cannot seek in this stream」（服务端未声明可 seek）。
+  /// 这类错误随后仍会正常起播，标记为致命错误会让生命周期进 error、心跳停摆。
+  static bool _isNonFatalSeekError(String error) {
+    final e = error.toLowerCase();
+    return e.contains('cannot seek') ||
+        e.contains('force-seekable') ||
+        e.contains('failed to seek');
+  }
+
+  void _handlePlayerError(String error) {
+    if (_isNonFatalSeekError(error)) {
+      // 续播 seek 失败已有 PlaybackStartSeekException 重试路径兜底，这里只记录。
+      DebugLog.log('Play', 'player seek 提示(非致命): $error');
+      return;
+    }
+    DebugLog.log('Play', 'player error: $error', flush: true);
+    playerErrorMessage = error;
+    // 磁力流（currentPlayUrl 是 `magnet-file://<index>`）中途断源时，
+    // mpv 只会抛一句底层错误。归类成 magnetFailed，UI 才会给
+    // 「自动重试结论 + 建议换源」的磁力卡片，而不是静默黑屏/直接断开。
+    final magnetStream = currentPlayUrl != null &&
+        MagnetEpisodeParser.isMagnetFileUrl(currentPlayUrl!);
+    playbackErrorType = magnetStream
+        ? PlaybackErrorType.magnetFailed
+        : PlaybackErrorType.networkOrPlayer;
+    // mpv 报错后 buffering 流事件可能停留在 true，缓冲遮罩会永久卡在
+    // 「Buffering… 已等待 0s」。错误即停止缓冲态，让错误 UI 露出。
+    isBuffering = false;
+    playback.onPlaybackError();
+    _notifyUiImmediate();
+  }
+
+  void _handleCompleted(int _) {
+    if (playback.isPrematureComplete(duration)) {
+      debugPrint(
+        'Ignoring premature completed at '
+        '${playback.authoritativePosition.inSeconds}s / ${duration.inSeconds}s',
+      );
+      unawaited(_recoverFromDiscontinuity(playback.authoritativePosition));
+      return;
+    }
+    isPlaying = false;
+    playback.onPlaybackEnded(duration: duration);
+    if (duration > Duration.zero) {
+      position = playback.authoritativePosition;
+    }
+    onPlaybackEnded?.call();
+    _notifyUiImmediate();
+  }
+
+  void _heartbeat() {
+    if (_disposing) return;
+    final lc = playback.lifecycle;
+    if (lc != PlaybackLifecycle.playing && lc != PlaybackLifecycle.paused) return;
+    if (duration <= Duration.zero) return;
+    DebugLog.log(
+      'Play',
+      'heartbeat pos=${position.inSeconds}s dur=${duration.inSeconds}s '
+          'buffered=${bufferedPosition.inSeconds}s playing=$isPlaying',
+    );
+    // 内存诊断：记录进程 RSS 与系统可用内存，崩溃日志可据此判断是否被系统低内存(LMK)杀死。
+    _logMemory();
+    // 记录**实际生效**的渲染后端 / 硬解档位。
+    // 2026-10-22 教训：删掉「自动换后端」机制时把这条记录也一起删没了，
+    // 于是出事时根本看不出当时用的哪个 vo —— 现在接回 probeVideoOutput()，
+    // 它会写日志 + 刷新 `last_vo.txt`（原生崩溃文件会附带）。
+    unawaited(playerService.probeVideoOutput());
+    // 帧率：与 [Res] 采样同一心跳，便于比对「泄漏 fd/s ≈ 送显帧率」
+    // （验证每送显一帧是否漏一个 fd，2026-10-23 fd 泄漏排查）。
+    unawaited(playerService.probeFrameRate());
+    // 存活标记：每次心跳刷新时间戳，供下次启动推断「是否正常退出」。
+    _writeAliveMarker();
+  }
+
+  static const MethodChannel _crashChannel = MethodChannel('guanzi/crash');
+  bool _crashHandlerReasserted = false;
+
+  /// 播放器后端（media_kit/libmpv）初始化后重新断言原生崩溃处理器，抢回注册权。
+  Future<void> _reassertCrashHandler() async {
+    if (_crashHandlerReasserted) return;
+    _crashHandlerReasserted = true;
+    try {
+      await _crashChannel.invokeMethod<void>('reassert');
+      DebugLog.log('Crash', 'native crash handler re-asserted after player init', flush: true);
+    } catch (_) {
+      // 通道未就绪时忽略，下次不再尝试
+    }
+  }
+
+  /// 内存/fd 诊断采样：每次心跳（30s）记一行，长时间播放后日志即构成
+  /// 「RSS 曲线 + fd 曲线」，可用于判断崩溃前是内存增长（LMK/原生 OOM）
+  /// 还是 fd 泄漏（epoll 撑满 SIGABRT）。
+  ///
+  /// - rss：[ProcessInfo.currentRss] 全平台可用（Web 除外）；
+  /// - fd：仅 Linux/Android 有 `/proc/self/fd`；
+  /// - memAvail：系统可用内存（LMK 判据），同为 /proc 平台。
+  void _logMemory() {
+    if (kIsWeb) return; // dart:io 在 Web 为抛桩，禁止触达
+    try {
+      final rssMb = ProcessInfo.currentRss / 1024 / 1024;
+      var extra = '';
+      try {
+        final fdCount = Directory('/proc/self/fd').listSync().length - 2;
+        extra += ' fd=$fdCount';
+      } catch (_) {}
+      try {
+        final mi = File('/proc/meminfo').readAsStringSync();
+        final avail = mi
+            .split('\n')
+            .where((l) => l.startsWith('MemAvailable'))
+            .join(' ')
+            .trim();
+        if (avail.isNotEmpty) extra += ' $avail';
+      } catch (_) {}
+      DebugLog.log('Mem', 'rss=${rssMb.toStringAsFixed(1)}MB$extra');
+    } catch (_) {}
+  }
+
+  void _writeAliveMarker() {
+    try {
+      final f = File('${DebugLog.directoryPath}${Platform.pathSeparator}alive_marker.txt');
+      f.writeAsStringSync('${DateTime.now().millisecondsSinceEpoch}\n');
+    } catch (_) {}
   }
 
   /// 打开媒体前取走待恢复进度（与线路/集一致时）；返回 null 表示从 0 起播。
@@ -569,6 +760,8 @@ class DetailPlayer {
 
   Future<void> _confirmResumeStart(Duration target) async {
     await Future<void>.delayed(const Duration(milliseconds: 900));
+    // 用户已主动 seek 到别处时 seek() 会清掉 _resumeSeekTarget：不再纠偏，
+    // 避免把用户拖回旧续播点（27→36 分弹回的根因）。
     if (_resumeSeekTarget == null) return;
     if ((position - target).inMilliseconds.abs() < 4000 ||
         position >= target - const Duration(seconds: 5)) {
@@ -590,7 +783,29 @@ class DetailPlayer {
   }
 
   void _scheduleDiscontinuityRecovery() {
-    if (isApplyingResume || isOpeningMedia) return;
+    _syncDiscontinuityRecoveryGeneration();
+    if (_discontinuityRecovery.disabled) return;
+    if (isApplyingResume || isOpeningMedia) {
+      DebugLog.log(
+        'Playhead',
+        'discontinuity 跳过: isApplyingResume=$isApplyingResume '
+            'isOpeningMedia=$isOpeningMedia',
+      );
+      return;
+    }
+    // 开播 settle 窗口：play(startAt:) 已负责把位置 seek 到续播点，开播前若干秒位置
+    // 从 0 爬升是正常现象，误判成 discontinuity 会补发精确 seek，在代理 HLS 上易引发
+    // mpv 原生崩溃（实测 v1.0.28 13:09 续播 1758s 崩在此）。窗口内直接跳过纠偏。
+    final openedAt = playback.session.openedAt;
+    if (openedAt != null &&
+        DateTime.now().difference(openedAt) < const Duration(seconds: 20)) {
+      DebugLog.log(
+        'Playhead',
+        'discontinuity 跳过(开播 settle 窗口 20s): '
+            'openedAt=${openedAt.toIso8601String()}',
+      );
+      return;
+    }
     final target = playback.authoritativePosition;
     if (target <= const Duration(seconds: 20)) return;
 
@@ -605,21 +820,77 @@ class DetailPlayer {
       if (_disposing) return;
       if (playback.authoritativePosition > const Duration(seconds: 15) &&
           playback.lastPlayerReport > const Duration(seconds: 15)) {
+        // 纠偏早退条件：两边都已在有效区间，说明播放器在「正常播放」。
+        // 但若两者严重脱节（实测续播点失效：权威 2944s、实际从头 20s），
+        // 就不能再纠偏（seek 落空），必须承认播放器实际上报，否则进度条
+        // 会永远停在失效的旧续播点上（画面在开头、进度条显示 49:04）。
+        final lastSeek = _lastExplicitSeekAt;
+        final recentlySought = lastSeek != null &&
+            DateTime.now().difference(lastSeek) <
+                kAdoptGuardAfterExplicitSeek;
+        if (!recentlySought &&
+            playback.adoptPlayerPosition(
+              playback.lastPlayerReport,
+              tolerance: kAuthoritativeDriftTolerance,
+            )) {
+          DebugLog.log(
+            'Playhead',
+            '进度权威值与实际上报脱节，已对齐 '
+            '权威→${playback.authoritativePosition.inSeconds}s',
+            flush: true,
+          );
+          position = playback.authoritativePosition;
+          _notifyUiImmediate();
+        }
         return;
       }
+      DebugLog.log(
+        'Playhead',
+        'discontinuity 触发恢复 seek -> target=${target.inSeconds}s',
+        flush: true,
+      );
       unawaited(_recoverFromDiscontinuity(playback.authoritativePosition));
     });
   }
 
   Future<void> _recoverFromDiscontinuity(Duration target) async {
+    _syncDiscontinuityRecoveryGeneration();
+    if (_discontinuityRecovery.disabled) return;
     if (_discontinuityRecoveryInFlight || _disposing) return;
     if (target <= const Duration(seconds: 20)) return;
+    // 防抖：任何触发路径（discontinuity tick / premature complete）都受此约束，
+    // 避免解码报错等引发「报错→纠偏 seek→再报错」死循环（实测 1 秒内反复 12 次，
+    // 拖垮播放器原生层导致闪退）。根因修复见 hls_ad_filter 的 DISCONTINUITY 重建。
+    final now = DateTime.now();
+    final lastRecovery = _lastDiscontinuityRecoveryAt;
+    if (lastRecovery != null &&
+        now.difference(lastRecovery) < const Duration(seconds: 8)) {
+      return;
+    }
     _discontinuityRecoveryInFlight = true;
     _lastDiscontinuityRecoveryAt = DateTime.now();
+    DebugLog.log(
+      'Playhead',
+      'recover seek 执行 target=${target.inSeconds}s',
+      flush: true,
+    );
     try {
       playback.onSeekStarted();
       await playerService.seekPrecise(target);
       if (_disposing) return;
+      // 落位校验：断网时 seek 不抛异常也不生效（流已死），必须等一小段看
+      // mpv 实际上报是否真的到了目标附近，否则会一直空转纠偏。
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      if (_disposing) return;
+      final landed = playback.lastPlayerReport;
+      if ((landed - target).abs() > const Duration(seconds: 10)) {
+        _registerDiscontinuityRecoveryFailure(
+          'seek 未落位 target=${target.inSeconds}s 实际=${landed.inSeconds}s',
+        );
+        playback.onSeekFinished();
+        return;
+      }
+      _discontinuityRecovery.recordSuccess();
       playback.confirmExplicitPosition(target, duration: duration);
       position = playback.authoritativePosition;
       playback.onSeekFinished();
@@ -629,10 +900,40 @@ class DetailPlayer {
       _notifyUiThrottled();
     } catch (e) {
       debugPrint('discontinuity recovery seek failed: $e');
+      DebugLog.log('Playhead', 'recover seek 失败: $e', flush: true);
+      _registerDiscontinuityRecoveryFailure('seek 异常 $e');
       playback.onSeekFinished();
     } finally {
       _discontinuityRecoveryInFlight = false;
     }
+  }
+
+  /// 纠偏失败计数；达到上限则放弃纠偏，并把权威进度对齐到播放器实际上报，
+  /// 避免进度条永远停在纠偏不过去的位置。
+  void _registerDiscontinuityRecoveryFailure(String reason) {
+    final giveUp = _discontinuityRecovery.recordFailure();
+    DebugLog.log(
+      'Playhead',
+      '纠偏失败 ${_discontinuityRecovery.failures}/'
+      '$kMaxDiscontinuityRecoveryAttempts: $reason',
+      flush: true,
+    );
+    if (!giveUp) return;
+    final adopted = playback.adoptPlayerPosition(
+      playback.lastPlayerReport,
+      tolerance: const Duration(seconds: 10),
+    );
+    DebugLog.log(
+      'Playhead',
+      '纠偏连续失败达上限，停止纠偏并对齐实际位置'
+      '(adopted=$adopted 实际=${playback.lastPlayerReport.inSeconds}s)',
+      flush: true,
+    );
+  }
+
+  /// 换集/重开媒体后复位纠偏状态（新的一次 open 值得重新尝试纠偏）。
+  void _syncDiscontinuityRecoveryGeneration() {
+    _discontinuityRecovery.syncGeneration(playback.openGeneration);
   }
 
   bool _shouldIgnoreResumePositionReport(Duration pos) {
@@ -687,6 +988,9 @@ class DetailPlayer {
     pendingResumePosition = null;
     const maxAttempts = 6;
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      // 纠偏期间用户已主动 seek 到别处（seek() 清了 target）：立即停止，
+      // 否则会把用户反复拽回旧续播点。
+      if (_resumeSeekTarget != target) return;
       await playerService.seekPrecise(target);
       await Future<void>.delayed(Duration(milliseconds: 220 + attempt * 180));
       final delta = (position - target).inMilliseconds.abs();
@@ -727,18 +1031,85 @@ class DetailPlayer {
     await playerService.pause();
   }
 
-  /// 恢复播放
+  /// 恢复播放。
+  ///
+  /// 若处于「缓冲耗尽停滞」（断网耗尽缓冲后 mpv 放弃读流，见 [isStalledExhausted]），
+  /// 单纯 `player.play()` 唤不醒——必须按当前进度重新 open 媒体流。
+  /// 否则用户表现为「网络恢复后怎么点播放都没反应」。
   Future<void> resume() async {
+    if (shouldReloadInsteadOfResume(
+      stalled: isStalledExhausted,
+      lifecycle: playback.lifecycle,
+    )) {
+      await reloadStalled();
+      return;
+    }
     await playerService.resume();
+  }
+
+  /// 缓冲耗尽且已停止推进：缓存前沿与播放头贴合、又没有在缓冲中。
+  ///
+  /// 与「用户主动暂停」的区别：暂停时通常还有未播完的缓存（差值远大于 1.5s）；
+  /// 停滞时缓存已用尽且 mpv 不再拉流（`playing=false`、位置不动）。
+  bool get isStalledExhausted => isBufferExhaustedStall(
+        duration: duration,
+        position: playback.lastPlayerReport,
+        bufferedPosition: bufferedPosition,
+        isPlaying: isPlaying,
+        isBuffering: isBuffering,
+      );
+
+  /// 停滞软重载：按当前权威进度重新拉流（不跳片头、不丢进度）。
+  Future<void> reloadStalled() async {
+    final url = currentOpenUrl ?? activeStreamUrl;
+    if (url == null || url.isEmpty) {
+      await playerService.resume();
+      return;
+    }
+    final at = resolveReloadStartAt(
+      authoritative: playback.authoritativePosition,
+      reported: playback.lastPlayerReport,
+    );
+    final plan = playback.prepareOpen(
+      isNewEpisode: false,
+      explicitPreserve: at,
+      knownDuration: duration,
+    );
+    final generation = plan.generation;
+    DebugLog.log(
+      'Play',
+      '缓冲耗尽停滞 → 软重载 startAt=${at.inSeconds}s',
+      flush: true,
+    );
+    try {
+      await playerService.play(url, startAt: plan.startAt);
+    } catch (e) {
+      if (playback.openGeneration != generation) return;
+      DebugLog.log('Play', '软重载 seek 失败，回退从头: $e', flush: true);
+      // 续播点拉流失败不能就此卡死：退化为从 0 重开，至少把画面救回来。
+      await playerService.play(url);
+    }
   }
 
   /// 跳转到指定位置
   Future<void> seek(Duration position) async {
+    // 用户主动 seek（进度条拖动 / 滑动手势 / 续播自身）：先取消「续播点待确认」
+    // 纠偏。否则 900ms 后的 _confirmResumeStart 会把用户的移动误判成「续播未
+    // 生效」，反复 seek 回旧续播点——表现为拖回前段立刻被弹回续播点
+    // （2026-10-18《爱情公寓》S1E1 27→36 分用户反馈）。
+    _cancelPendingResumeConfirm();
+    _lastExplicitSeekAt = DateTime.now();
     playback.onSeekStarted();
     playback.confirmExplicitPosition(position, duration: duration);
     this.position = playback.authoritativePosition;
     await playerService.seek(position);
     playback.onSeekFinished();
+  }
+
+  /// 取消续播点的延迟确认/纠偏（用户已主动 seek 时调用）。
+  void _cancelPendingResumeConfirm() {
+    isApplyingResume = false;
+    _resumeSeekTarget = null;
   }
 
   /// 调整音量
@@ -840,7 +1211,12 @@ class DetailPlayer {
     retryCount = 0;
     torrentStep = 0;
     torrentMessage = '';
+    torrentStage = 0;
+    torrentAttempt = 1;
+    magnetRetrying = false;
     magnetSourcePreparing = false;
+    magnetWaitingFirstFrame = false;
+    magnetNoFrameFailure = false;
     lastMagnetUri = '';
   }
 
@@ -853,17 +1229,19 @@ class DetailPlayer {
   }
 
   void _clearPlayerServiceCallbacks() {
-    playerService.onPositionChanged = null;
-    playerService.onDurationChanged = null;
-    playerService.onPlayingChanged = null;
-    playerService.onBufferingChanged = null;
-    playerService.onBufferChanged = null;
-    playerService.onRateChanged = null;
-    playerService.onAudioBitrateChanged = null;
-    playerService.onVideoSizeChanged = null;
-    playerService.onSubtitle = null;
-    playerService.onError = null;
-    playerService.onCompleted = null;
+    // 事件通道是多播：只摘掉本页注册的监听，不影响其它消费者。
+    playerService.positionChanged.remove(_handlePositionChanged);
+    playerService.durationChanged.remove(_handleDurationChanged);
+    playerService.playingChanged.remove(_handlePlayingChanged);
+    playerService.bufferingChanged.remove(_handleBufferingChanged);
+    playerService.bufferChanged.remove(_handleBufferChanged);
+    playerService.rateChanged.remove(_handleRateChanged);
+    playerService.audioBitrateChanged.remove(_handleAudioBitrateChanged);
+    playerService.videoSizeChanged.remove(_handleVideoSizeChanged);
+    playerService.subtitle.remove(_handleSubtitleChanged);
+    playerService.error.remove(_handlePlayerError);
+    playerService.completed.remove(_handleCompleted);
+    playerService.onPlayerRecreated = null;
   }
 
   /// 释放资源
@@ -884,15 +1262,30 @@ class DetailPlayer {
     progressPersistTimer?.cancel();
     lockChromeHideTimer?.cancel();
     _discontinuityRecoveryTimer?.cancel();
+    _heartbeatTimer?.cancel();
+
+    // 必须摘掉 lifecycleNotifier 的监听：监听闭包捕获了本对象，
+    // 不摘会让整个详情页对象图（含 coordinator / authority）被 ValueNotifier 持有，
+    // 每次进出详情页泄漏一份；若离开时正处于 opening 状态，
+    // _openElapsedTicker 的 200ms 定时器还会继续跑。
+    disposeLifecycleListener();
 
     _clearPlayerServiceCallbacks();
+
+    // 释放 notifier 本身（UI 侧通过 ValueListenableBuilder 绑定过）。
+    playerLifecycleNotifier.dispose();
+    openElapsedSeconds.dispose();
+    playback.dispose();
+
     unawaited(_releasePlayerResources());
   }
 
   Future<void> _releasePlayerResources() async {
     await playerService.stop();
     await torrentService.stop();
-    await playerService.dispose();
+    // 只释放播放器**实例**（mpv 内存/fd）；PlayerService 是单例，
+    // 严禁在此 dispose——_disposed 无复位路径，会令后续播放全部静默失败。
+    await playerService.releasePlayerInstance();
     _initializeFuture = null;
   }
 }

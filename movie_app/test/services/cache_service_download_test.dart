@@ -54,6 +54,77 @@ void main() {
     });
   });
 
+  // connectivity_plus 7.x 改为返回「全部可用网络类型」列表，本组锁定折算契约：
+  // 只要有 WiFi 就算 WiFi（双网卡/热点并存是常态），空列表视为断网。
+  group('CacheService.representativeConnectivity', () {
+    test('treats any list containing wifi as wifi', () {
+      expect(
+        CacheService.representativeConnectivity(const [
+          ConnectivityResult.mobile,
+          ConnectivityResult.wifi,
+        ]),
+        ConnectivityResult.wifi,
+      );
+      expect(
+        CacheService.representativeConnectivity(const [
+          ConnectivityResult.wifi,
+        ]),
+        ConnectivityResult.wifi,
+      );
+    });
+
+    test('treats empty list and none-only list as offline', () {
+      expect(
+        CacheService.representativeConnectivity(const []),
+        ConnectivityResult.none,
+      );
+      expect(
+        CacheService.representativeConnectivity(const [
+          ConnectivityResult.none,
+        ]),
+        ConnectivityResult.none,
+      );
+    });
+
+    test('falls back to a non-wifi type in stable priority order', () {
+      expect(
+        CacheService.representativeConnectivity(const [
+          ConnectivityResult.mobile,
+          ConnectivityResult.ethernet,
+        ]),
+        ConnectivityResult.ethernet,
+      );
+      expect(
+        CacheService.representativeConnectivity(const [
+          ConnectivityResult.mobile,
+        ]),
+        ConnectivityResult.mobile,
+      );
+      expect(
+        CacheService.representativeConnectivity(const [
+          ConnectivityResult.vpn,
+        ]),
+        ConnectivityResult.vpn,
+      );
+    });
+
+    // 契约级断言：有 WiFi 时「仅 WiFi 下载」必须放行。
+    // 摘掉"有 WiFi 即算 WiFi"这条规则，此用例会变红。
+    test('a dual-network device still passes the onlyWifi gate', () {
+      final representative = CacheService.representativeConnectivity(const [
+        ConnectivityResult.mobile,
+        ConnectivityResult.wifi,
+      ]);
+      expect(
+        CacheService.connectivityAllowsDownload(
+          result: representative,
+          onlyWifi: true,
+        ),
+        isTrue,
+      );
+    });
+  });
+
   group('CacheService.startDownload automation', () {
     late Directory tempDir;
     late InMemoryCacheItemStore store;
@@ -71,7 +142,7 @@ void main() {
 
     CacheService buildService({
       Dio? dio,
-      Future<ConnectivityResult> Function()? connectivityChecker,
+      Future<List<ConnectivityResult>> Function()? connectivityChecker,
       Future<M3u8MediaPlaylist> Function(String url, {String? referer})?
           m3u8Override,
     }) {
@@ -79,8 +150,8 @@ void main() {
         store: store,
         cacheDirectory: tempDir.path,
         downloadDio: dio,
-        connectivityChecker:
-            connectivityChecker ?? () async => ConnectivityResult.wifi,
+        connectivityChecker: connectivityChecker ??
+            () async => const [ConnectivityResult.wifi],
         m3u8ResolveOverride: m3u8Override,
       );
     }
@@ -119,7 +190,7 @@ void main() {
 
     test('returns false on mobile data when onlyWifi enabled', () async {
       final service = buildService(
-        connectivityChecker: () async => ConnectivityResult.mobile,
+        connectivityChecker: () async => const [ConnectivityResult.mobile],
       );
       await service.setOnlyWifi(true);
       await seedTask(id: 'c1', url: 'https://cdn.example.com/a.mp4');

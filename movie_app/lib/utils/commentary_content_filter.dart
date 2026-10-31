@@ -5,13 +5,12 @@ import 'package:movie_app/models/torrent_info.dart';
 class CommentaryContentFilter {
   CommentaryContentFilter._();
 
-  static final RegExp _pattern = RegExp(
-    r'影视解说|电影解说|剧集解说|动漫解说|综艺解说|纪录片解说|'
-    r'解说版|解说合集|'
-    r'[【\[\(（]解说[】\]\)）]|'
-    r'解说[\s\-_·:|]|^解说',
-    caseSensitive: false,
-  );
+  /// 只要出现「解说」二字就判定为非正片（2026-10-28 收紧）。
+  ///
+  /// 原来逐个枚举 `电影解说 / 影视解说 / 解说版 / 解说合集 …`，实测采集站
+  /// 的命名太杂（`功夫解说全集`、`XX 第1集解说`、`[解说]`），枚举永远漏。
+  /// 正常影视片名里几乎不会出现「解说」，宁可多杀。
+  static final RegExp _pattern = RegExp(r'解说', caseSensitive: false);
 
   static final RegExp _extraPattern = RegExp(
     r'吐槽解说|拉片解说|拆电影|几分钟看完|分钟看完|x分钟看完|'

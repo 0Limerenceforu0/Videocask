@@ -308,7 +308,7 @@ class _LoginPageState extends State<LoginPage>
         const SizedBox(height: 12),
         // APP名称
         Text(
-          '高清影视',
+          '罐子',
           style: theme.textTheme.headlineSmall?.copyWith(
             fontWeight: FontWeight.bold,
             color: theme.colorScheme.onSurface,

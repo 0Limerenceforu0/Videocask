@@ -73,7 +73,10 @@ class PlayheadAuthority {
 
   bool _isSuspiciousBackward(Duration reported) {
     if (_authoritative <= const Duration(seconds: 20)) return false;
-    if (reported > const Duration(seconds: 15)) return false;
+    // 注意：不要用「reported 接近 0 就豁免」来避免误判 —— 那样会漏掉真实的
+    // 流重连（看了很久后 mpv 位置归零），反而导致续播/播放卡死。
+    // 主动 seek / 续播的正确豁免靠两条：① seek 一律走 DetailPlaybackCoordinator
+    // 并 confirmExplicitPosition；② lifecycle == seeking 期间忽略 position 报告。
     return _authoritative - reported > const Duration(seconds: 20);
   }
 

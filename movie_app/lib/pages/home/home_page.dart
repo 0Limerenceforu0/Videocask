@@ -112,11 +112,15 @@ class _HomePageState extends State<HomePage>
     final movieProvider = context.read<MovieProvider>();
     if (!movieProvider.isLoadingMore) {
       if (_selectedCategory.isNotEmpty) {
+        // 🔴 mergeSources 必须传（2026-10-21）：不传则 provider 内 enabled
+        // 回退为空列表、续页退回单源，与多源合并的首屏口径不一致 →「滚着
+        // 滚着列表全部切换」。
         movieProvider.loadCategoryMovies(
           category: _selectedCategory,
           region: _categoryRegionParam(),
           genre: _categoryGenreParam(),
           refresh: false,
+          mergeSources: context.read<SourceProvider>().enabledSources,
         );
       } else {
         movieProvider.loadMoreHome();
@@ -127,6 +131,34 @@ class _HomePageState extends State<HomePage>
   String _categoryRegionParam() => _filterRegion == '全部' ? '' : _filterRegion;
 
   String _categoryGenreParam() => _filterGenre == '全部' ? '' : _filterGenre;
+
+  /// 类型 / 地区切换：对已加载的分类列表做本地过滤，点完立刻见效。
+  ///
+  /// 采集站的 `ac=detail` 会忽略 `class` / `area` 参数，靠服务端筛是筛不动的。
+  void _applyCategoryFilterLocally() {
+    if (_selectedCategory.isEmpty) return;
+    final provider = context.read<MovieProvider>();
+    // 动态词表随已加载数据变化：已选词若不在当前可用词表里，必须回退到「全部」，
+    // 否则会出现「chip 悬空选中」——UI 显示选着某个词，筛选却按另一个词在跑。
+    final normalized = provider.normalizeSelectedFilters(
+      genre: _filterGenre,
+      region: _filterRegion,
+    );
+    if (normalized.genre != _filterGenre ||
+        normalized.region != _filterRegion) {
+      setState(() {
+        _filterGenre = normalized.genre;
+        _filterRegion = normalized.region;
+      });
+    }
+    provider.setCategoryFilter(
+      genre: normalized.genre,
+      region: normalized.region,
+    );
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(0);
+    }
+  }
 
   void _reloadCategoryFromFilters() {
     if (_selectedCategory.isEmpty) return;
@@ -201,8 +233,19 @@ class _HomePageState extends State<HomePage>
     // 记录当前源ID
     _currentSourceId = newSourceId;
 
-    // 加载首页数据
-    await movieProvider.loadHomeData();
+    // 换源后重新取数：类目 Tab 走分类列表（并派生分区），推荐 Tab 走全站首页。
+    if (_selectedCategory.isEmpty) {
+      await movieProvider.loadHomeData();
+    } else {
+      await movieProvider.loadCategoryMovies(
+        category: _selectedCategory,
+        region: '',
+        genre: '',
+        refresh: true,
+        mergeSources: context.read<SourceProvider>().enabledSources,
+      );
+      movieProvider.deriveHomeSectionsFromCategory();
+    }
     _hasLoaded = true;
 
     // 检查收藏影片的更新
@@ -341,11 +384,15 @@ class _HomePageState extends State<HomePage>
               borderRadius: BorderRadius.circular(4),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-                child: Text(
-                  l10n.homeTitleRecommend,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+                // 2026-10-28 用户反馈：左上角「推荐」文字和下方分类 Tab 的
+                // 「推荐」重名，看不出这是「回首页」的品牌入口；随后又要求
+                // 用**应用自己的图标**而不是随便一个 Material 图标。
+                // `assets/images/app_icon.png` 就是 launcher 图标的副本。
+                child: Image.asset(
+                  'assets/images/app_icon.png',
+                  width: 28,
+                  height: 28,
+                  filterQuality: FilterQuality.medium,
                 ),
               ),
             ),
@@ -467,20 +514,42 @@ class _HomePageState extends State<HomePage>
       _filterRegion = '全部';
     });
     _syncCategoryTabToSelection();
+    // 切 Tab 一律回到「精选」模式：只拉前 N 个子类，其余点小分类 chip 再拉。
+    _loadCategoryTab(category);
+  }
 
+  /// 加载类目 Tab 数据（切 Tab 与点子分类 chip 共用）。
+  ///
+  /// [subClassId] 非空 = 只拉该子类（用户点了「小分类」chip）；
+  /// [subClassAll] = 用户显式要「全部」，展开全部子类（请求量大，慎用）；
+  /// 都不传 = 精选模式，只拉前 `ApiService.defaultSubClassCount` 个子类 ——
+  /// 这是「最小代价」的关键：实测全展开一次切 Tab ≈ 60 个 961KB 请求。
+  void _loadCategoryTab(
+    String category, {
+    int? subClassId,
+    bool subClassAll = false,
+  }) {
     final movieProvider = context.read<MovieProvider>();
     final mergeSources = context.read<SourceProvider>().enabledSources;
     Future<void> run() async {
-      if (!movieProvider.categoriesLoaded) {
-        await movieProvider.loadCategories();
-      }
-      await movieProvider.loadCategoryMovies(
+      // 分类列表（唯一数据源）：轮播与各分区都从它派生，避免重复拉取。
+      // ⚠️ 不要再调 `loadHomeData(category:)` —— 那是「每个子类各拉 5 页」，
+      // 与分类列表叠加会让单次切 Tab 打出上百个请求（实测 343 个），必被限流。
+      final pending = movieProvider.loadCategoryMovies(
         category: category,
         region: '',
         genre: '',
         refresh: true,
+        subClassId: subClassId,
+        subClassAll: subClassAll,
         mergeSources: mergeSources,
       );
+      // loadCategoryMovies 的同步段已清空 `_categoryMovies`；立刻派生一次，
+      // 把上一个类目的轮播先清掉 —— 否则新数据到达前这几秒 banner 仍是上个
+      // 类目的内容（用户截图「动漫 Tab 顶部是剧集简介」有这个窗口期的份）。
+      movieProvider.deriveHomeSectionsFromCategory();
+      await pending;
+      movieProvider.deriveHomeSectionsFromCategory();
     }
 
     run();
@@ -491,7 +560,24 @@ class _HomePageState extends State<HomePage>
     });
   }
 
-  /// 宽屏顶栏品牌（高清影视）即首页：清空分类筛选并回到推荐态。
+  /// 点「小分类」chip：只拉选中的子类（或精选 / 全部）。
+  ///
+  /// 同时重置类型/地区筛选 —— 子类本身就是最细的维度，叠加筛选容易得到空列表。
+  void _selectSubClass(
+      {int? subClassId, bool featured = false, bool all = false}) {
+    if (_selectedCategory.isEmpty) return;
+    setState(() {
+      _filterGenre = '全部';
+      _filterRegion = '全部';
+    });
+    _loadCategoryTab(
+      _selectedCategory,
+      subClassId: featured ? null : subClassId,
+      subClassAll: all,
+    );
+  }
+
+  /// 宽屏顶栏品牌（罐子）即首页：清空分类筛选并回到推荐态。
   Future<void> _onBrandTapHome() async {
     setState(() {
       _selectedCategory = '';
@@ -523,7 +609,7 @@ class _HomePageState extends State<HomePage>
         length: AppConstants.categories.length + 1,
         vsync: this,
       );
-      // 设置初始选中索引
+      // 设置初始选中索引（0=推荐, 1..N=分类）
       if (_selectedCategory.isNotEmpty) {
         final idx = AppConstants.categories.indexOf(_selectedCategory);
         if (idx >= 0) {
@@ -830,36 +916,111 @@ class _HomePageState extends State<HomePage>
   Widget _buildCategoryFilterBand(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
     final channelKind = _channelKindForHomeCategory(_selectedCategory);
+    final movieProvider = context.watch<MovieProvider>();
 
-    return CategoryGenreRegionFilterBand(
-      category: _selectedCategory,
-      selectedGenre: _filterGenre,
-      selectedRegion: _filterRegion,
-      onGenreSelected: (v) {
-        if (v == _filterGenre) return;
-        setState(() => _filterGenre = v);
-        _reloadCategoryFromFilters();
-      },
-      onRegionSelected: (v) {
-        if (v == _filterRegion) return;
-        setState(() => _filterRegion = v);
-        _reloadCategoryFromFilters();
-      },
-      header: channelKind == null
-          ? null
-          : Align(
-              alignment: Alignment.centerRight,
-              child: Tooltip(
-                message: l10n.homeOpenDedicatedChannelTooltip,
-                child: TextButton.icon(
-                  icon:
-                      const Icon(Icons.dashboard_customize_outlined, size: 18),
-                  label: Text(l10n.homeOpenDedicatedChannel),
-                  onPressed: () =>
-                      AppRoutes.toChannelPortal(context, channelKind),
+    // 采集源的列表接口普遍不返回 `vod_class` / `vod_area`（2026-10-21 实测 lzi / ffzy
+    // 的 `ac=list` 只有 8 个字段，加 `h` 也无效），此时类型/地区筛选无法生效 ——
+    // 与其让用户以为「只有几条」，不如明说。
+    final filterSelected = _filterGenre != '全部' || _filterRegion != '全部';
+    final filterIneffective = filterSelected &&
+        movieProvider.categoryUnsupported == false &&
+        !movieProvider.categoryHasFilterMetadata;
+
+    // 「小分类」行：切 Tab 只拉前 N 个子类（见 ApiService.defaultSubClassCount），
+    // 点这里按需只拉选中的子类 —— 一次切 Tab 从 ~60 个 961KB 请求降到 ~15 个。
+    final subClasses = movieProvider.categorySubClasses;
+    final selectedSubClassId = movieProvider.selectedSubClassId;
+    String selectedSubClass = CategoryGenreRegionFilterBand.kSubClassFeatured;
+    if (movieProvider.subClassAll) {
+      selectedSubClass = CategoryGenreRegionFilterBand.kSubClassAll;
+    } else if (selectedSubClassId != null) {
+      for (final n in subClasses) {
+        if (n.id == selectedSubClassId) {
+          selectedSubClass = n.name;
+          break;
+        }
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        CategoryGenreRegionFilterBand(
+          category: _selectedCategory,
+          selectedGenre: _filterGenre,
+          selectedRegion: _filterRegion,
+          genreOptions: movieProvider.categoryGenreOptions,
+          regionOptions: movieProvider.categoryRegionOptions,
+          subClassItems: subClasses.map((n) => n.name).toList(growable: false),
+          selectedSubClass: selectedSubClass,
+          onSubClassSelected: (v) {
+            if (v == CategoryGenreRegionFilterBand.kSubClassFeatured) {
+              if (movieProvider.subClassAll || selectedSubClassId != null) {
+                _selectSubClass(featured: true);
+              }
+              return;
+            }
+            if (v == CategoryGenreRegionFilterBand.kSubClassAll) {
+              if (!movieProvider.subClassAll) _selectSubClass(all: true);
+              return;
+            }
+            for (final n in subClasses) {
+              if (n.name == v && n.id != selectedSubClassId) {
+                _selectSubClass(subClassId: n.id);
+                break;
+              }
+            }
+          },
+          onGenreSelected: (v) {
+            if (v == _filterGenre) return;
+            setState(() => _filterGenre = v);
+            _applyCategoryFilterLocally();
+          },
+          onRegionSelected: (v) {
+            if (v == _filterRegion) return;
+            setState(() => _filterRegion = v);
+            _applyCategoryFilterLocally();
+          },
+          header: channelKind == null
+              ? null
+              : Align(
+                  alignment: Alignment.centerRight,
+                  child: Tooltip(
+                    message: l10n.homeOpenDedicatedChannelTooltip,
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.dashboard_customize_outlined,
+                          size: 18),
+                      label: Text(l10n.homeOpenDedicatedChannel),
+                      onPressed: () =>
+                          AppRoutes.toChannelPortal(context, channelKind),
+                    ),
+                  ),
                 ),
-              ),
+        ),
+        if (filterIneffective)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.info_outline,
+                  size: 15,
+                  color: Theme.of(context).hintColor,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    l10n.homeCategoryFilterUnavailable,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).hintColor,
+                    ),
+                  ),
+                ),
+              ],
             ),
+          ),
+      ],
     );
   }
 

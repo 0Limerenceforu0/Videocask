@@ -9,7 +9,7 @@ class AppLocalizationsEn extends AppLocalizations {
   AppLocalizationsEn([String locale = 'en']) : super(locale);
 
   @override
-  String get appTitle => 'Movie App';
+  String get appTitle => 'Guanzi';
 
   @override
   String get appInitLoading => 'Initializing…';
@@ -44,9 +44,6 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get detailMagnetSearchHint =>
       'Multi-source magnet results: IMDb/title/year match; Chinese title tag on English-named torrents.';
-
-  @override
-  String get detailOpenMagnetSearch => 'Open magnet search';
 
   @override
   String get detailRelated => 'Related';
@@ -98,6 +95,15 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get detailMagnetMetaRegion => 'Region';
+
+  @override
+  String get detailMagnetMetaGenre => 'Genre';
+
+  @override
+  String get detailMagnetDownload => 'Download';
+
+  @override
+  String get detailMagnetCopiedToast => 'Magnet link copied to clipboard';
 
   @override
   String get detailMagnetResourceSection => 'Torrent info';
@@ -252,9 +258,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get detailPlayerSubtitleBrowseOnline => 'Browse online subtitles…';
 
   @override
-  String get detailPlayerSubtitleLoading => 'Searching subtitles…';
-
-  @override
   String get detailPlayerSubtitleNone => 'No subtitles found';
 
   @override
@@ -321,7 +324,22 @@ class AppLocalizationsEn extends AppLocalizations {
   String get filterLabelGenre => 'Genre';
 
   @override
+  String get filterLabelSubClass => 'Category';
+
+  @override
   String get filterLabelRegion => 'Region';
+
+  @override
+  String get magnetSearchEmptyHint =>
+      'No magnet source returned results. The network may be unreachable or this title may not be indexed. Probe each source in Settings > Magnet search sources.';
+
+  @override
+  String get magnetSearchTimeoutHint =>
+      'Magnet search timed out. Check your network and try again.';
+
+  @override
+  String get magnetSearchFailedHint =>
+      'Magnet search failed. Check your network or magnet source settings.';
 
   @override
   String get navChannelMovies => 'Movies';
@@ -355,12 +373,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get categoryPortalModuleHighlights => 'Featured';
-
-  @override
-  String get categoryPortalModuleMorePicks => 'More picks';
-
-  @override
-  String get categoryPortalModuleKeepGoing => 'Keep exploring';
 
   @override
   String get categoryPortalModuleMore => 'More';
@@ -484,10 +496,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get searchOpenDetail => 'Open detail';
 
   @override
-  String get detailReplay => 'Replay';
-
-  @override
-  String get detailEpisodeFinished => 'This episode has finished';
+  String get searchMagnetChineseName => 'Chinese title';
 
   @override
   String detailHistoryOverlay(int episode, String percent) {
@@ -497,9 +506,6 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get detailLoadError =>
       'Could not load title info. Check your network or switch source in Source Manager.';
-
-  @override
-  String get detailBufferingMagnet => 'Loading magnet resource…';
 
   @override
   String get detailBufferingConnect => 'Connecting to stream…';
@@ -809,4 +815,207 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get settingsOnlyWifiCacheSubtitle =>
       'Pauses downloads on cellular; synced with cache manager';
+
+  @override
+  String get settingsHwDecodeMode => 'Hardware decode mode';
+
+  @override
+  String get settingsHwDecodeModeDesc =>
+      'Performance = zero-copy, most power-efficient but freezes/crashes on a few devices; Compatible = copy mode, most stable; Off = pure software fallback. Switch manually if incompatible; the app never auto-adjusts';
+
+  @override
+  String get settingsHwDecodeModeAuto => 'Auto (recommended)';
+
+  @override
+  String get settingsHwDecodeModeCopy => 'Compatible (hardware decode, copy)';
+
+  @override
+  String get settingsHwDecodeModeZeroCopy =>
+      'Performance (hardware decode, zero-copy)';
+
+  @override
+  String get settingsHwDecodeModeOff => 'Off (software decode)';
+
+  @override
+  String get settingsVideoOutputMode => 'Video output backend';
+
+  @override
+  String get settingsVideoOutputModeDesc =>
+      'The descriptor leak is fixed at the engine level; all three backends are leak-free. Switching mainly affects picture compatibility and features (subtitles/filters/screenshots). Only switch if rendering fails';
+
+  @override
+  String get settingsVoGpuNext => 'New renderer (recommended)';
+
+  @override
+  String get settingsVoGpuNextDesc =>
+      'Recommended default. GPU rendering (libplacebo), full features (subtitles/filters/screenshots work). A few GPUs may briefly black-screen on first launch; reopen once to recover. If it keeps black-screening, switch to \"Legacy renderer\"';
+
+  @override
+  String get settingsVoGpu => 'Legacy renderer (compatibility fallback)';
+
+  @override
+  String get settingsVoGpuDesc =>
+      'Traditional GPU rendering (mpv legacy GL path). Same leak-free bridge; use it as a fallback when \"New renderer\" black-screens on your device. Color/tone-mapping is less precise than the new one';
+
+  @override
+  String get settingsVoEmbed => 'Hardware passthrough (bypasses renderer)';
+
+  @override
+  String get settingsVoEmbedDesc =>
+      'Bypasses mpv renderer; system composites directly. Leak-free; cost: HW decode only (zero-copy), embedded subtitles/OSD/screenshots/filters all disabled, rotation/fullscreen may flicker, poor HDR/10bit support. Use only when the other two cannot show a picture';
+
+  @override
+  String get homeCategoryFilterUnavailable =>
+      'This source provides no genre/region data, so this filter has no effect';
+
+  @override
+  String get detailSwitchSource => 'Switch source';
+
+  @override
+  String get detailSwitchSourceSubtitle =>
+      'IDs differ across sites, so switching searches other sites by title';
+
+  @override
+  String get detailSwitchSourceSearching =>
+      'Searching other sources for this title…';
+
+  @override
+  String get detailSwitchSourceEmpty => 'No other source has this title';
+
+  @override
+  String get detailSwitchSourceExact => 'Same title & year';
+
+  @override
+  String get detailSwitchSourceFuzzy => 'Same title';
+
+  @override
+  String detailSwitchSourceEpisodes(int count) {
+    return '$count episodes';
+  }
+
+  @override
+  String detailSwitchSourceProgress(int done, int total) {
+    return 'Got results from $done/$total sources (still loading)';
+  }
+
+  @override
+  String detailRouteSheetCount(int count) {
+    return '$count routes';
+  }
+
+  @override
+  String get detailRouteSheetHint =>
+      'Pick the route to play; some sites offer several for one title';
+
+  @override
+  String get detailRouteSheetOnlyOne => 'This title has only 1 route here';
+
+  @override
+  String get detailRouteSheetOnlyOneHint =>
+      'This site offers just one route for this title.\nUse \"Switch source\" to look up the same title on other sites.';
+
+  @override
+  String get detailMagnetNoPeers => 'No reachable peers for this torrent';
+
+  @override
+  String get detailMagnetNoPeersHint =>
+      'The seeders may all be offline. Pick another torrent, or use the online route above.';
+
+  @override
+  String detailMagnetPaginationCount(String count) {
+    return '$count results';
+  }
+
+  @override
+  String detailMagnetPageSizeLabel(String size) {
+    return '$size per page';
+  }
+
+  @override
+  String get detailMagnetPrevPage => 'Previous page';
+
+  @override
+  String get detailMagnetNextPage => 'Next page';
+
+  @override
+  String get detailMagnetStageTitle => 'Magnet loading steps';
+
+  @override
+  String get detailMagnetStageInit => 'Starting P2P engine';
+
+  @override
+  String get detailMagnetStageMeta => 'Parsing torrent metadata';
+
+  @override
+  String get detailMagnetStagePeers => 'Connecting to peers';
+
+  @override
+  String get detailMagnetStagePickFile => 'Selecting video file';
+
+  @override
+  String get detailMagnetStageBuffer => 'Buffering first chunk';
+
+  @override
+  String get detailMagnetStageHandoff => 'Handing off to player';
+
+  @override
+  String get detailMagnetStageFailed => 'Connection failed';
+
+  @override
+  String detailMagnetAttemptLabel(String attempt) {
+    return 'Attempt $attempt';
+  }
+
+  @override
+  String detailMagnetStageProgress(String step, String total, String label) {
+    return 'Step $step/$total · $label';
+  }
+
+  @override
+  String detailMagnetAutoRetry(String attempt) {
+    return 'Can\'t connect — retrying automatically (attempt $attempt)…';
+  }
+
+  @override
+  String detailMagnetAutoRetryStage(String attempt, String stage) {
+    return 'Auto-retry #$attempt · $stage';
+  }
+
+  @override
+  String get detailMagnetEngineInitFailed => 'Failed to start the P2P engine';
+
+  @override
+  String get detailMagnetMetaTimeout =>
+      'Timed out: no peer returned the torrent metadata';
+
+  @override
+  String get detailMagnetNoData =>
+      'Timed out: no data downloaded within 45 seconds';
+
+  @override
+  String get detailMagnetWaitingFrame =>
+      'Connected — waiting for the first frame…';
+
+  @override
+  String get detailMagnetNoFrame =>
+      'Data is coming in, but the player can\'t decode any video (duration 0:00)';
+
+  @override
+  String get detailMagnetNoFrameNoData =>
+      'Peers connected, but no data is being sent (buffer stalled)';
+
+  @override
+  String get detailMagnetNoFrameHint =>
+      'This torrent connects but never produces a picture — pick another magnet, or use an online route.';
+
+  @override
+  String get detailMagnetExhaustedHint =>
+      'This torrent is unusable — pick another magnet, or use an online route.';
+
+  @override
+  String get detailMagnetStreamLostHint =>
+      'Playback stopped: the peers for this torrent may all be gone. Pick another magnet, or use an online route.';
+
+  @override
+  String get detailMagnetSwitchResource => 'Pick another';
 }

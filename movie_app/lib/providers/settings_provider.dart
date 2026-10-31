@@ -1,12 +1,20 @@
+import 'dart:io' show File;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../config/constants.dart';
 import '../config/magnet_source_catalog.dart';
 import '../models/magnet_source_config.dart';
 import '../services/storage_service.dart';
+import '../services/video_output_policy.dart';
 import '../services/cache_service.dart';
+import '../services/m3u8_playlist_resolver.dart';
 import '../services/subtitle_service.dart';
 import '../services/sync_service.dart';
 import '../services/webdav_service.dart';
+import '../services/hw_decode_policy.dart';
+import '../services/hw_decode_platform.dart';
+import '../services/debug_log.dart';
 
 /// 设置状态管理
 class SettingsProvider extends ChangeNotifier {
@@ -25,11 +33,57 @@ class SettingsProvider extends ChangeNotifier {
   /// 默认清晰度
   String get defaultQuality => _defaultQuality;
 
-  /// 硬件解码
+  /// 硬件解码总开关
+  ///
+  /// 默认**开启**：硬解是移动端省电与流畅度的关键，默认关闭等于让所有用户
+  /// 都在用 CPU 软解 1080p/4K。是否真的生效由用户根据机型自行决定，
+  /// App 不再自动改档。
   bool _hardwareDecode = true;
 
-  /// 硬件解码
+  /// 硬件解码总开关
   bool get hardwareDecode => _hardwareDecode;
+
+  /// 硬件解码档位键（空串 = 跟随平台默认）。
+  String _hwDecodeModeKey = '';
+
+  /// 实际生效的硬件解码档位。
+  ///
+  /// 综合总开关与档位设置得出；总开关关闭时恒为 [HwDecodeMode.disabled]。
+  HwDecodeMode get effectiveHwDecodeMode {
+    if (!_hardwareDecode) return HwDecodeMode.disabled;
+    final platform = detectHwDecodePlatform();
+    return _hwDecodeModeKey.isEmpty
+        ? defaultHwDecodeMode(platform)
+        : hwDecodeModeFromKey(_hwDecodeModeKey, platform: platform);
+  }
+
+  /// 硬件解码档位键（空串 = 跟随平台默认）。
+  String get hwDecodeModeKey => _hwDecodeModeKey;
+
+  /// 视频输出后端键（空串 = 跟随默认档位）。
+  String _videoOutputModeKey = '';
+
+  /// 实际生效的视频输出后端。
+  ///
+  /// 默认 `gpu-next`（新版渲染）。fd 泄漏已在引擎层通过「SurfaceTexture 桥接」统一
+  /// 修复，与 `--vo` 无关——三种后端都不漏句柄。App **不做任何自动切换**：
+  /// 个别 GPU（如 Adreno）下 `gpu-next` 可能短暂黑屏，此时由用户手动改档。
+  VideoOutputMode get effectiveVideoOutputMode => _videoOutputModeKey.isEmpty
+      ? defaultVideoOutputMode
+      : videoOutputModeFromKey(_videoOutputModeKey);
+
+  /// 视频输出后端键（空串 = 跟随默认档位）。
+  String get videoOutputModeKey => _videoOutputModeKey;
+
+  /// 设置视频输出后端（仅手动切换；App 不做自动回退）。
+  Future<void> setVideoOutputMode(VideoOutputMode mode) async {
+    _videoOutputModeKey = encodeVideoOutputMode(mode);
+    await _storage.saveSetting(
+      AppConstants.keyVideoOutputMode,
+      _videoOutputModeKey,
+    );
+    notifyListeners();
+  }
 
   /// 自动连播
   bool _autoPlayNext = true;
@@ -57,6 +111,13 @@ class SettingsProvider extends ChangeNotifier {
   bool _playbackPrefetch = true;
 
   bool get playbackPrefetch => _playbackPrefetch;
+
+  /// HLS 去广告总开关（默认开）
+  ///
+  /// 个别片源被误判删片（跳剧情）时，用户可整个关掉过滤回退直连。
+  bool _hlsAdFilter = true;
+
+  bool get hlsAdFilter => _hlsAdFilter;
 
   /// 仅WiFi缓存
   bool _onlyWifiCache = false;
@@ -174,8 +235,14 @@ class SettingsProvider extends ChangeNotifier {
         _storage.getSetting(AppConstants.keyDefaultQuality) ?? '自动';
     _hardwareDecode = _storage.getBoolSetting(
       AppConstants.keyHardwareDecode,
+      // 默认开启硬件解码：硬解省电且流畅。个别机型硬解会卡死/闪退，
+      // 届时请在下方手动选档（App 不做运行时探测，也不自动降档）。
       defaultValue: true,
     );
+    _hwDecodeModeKey =
+        _storage.getSetting(AppConstants.keyHwDecodeMode) ?? '';
+    _videoOutputModeKey =
+        _storage.getSetting(AppConstants.keyVideoOutputMode) ?? '';
     _autoPlayNext = _storage.getBoolSetting(
       AppConstants.keyAutoPlayNext,
       defaultValue: true,
@@ -195,6 +262,12 @@ class SettingsProvider extends ChangeNotifier {
       defaultValue: true,
     );
     _playbackPrefetch = _loadPlaybackPrefetchSetting();
+    _hlsAdFilter = _storage.getBoolSetting(
+      AppConstants.keyHlsAdFilter,
+      defaultValue: true,
+    );
+    // 推送到解析器静态开关：本地代理与缓存下载共用同一条过滤链路。
+    M3u8PlaylistResolver.adFilterEnabled = _hlsAdFilter;
     _opensubtitlesApiKey =
         _storage.getSetting(AppConstants.keyOpensubtitlesApiKey) ?? '';
     _tmdbApiKey = _storage.getSetting(AppConstants.keyTmdbApiKey) ?? '';
@@ -228,6 +301,25 @@ class SettingsProvider extends ChangeNotifier {
   Future<void> setHardwareDecode(bool value) async {
     _hardwareDecode = value;
     await _storage.saveBoolSetting(AppConstants.keyHardwareDecode, value);
+    notifyListeners();
+  }
+
+  /// 设置硬件解码档位。
+  ///
+  /// [HwDecodeMode.disabled] 等价于关闭总开关（两处状态保持一致）。
+  Future<void> setHwDecodeMode(HwDecodeMode mode) async {
+    _hwDecodeModeKey = encodeHwDecodeMode(mode);
+    if (mode == HwDecodeMode.disabled) {
+      _hardwareDecode = false;
+      await _storage.saveBoolSetting(AppConstants.keyHardwareDecode, false);
+    } else {
+      _hardwareDecode = true;
+      await _storage.saveBoolSetting(AppConstants.keyHardwareDecode, true);
+    }
+    await _storage.saveSetting(
+      AppConstants.keyHwDecodeMode,
+      _hwDecodeModeKey,
+    );
     notifyListeners();
   }
 
@@ -268,6 +360,17 @@ class SettingsProvider extends ChangeNotifier {
   Future<void> setPlaybackPrefetch(bool value) async {
     _playbackPrefetch = value;
     await _storage.saveBoolSetting(AppConstants.keyPlaybackPrefetch, value);
+    notifyListeners();
+  }
+
+  /// 设置 HLS 去广告开关
+  ///
+  /// 关闭后重新解析的播放列表不再剔除任何分片（已在播放的会话不受影响，
+  /// 换集/重进详情页后生效）。用于规避个别片源的误删。
+  Future<void> setHlsAdFilter(bool value) async {
+    _hlsAdFilter = value;
+    M3u8PlaylistResolver.adFilterEnabled = value;
+    await _storage.saveBoolSetting(AppConstants.keyHlsAdFilter, value);
     notifyListeners();
   }
 

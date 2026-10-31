@@ -1,6 +1,6 @@
 {
   "@@locale": "zh",
-  "appTitle": "高清影视",
+  "appTitle": "罐子",
   "appInitLoading": "正在初始化…",
   "appInitRetry": "重试",
   "appInitErrorTitle": "启动失败",
@@ -12,7 +12,6 @@
   "detailPlayRoutes": "播放线路",
   "detailMagnetSearch": "磁力搜索",
   "detailMagnetSearchHint": "以下为多源聚合结果：优先按 IMDb/片名/年份匹配；英文资源旁显示本片中文名标签。",
-  "detailOpenMagnetSearch": "打开磁力搜索",
   "detailRelated": "相关推荐",
   "detailRelatedHint": "相关推荐功能",
   "detailDesktopEpisodes": "选集",
@@ -30,6 +29,9 @@
   "detailMagnetMetaDirector": "导演",
   "detailMagnetMetaActors": "主演",
   "detailMagnetMetaRegion": "地区",
+  "detailMagnetMetaGenre": "类型",
+  "detailMagnetDownload": "下载",
+  "detailMagnetCopiedToast": "已复制磁力链接，可粘贴到下载工具",
   "detailMagnetResourceSection": "资源信息",
   "detailMagnetMetaResourceTitle": "资源标题",
   "detailMagnetMetaSource": "来源 {source}",
@@ -105,7 +107,6 @@
   "detailPlayerSubtitlePickFile": "选择本地字幕文件…",
   "detailPlayerSubtitleOff": "恢复内嵌轨 / 关闭外挂",
   "detailPlayerSubtitleBrowseOnline": "浏览在线字幕…",
-  "detailPlayerSubtitleLoading": "正在搜索字幕…",
   "detailPlayerSubtitleNone": "未找到字幕",
   "detailPlayerSubtitleNoApiKey": "请先在设置中填写 OpenSubtitles API Key",
   "detailPlayerSubtitleApplyFailed": "加载字幕失败",
@@ -140,7 +141,11 @@
     }
   },
   "filterLabelGenre": "类型",
+  "filterLabelSubClass": "分类",
   "filterLabelRegion": "地区",
+  "magnetSearchEmptyHint": "磁力源未返回结果：可能网络不可达或该片暂无收录，可到「设置 → 磁力搜索源」逐项探测",
+  "magnetSearchTimeoutHint": "磁力搜索超时，请检查网络后重试",
+  "magnetSearchFailedHint": "磁力搜索失败，请检查网络或磁力搜索源配置",
   "navChannelMovies": "电影",
   "navChannelTv": "连续剧",
   "navChannelVariety": "综艺",
@@ -158,8 +163,6 @@
   "searchWideAggregateHint": "以下为多源聚合结果与搜索历史；与静态演示稿一致为功能说明。",
   "categoryPortalHotRankTitle": "热播榜",
   "categoryPortalModuleHighlights": "精选",
-  "categoryPortalModuleMorePicks": "更多推荐",
-  "categoryPortalModuleKeepGoing": "继续浏览",
   "categoryPortalModuleMore": "更多",
   "categoryPortalModuleMoreTooltip": "在首页浏览该分类",
   "categoryPortalModuleTagged": "{genre} · 精选",
@@ -210,17 +213,19 @@
   "searchClearFilters": "清除筛选",
   "searchPlay": "播放",
   "searchOpenDetail": "进入详情",
-  "detailReplay": "重播",
-  "detailEpisodeFinished": "本集已播放完毕",
+  "searchMagnetChineseName": "中文名",
   "detailHistoryOverlay": "上次看到 第{episode}集 {percent}%",
   "@detailHistoryOverlay": {
     "placeholders": {
-      "episode": { "type": "int" },
-      "percent": { "type": "String" }
+      "episode": {
+        "type": "int"
+      },
+      "percent": {
+        "type": "String"
+      }
     }
   },
   "detailLoadError": "无法加载影片信息，请检查网络或在「源管理」中切换采集源后重试。",
-  "detailBufferingMagnet": "正在加载磁力资源…",
   "detailBufferingConnect": "正在连接播放资源…",
   "detailBuffering": "正在缓冲…",
   "detailPlaybackFailed": "播放失败",
@@ -231,7 +236,9 @@
   "detailRouteLabel": "线路 {index}",
   "@detailRouteLabel": {
     "placeholders": {
-      "index": { "type": "int" }
+      "index": {
+        "type": "int"
+      }
     }
   },
   "detailDlnaSearching": "正在搜索局域网设备…",
@@ -241,7 +248,9 @@
   "detailDlnaCastOkNamed": "已投屏到 {device}",
   "@detailDlnaCastOkNamed": {
     "placeholders": {
-      "device": { "type": "String" }
+      "device": {
+        "type": "String"
+      }
     }
   },
   "detailDlnaCastFailed": "投屏失败，请换线路或稍后重试",
@@ -256,7 +265,9 @@
   "detailDlnaCastingNamed": "投屏中 · {device}",
   "@detailDlnaCastingNamed": {
     "placeholders": {
-      "device": { "type": "String" }
+      "device": {
+        "type": "String"
+      }
     }
   },
   "detailClose": "关闭",
@@ -275,20 +286,28 @@
   "detailEpisodeLabel": "第{index}集",
   "@detailEpisodeLabel": {
     "placeholders": {
-      "index": { "type": "int" }
+      "index": {
+        "type": "int"
+      }
     }
   },
   "detailEpisodeGridCount": "共 {count} 集",
   "@detailEpisodeGridCount": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "detailEpisodeGridPageInfo": "第 {current} / {total} 页",
   "@detailEpisodeGridPageInfo": {
     "placeholders": {
-      "current": { "type": "int" },
-      "total": { "type": "int" }
+      "current": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
     }
   },
   "detailEpisodeGridPrevPage": "上一页",
@@ -298,7 +317,9 @@
   "detailEpisodeGridJumpHint": "输入集数（1–{max}）",
   "@detailEpisodeGridJumpHint": {
     "placeholders": {
-      "max": { "type": "int" }
+      "max": {
+        "type": "int"
+      }
     }
   },
   "detailEpisodeGridJumpConfirm": "跳转",
@@ -310,13 +331,17 @@
   "detailCacheDownloadSelected": "下载所选 ({count})",
   "@detailCacheDownloadSelected": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "detailCacheBatchQueued": "已加入 {count} 个下载任务",
   "@detailCacheBatchQueued": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "detailCacheBatchNone": "所选集数均已在队列或已缓存",
@@ -350,14 +375,20 @@
   "cacheManagerUsedLabel": "已用: {used} / {max}",
   "@cacheManagerUsedLabel": {
     "placeholders": {
-      "used": { "type": "String" },
-      "max": { "type": "String" }
+      "used": {
+        "type": "String"
+      },
+      "max": {
+        "type": "String"
+      }
     }
   },
   "cacheManagerCompletedCount": "已缓存 {count} 个视频",
   "@cacheManagerCompletedCount": {
     "placeholders": {
-      "count": { "type": "int" }
+      "count": {
+        "type": "int"
+      }
     }
   },
   "cacheWebBanner": "Web 端不支持视频离线下载；列表为空属正常情况。",
@@ -367,10 +398,142 @@
   "cacheDownloadSpeed": "{speed}/s",
   "@cacheDownloadSpeed": {
     "placeholders": {
-      "speed": { "type": "String" }
+      "speed": {
+        "type": "String"
+      }
     }
   },
   "followCacheTabEmpty": "暂无缓存",
   "settingsOnlyWifiCache": "仅 WiFi 下载缓存",
-  "settingsOnlyWifiCacheSubtitle": "移动网络下不自动下载，与缓存管理页开关同步"
+  "settingsOnlyWifiCacheSubtitle": "移动网络下不自动下载，与缓存管理页开关同步",
+  "settingsHwDecodeMode": "硬解档位",
+  "settingsHwDecodeModeDesc": "高性能=零拷贝最省电，但少数机型会卡死/闪退；兼容=拷贝式最稳；关闭=纯软解兜底。不适配请手动改档，App 不会自动调整",
+  "settingsHwDecodeModeAuto": "自动（推荐）",
+  "settingsHwDecodeModeCopy": "兼容（硬件解码·拷贝）",
+  "settingsHwDecodeModeZeroCopy": "高性能（硬件解码·零拷贝）",
+  "settingsHwDecodeModeOff": "关闭（软件解码）",
+  "settingsVideoOutputMode": "视频输出后端",
+  "settingsVideoOutputModeDesc": "泄漏已在引擎层统一修复，三种后端都不漏句柄；切换主要影响画面兼容性与功能（字幕/滤镜/截图）。出画异常时再换",
+  "settingsVoGpuNext": "新版渲染（推荐）",
+  "settingsVoGpuNextDesc": "默认推荐。GPU 渲染（libplacebo），功能最全（字幕/滤镜/截图都可用）。个别机型首启可能短暂黑屏，重开一次即恢复；持续黑屏再换「旧版渲染」",
+  "settingsVoGpu": "旧版渲染（兼容兜底）",
+  "settingsVoGpuDesc": "传统 GPU 渲染（mpv 旧版 GL 路径）。同样走防泄漏桥接、不漏句柄；当「新版渲染」在你的机型上黑屏时用来兜底。色彩/映射不如新版精准",
+  "settingsVoEmbed": "硬解直出（绕过渲染器）",
+  "settingsVoEmbedDesc": "跳过 mpv 渲染器、由系统直接上屏。不漏句柄；代价：必须硬解（零拷贝）、内嵌字幕/OSD/截图/滤镜全部失效，旋转或全屏切换可能闪黑，HDR/10bit 兼容性差。前两项都出不了画时再用",
+  "homeCategoryFilterUnavailable": "当前采集源未提供类型/地区信息，此筛选暂不生效",
+  "detailSwitchSource": "换源",
+  "detailSwitchSourceSubtitle": "各站影片 ID 不通用，换源是按片名在其他站重新搜索匹配",
+  "detailSwitchSourceSearching": "正在其他源中查找同名影片…",
+  "detailSwitchSourceEmpty": "其他源没找到同名影片",
+  "detailSwitchSourceExact": "同名同年",
+  "detailSwitchSourceFuzzy": "同名",
+  "detailSwitchSourceEpisodes": "共 {count} 集",
+  "@detailSwitchSourceEpisodes": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "detailSwitchSourceProgress": "已从 {done}/{total} 个源取到结果（仍在加载更多）",
+  "@detailSwitchSourceProgress": {
+    "placeholders": {
+      "done": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "detailRouteSheetCount": "{count} 条线路",
+  "@detailRouteSheetCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "detailRouteSheetHint": "选择要播放的线路；部分站同一部片子有多条线路",
+  "detailRouteSheetOnlyOne": "该影片只有 1 条播放线路",
+  "detailRouteSheetOnlyOneHint": "这部影片在当前站只提供了一条播放线路。\n想换资源请用「换源」——它会到其它站按片名重新查找同一部片子。",
+  "detailMagnetNoPeers": "这个资源连不上任何节点",
+  "detailMagnetNoPeersHint": "做种的人可能都已下线。换一个磁力资源，或改用上方在线线路播放。",
+  "detailMagnetPaginationCount": "共 {count} 条结果",
+  "@detailMagnetPaginationCount": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetPageSizeLabel": "每页 {size} 条",
+  "@detailMagnetPageSizeLabel": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetPrevPage": "上一页",
+  "detailMagnetNextPage": "下一页",
+  "detailMagnetStageTitle": "磁力加载步骤",
+  "detailMagnetStageInit": "启动 P2P 引擎",
+  "detailMagnetStageMeta": "解析种子元数据",
+  "detailMagnetStagePeers": "连接节点",
+  "detailMagnetStagePickFile": "选定视频文件",
+  "detailMagnetStageBuffer": "缓冲首段数据",
+  "detailMagnetStageHandoff": "交给播放器",
+  "detailMagnetStageFailed": "连接失败",
+  "detailMagnetAttemptLabel": "第 {attempt} 次尝试",
+  "@detailMagnetAttemptLabel": {
+    "placeholders": {
+      "attempt": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetStageProgress": "第 {step}/{total} 步 · {label}",
+  "@detailMagnetStageProgress": {
+    "placeholders": {
+      "step": {
+        "type": "String"
+      },
+      "total": {
+        "type": "String"
+      },
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetAutoRetry": "连不上，正在自动重试（第 {attempt} 次）…",
+  "@detailMagnetAutoRetry": {
+    "placeholders": {
+      "attempt": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetAutoRetryStage": "正在自动重试第 {attempt} 次 · {stage}",
+  "@detailMagnetAutoRetryStage": {
+    "placeholders": {
+      "attempt": {
+        "type": "String"
+      },
+      "stage": {
+        "type": "String"
+      }
+    }
+  },
+  "detailMagnetEngineInitFailed": "P2P 引擎启动失败",
+  "detailMagnetMetaTimeout": "解析超时：没能从任何节点取到种子信息",
+  "detailMagnetNoData": "连接超时：45 秒内没有下载到任何数据",
+  "detailMagnetWaitingFrame": "已连上资源，正在等待画面…",
+  "detailMagnetNoFrame": "数据在下载，但播放器一直读不出画面（时长 0:00）",
+  "detailMagnetNoFrameNoData": "节点连上了，但一直没有数据下发（缓冲停住不动）",
+  "detailMagnetNoFrameHint": "这个资源连上了却出不了画面，建议换一个磁力资源，或改用在线线路播放。",
+  "detailMagnetExhaustedHint": "这个资源用不了，建议换一个磁力资源，或改用在线线路播放。",
+  "detailMagnetStreamLostHint": "播放已中断，这个资源的节点可能都下线了。建议换一个磁力资源，或改用在线线路播放。",
+  "detailMagnetSwitchResource": "换个资源"
 }

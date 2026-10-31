@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/services.dart';
 
 /// 详情页播放器画面布局（可单测）。
@@ -189,6 +191,88 @@ class DetailVideoLayout {
   static String formatSeekBubbleSeconds(int seconds) {
     if (seconds == 0) return '0s';
     return seconds > 0 ? '+${seconds}s' : '${seconds}s';
+  }
+
+  // ===== 水平滑动快进/快退控速（2026-10-18 初版 / 2026-10-19 方向修正）=====
+  // 旧逻辑（10-18）：delta.dx / screenWidth * durationSec —— 拖半屏即跳过半部片，
+  // 手指一甩就是好几分钟。10-18 改为「距离为主 + 手速衰减」，但又矫枉过正：
+  // 越快滑动反而跳得越少。10-19 按用户要求改为「手速增益」：
+  // **滑动越快，同样距离跳过的时长越多；越慢越少**（精细慢拖 ↔ 粗调快甩），
+  // 单次累计仍封顶、仍按当前位置钳制不越片头/片尾。
+
+  /// 慢拖时满屏滑动对应的秒数（约 1.5 分钟，精细档基准）。
+  static const double seekFullWidthSeconds = 90;
+
+  /// 单次手势累计偏移封顶（±5 分钟），防止长距离连续滑动无上限累积。
+  static const double seekMaxTotalSeconds = 300;
+
+  /// 低于此手速（px/s）不增益，保持 1.0。
+  static const double seekSlowDragVelocity = 150;
+
+  /// 高于此手速（px/s）增益到顶。
+  static const double seekFastDragVelocity = 1500;
+
+  /// 快扫时每像素秒数的增益倍率（6.0 = 同样距离跳 6 倍时长，
+  /// 满屏 540s，实际被 [seekMaxTotalSeconds] 夹到 ±300s）。
+  static const double seekFastDragBoost = 6.0;
+
+  /// 瞬时手速采样上限（px/s）：异常帧（切后台回来一帧巨大 dx）直接截断。
+  static const double seekInstantVelocityCap = 6000;
+
+  /// 指数平滑中新采样的权重（0.35 新 / 0.65 旧）。
+  static const double seekVelocitySmoothWeight = 0.35;
+
+  /// 每像素秒数的速度增益：慢拖 1.0，随速度 smoothstep 增长到
+  /// [seekFastDragBoost]；滑动越快，同样距离跳过的时长越多。
+  static double seekDragVelocityFactor(double velocityPxPerSec) {
+    if (!velocityPxPerSec.isFinite || velocityPxPerSec <= 0) return 1.0;
+    final t = ((velocityPxPerSec - seekSlowDragVelocity) /
+            (seekFastDragVelocity - seekSlowDragVelocity))
+        .clamp(0.0, 1.0);
+    if (t <= 0) return 1.0;
+    final smooth = t * t * (3 - 2 * t); // smoothstep，两端一阶导为 0
+    return 1.0 + (seekFastDragBoost - 1.0) * smooth;
+  }
+
+  /// 瞬时手速平滑（指数加权）；NaN/异常值按 0 处理。
+  static double smoothSeekDragVelocity({
+    required double previous,
+    required double instant,
+    double newWeight = seekVelocitySmoothWeight,
+  }) {
+    final safeInstant =
+        instant.isFinite ? instant.clamp(0.0, seekInstantVelocityCap) : 0.0;
+    return previous * (1 - newWeight) + safeInstant * newWeight;
+  }
+
+  /// 一次滑动 update 后的累计秒数：`dx * 每像素秒数`，再做单次封顶与
+  /// 片头/片尾钳制（不得越过当前位置边界）。duration/position 异常时
+  /// 不累计，保持原值。
+  static double nextSeekDragSeconds({
+    required double dx,
+    required double smoothedVelocity,
+    required double screenWidth,
+    required double currentTotalSeconds,
+    required double positionSeconds,
+    required double durationSeconds,
+  }) {
+    if (!dx.isFinite ||
+        screenWidth <= 0 ||
+        durationSeconds <= 0 ||
+        !positionSeconds.isFinite ||
+        positionSeconds < 0) {
+      return currentTotalSeconds;
+    }
+    final perPixel = seekFullWidthSeconds /
+        screenWidth *
+        seekDragVelocityFactor(smoothedVelocity);
+    final withMax = (currentTotalSeconds + dx * perPixel)
+        .clamp(-seekMaxTotalSeconds, seekMaxTotalSeconds);
+    final lower = math.max(-positionSeconds, -seekMaxTotalSeconds);
+    final upper =
+        math.min(durationSeconds - positionSeconds, seekMaxTotalSeconds);
+    if (lower > upper) return currentTotalSeconds;
+    return withMax.clamp(lower, upper);
   }
 
   /// 全屏或「原始比例」、竖屏嵌入模式下按片源比例完整显示（留黑边）。

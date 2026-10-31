@@ -9,7 +9,7 @@ class AppLocalizationsZh extends AppLocalizations {
   AppLocalizationsZh([String locale = 'zh']) : super(locale);
 
   @override
-  String get appTitle => '高清影视';
+  String get appTitle => '罐子';
 
   @override
   String get appInitLoading => '正在初始化…';
@@ -44,9 +44,6 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String get detailMagnetSearchHint =>
       '以下为多源聚合结果：优先按 IMDb/片名/年份匹配；英文资源旁显示本片中文名标签。';
-
-  @override
-  String get detailOpenMagnetSearch => '打开磁力搜索';
 
   @override
   String get detailRelated => '相关推荐';
@@ -98,6 +95,15 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get detailMagnetMetaRegion => '地区';
+
+  @override
+  String get detailMagnetMetaGenre => '类型';
+
+  @override
+  String get detailMagnetDownload => '下载';
+
+  @override
+  String get detailMagnetCopiedToast => '已复制磁力链接，可粘贴到下载工具';
 
   @override
   String get detailMagnetResourceSection => '资源信息';
@@ -251,9 +257,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get detailPlayerSubtitleBrowseOnline => '浏览在线字幕…';
 
   @override
-  String get detailPlayerSubtitleLoading => '正在搜索字幕…';
-
-  @override
   String get detailPlayerSubtitleNone => '未找到字幕';
 
   @override
@@ -319,7 +322,20 @@ class AppLocalizationsZh extends AppLocalizations {
   String get filterLabelGenre => '类型';
 
   @override
+  String get filterLabelSubClass => '分类';
+
+  @override
   String get filterLabelRegion => '地区';
+
+  @override
+  String get magnetSearchEmptyHint =>
+      '磁力源未返回结果：可能网络不可达或该片暂无收录，可到「设置 → 磁力搜索源」逐项探测';
+
+  @override
+  String get magnetSearchTimeoutHint => '磁力搜索超时，请检查网络后重试';
+
+  @override
+  String get magnetSearchFailedHint => '磁力搜索失败，请检查网络或磁力搜索源配置';
 
   @override
   String get navChannelMovies => '电影';
@@ -352,12 +368,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get categoryPortalModuleHighlights => '精选';
-
-  @override
-  String get categoryPortalModuleMorePicks => '更多推荐';
-
-  @override
-  String get categoryPortalModuleKeepGoing => '继续浏览';
 
   @override
   String get categoryPortalModuleMore => '更多';
@@ -473,10 +483,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get searchOpenDetail => '进入详情';
 
   @override
-  String get detailReplay => '重播';
-
-  @override
-  String get detailEpisodeFinished => '本集已播放完毕';
+  String get searchMagnetChineseName => '中文名';
 
   @override
   String detailHistoryOverlay(int episode, String percent) {
@@ -485,9 +492,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get detailLoadError => '无法加载影片信息，请检查网络或在「源管理」中切换采集源后重试。';
-
-  @override
-  String get detailBufferingMagnet => '正在加载磁力资源…';
 
   @override
   String get detailBufferingConnect => '正在连接播放资源…';
@@ -782,4 +786,194 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsOnlyWifiCacheSubtitle => '移动网络下不自动下载，与缓存管理页开关同步';
+
+  @override
+  String get settingsHwDecodeMode => '硬解档位';
+
+  @override
+  String get settingsHwDecodeModeDesc =>
+      '高性能=零拷贝最省电，但少数机型会卡死/闪退；兼容=拷贝式最稳；关闭=纯软解兜底。不适配请手动改档，App 不会自动调整';
+
+  @override
+  String get settingsHwDecodeModeAuto => '自动（推荐）';
+
+  @override
+  String get settingsHwDecodeModeCopy => '兼容（硬件解码·拷贝）';
+
+  @override
+  String get settingsHwDecodeModeZeroCopy => '高性能（硬件解码·零拷贝）';
+
+  @override
+  String get settingsHwDecodeModeOff => '关闭（软件解码）';
+
+  @override
+  String get settingsVideoOutputMode => '视频输出后端';
+
+  @override
+  String get settingsVideoOutputModeDesc =>
+      '泄漏已在引擎层统一修复，三种后端都不漏句柄；切换主要影响画面兼容性与功能（字幕/滤镜/截图）。出画异常时再换';
+
+  @override
+  String get settingsVoGpuNext => '新版渲染（推荐）';
+
+  @override
+  String get settingsVoGpuNextDesc =>
+      '默认推荐。GPU 渲染（libplacebo），功能最全（字幕/滤镜/截图都可用）。个别机型首启可能短暂黑屏，重开一次即恢复；持续黑屏再换「旧版渲染」';
+
+  @override
+  String get settingsVoGpu => '旧版渲染（兼容兜底）';
+
+  @override
+  String get settingsVoGpuDesc =>
+      '传统 GPU 渲染（mpv 旧版 GL 路径）。同样走防泄漏桥接、不漏句柄；当「新版渲染」在你的机型上黑屏时用来兜底。色彩/映射不如新版精准';
+
+  @override
+  String get settingsVoEmbed => '硬解直出（绕过渲染器）';
+
+  @override
+  String get settingsVoEmbedDesc =>
+      '跳过 mpv 渲染器、由系统直接上屏。不漏句柄；代价：必须硬解（零拷贝）、内嵌字幕/OSD/截图/滤镜全部失效，旋转或全屏切换可能闪黑，HDR/10bit 兼容性差。前两项都出不了画时再用';
+
+  @override
+  String get homeCategoryFilterUnavailable => '当前采集源未提供类型/地区信息，此筛选暂不生效';
+
+  @override
+  String get detailSwitchSource => '换源';
+
+  @override
+  String get detailSwitchSourceSubtitle => '各站影片 ID 不通用，换源是按片名在其他站重新搜索匹配';
+
+  @override
+  String get detailSwitchSourceSearching => '正在其他源中查找同名影片…';
+
+  @override
+  String get detailSwitchSourceEmpty => '其他源没找到同名影片';
+
+  @override
+  String get detailSwitchSourceExact => '同名同年';
+
+  @override
+  String get detailSwitchSourceFuzzy => '同名';
+
+  @override
+  String detailSwitchSourceEpisodes(int count) {
+    return '共 $count 集';
+  }
+
+  @override
+  String detailSwitchSourceProgress(int done, int total) {
+    return '已从 $done/$total 个源取到结果（仍在加载更多）';
+  }
+
+  @override
+  String detailRouteSheetCount(int count) {
+    return '$count 条线路';
+  }
+
+  @override
+  String get detailRouteSheetHint => '选择要播放的线路；部分站同一部片子有多条线路';
+
+  @override
+  String get detailRouteSheetOnlyOne => '该影片只有 1 条播放线路';
+
+  @override
+  String get detailRouteSheetOnlyOneHint =>
+      '这部影片在当前站只提供了一条播放线路。\n想换资源请用「换源」——它会到其它站按片名重新查找同一部片子。';
+
+  @override
+  String get detailMagnetNoPeers => '这个资源连不上任何节点';
+
+  @override
+  String get detailMagnetNoPeersHint => '做种的人可能都已下线。换一个磁力资源，或改用上方在线线路播放。';
+
+  @override
+  String detailMagnetPaginationCount(String count) {
+    return '共 $count 条结果';
+  }
+
+  @override
+  String detailMagnetPageSizeLabel(String size) {
+    return '每页 $size 条';
+  }
+
+  @override
+  String get detailMagnetPrevPage => '上一页';
+
+  @override
+  String get detailMagnetNextPage => '下一页';
+
+  @override
+  String get detailMagnetStageTitle => '磁力加载步骤';
+
+  @override
+  String get detailMagnetStageInit => '启动 P2P 引擎';
+
+  @override
+  String get detailMagnetStageMeta => '解析种子元数据';
+
+  @override
+  String get detailMagnetStagePeers => '连接节点';
+
+  @override
+  String get detailMagnetStagePickFile => '选定视频文件';
+
+  @override
+  String get detailMagnetStageBuffer => '缓冲首段数据';
+
+  @override
+  String get detailMagnetStageHandoff => '交给播放器';
+
+  @override
+  String get detailMagnetStageFailed => '连接失败';
+
+  @override
+  String detailMagnetAttemptLabel(String attempt) {
+    return '第 $attempt 次尝试';
+  }
+
+  @override
+  String detailMagnetStageProgress(String step, String total, String label) {
+    return '第 $step/$total 步 · $label';
+  }
+
+  @override
+  String detailMagnetAutoRetry(String attempt) {
+    return '连不上，正在自动重试（第 $attempt 次）…';
+  }
+
+  @override
+  String detailMagnetAutoRetryStage(String attempt, String stage) {
+    return '正在自动重试第 $attempt 次 · $stage';
+  }
+
+  @override
+  String get detailMagnetEngineInitFailed => 'P2P 引擎启动失败';
+
+  @override
+  String get detailMagnetMetaTimeout => '解析超时：没能从任何节点取到种子信息';
+
+  @override
+  String get detailMagnetNoData => '连接超时：45 秒内没有下载到任何数据';
+
+  @override
+  String get detailMagnetWaitingFrame => '已连上资源，正在等待画面…';
+
+  @override
+  String get detailMagnetNoFrame => '数据在下载，但播放器一直读不出画面（时长 0:00）';
+
+  @override
+  String get detailMagnetNoFrameNoData => '节点连上了，但一直没有数据下发（缓冲停住不动）';
+
+  @override
+  String get detailMagnetNoFrameHint => '这个资源连上了却出不了画面，建议换一个磁力资源，或改用在线线路播放。';
+
+  @override
+  String get detailMagnetExhaustedHint => '这个资源用不了，建议换一个磁力资源，或改用在线线路播放。';
+
+  @override
+  String get detailMagnetStreamLostHint =>
+      '播放已中断，这个资源的节点可能都下线了。建议换一个磁力资源，或改用在线线路播放。';
+
+  @override
+  String get detailMagnetSwitchResource => '换个资源';
 }

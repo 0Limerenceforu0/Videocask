@@ -17,5 +17,12 @@ String webProxiedMediaUrl(String rawUrl) => rawUrl;
 /// 非 Web 端不需要代理，原样返回。
 String webProxiedImageUrl(String rawUrl) => rawUrl;
 
+/// 非 Web 端不需要代理，原样返回（真实请求头由 PlayerService 直接带上）。
+String webProxiedMediaUrlWithHeaders(
+  String rawUrl,
+  Map<String, String> headers,
+) =>
+    rawUrl;
+
 /// 非 Web 端走本地 HLS 去广告代理，这里原样返回。
 String webHlsUrl(String rawUrl) => rawUrl;

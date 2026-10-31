@@ -55,8 +55,10 @@ void main() {
       await tester.tap(find.byTooltip('下一页'));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('/ 25'), findsOneWidget);
-      expect(find.text('E21'), findsOneWidget);
+      // 窄屏（400 宽）为 4 列 × 默认 4 行 = 16 集/页，500 集 → 32 页，
+      // 第 2 页从第 17 集开始。
+      expect(find.textContaining('/ 32'), findsOneWidget);
+      expect(find.text('E17'), findsOneWidget);
       expect(find.text('E500'), findsNothing);
     });
 
