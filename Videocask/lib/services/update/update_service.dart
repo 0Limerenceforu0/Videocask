@@ -54,7 +54,7 @@ class UpdateService {
 
   /// 仓库坐标。改仓库时只改这两行。
   static const String repoOwner = '0Limerenceforu0';
-  static const String repoName = 'HD-movies-and-TV-shows';
+  static const String repoName = 'Videocask';
 
   static const String _apiBase = 'https://api.github.com';
   static const String apiLatestRelease =

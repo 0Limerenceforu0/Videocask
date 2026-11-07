@@ -47,7 +47,7 @@ CHANGELOG = ROOT / "CHANGELOG.md"
 DELIVERABLES = ROOT / "deliverables"
 ENV_FILE = ROOT / ".env"
 
-DEFAULT_REPO = "0Limerenceforu0/HD-movies-and-TV-shows"
+DEFAULT_REPO = "0Limerenceforu0/Videocask"
 API = "https://api.github.com"
 UPLOAD_API = "https://uploads.github.com"
 
