@@ -29,6 +29,9 @@ class TorrentPlayerService with ChangeNotifier {
   int _downloadSpeed = 0;
   int get downloadSpeed => _downloadSpeed;
 
+  /// Web 占位：没有播放种子，恒 null（与 IO 实现保持同形 API）。
+  int? get currentTorrentId => null;
+
   int _uploadSpeed = 0;
   int get uploadSpeed => _uploadSpeed;
 

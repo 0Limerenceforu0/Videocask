@@ -98,12 +98,28 @@ class DetailPlaybackCoordinator {
     session.markPlaying();
   }
 
+  /// 状态机停在 error，但播放器位置仍在推进 → 承认「其实在播」。
+  ///
+  /// 触发场景：`Could not open codec.` 之后 mpv 回退到可用解码器继续出画面，
+  /// 但 lifecycle 已被 [PlaybackSession.markError] 钉在 error。若不拉回来，
+  /// 心跳（只认 playing/paused）、停滞看门狗、续播记录全部失效。
+  void noteProgressWhileErrored() {
+    if (session.lifecycle != PlaybackLifecycle.error) return;
+    session.markPlaying();
+  }
+
   void onSeekStarted() {
     session.markSeeking();
   }
 
-  void onSeekFinished() {
-    session.markPlaying();
+  /// 结束 seek。暂停态下 seek（用户点进度条后暂停）不能把 lifecycle 强行
+  /// 标回 playing，否则停滞判定 / 心跳会把「已暂停」误当成「在播却不动」。
+  void onSeekFinished({bool playing = true}) {
+    if (playing) {
+      session.markPlaying();
+    } else {
+      session.markPaused();
+    }
   }
 
   void onPlaybackEnded({Duration? duration}) {

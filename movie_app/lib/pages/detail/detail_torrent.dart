@@ -64,6 +64,14 @@ class DetailTorrent {
             year: year,
             alias: alias,
             strictMatchForDetailPage: strict,
+            // 先到先交付：首批结果一回来就上屏并停转圈（P1-4）。
+            onBatch: (partial) {
+              if (generation != _searchGeneration) return;
+              if (partial.isEmpty) return;
+              torrentSearchResults = partial;
+              isSearching = false;
+              searchMessage = '';
+            },
           )
           .timeout(const Duration(seconds: 45));
       if (generation != _searchGeneration) return;

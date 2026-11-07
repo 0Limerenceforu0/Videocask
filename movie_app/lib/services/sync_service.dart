@@ -312,10 +312,7 @@ class SyncService {
   Map<String, dynamic> _exportSettings() {
     return {
       'themeIndex': _storage.getIntSetting(AppConstants.keyThemeIndex),
-      'defaultSpeed': _storage.getDoubleSetting(
-        AppConstants.keyDefaultSpeed,
-        defaultValue: 1.0,
-      ),
+      // 默认播放速度已下线（播放器内仍可临时调速），旧备份里的该字段忽略。
       'defaultQuality':
           _storage.getSetting(AppConstants.keyDefaultQuality) ?? '自动',
       'hardwareDecode': _storage.getBoolSetting(AppConstants.keyHardwareDecode),
@@ -358,12 +355,6 @@ class SyncService {
       await _storage.saveIntSetting(
         AppConstants.keyThemeIndex,
         settings['themeIndex'] as int,
-      );
-    }
-    if (settings['defaultSpeed'] != null) {
-      await _storage.saveDoubleSetting(
-        AppConstants.keyDefaultSpeed,
-        (settings['defaultSpeed'] as num).toDouble(),
       );
     }
     if (settings['defaultQuality'] != null) {

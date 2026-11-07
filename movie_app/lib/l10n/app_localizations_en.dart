@@ -227,6 +227,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get detailPlayerTooltipCache => 'Cache / downloads';
 
   @override
+  String get detailPlayerTooltipBack => 'Back';
+
+  @override
   String get detailPlayerTooltipRouteQuality => 'Source / quality';
 
   @override
@@ -246,7 +249,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get detailPlayerSubtitleAutoMatchSubtitle =>
-      'When magnets have no embedded subs, try by title (needs OpenSubtitles API key)';
+      'Auto-match Simplified Chinese subtitles for magnets, free and no setup';
 
   @override
   String get detailPlayerSubtitlePickFile => 'Choose local subtitle file…';
@@ -261,18 +264,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get detailPlayerSubtitleNone => 'No subtitles found';
 
   @override
-  String get detailPlayerSubtitleNoApiKey =>
-      'Add an OpenSubtitles API key in Settings first';
-
-  @override
   String get detailPlayerSubtitleApplyFailed => 'Could not load subtitles';
 
   @override
   String get detailPlayerSubtitleApplied => 'Subtitles loaded';
-
-  @override
-  String get detailPlayerSubtitleNoApiKeyHint =>
-      'Magnets can auto-match subtitles; add an OpenSubtitles API key in Settings → OpenSubtitles API Key';
 
   @override
   String get detailPlayerSubtitleDelay => 'Subtitle timing';
@@ -1018,4 +1013,17 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get detailMagnetSwitchResource => 'Pick another';
+
+  @override
+  String get detailPlayerFitContain => 'Fit';
+
+  @override
+  String get detailPlayerFitCover => 'Fill';
+
+  @override
+  String get detailPlayerFitToCoverHint => 'Switch to fill (crop edges)';
+
+  @override
+  String get detailPlayerFitToContainHint =>
+      'Switch to original ratio (keep bars)';
 }

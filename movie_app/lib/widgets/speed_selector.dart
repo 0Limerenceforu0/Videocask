@@ -131,7 +131,13 @@ class SpeedSelectorCompact extends StatelessWidget {
 
     // 倍速项可能较多（含 6/8/10x），竖向/横向紧凑面板都限制最大高度并允许滚动，
     // 避免内容超出屏幕被裁切。
-    final maxHeight = vertical ? 360.0 : 168.0;
+    // 注意：这里必须按「实际项数」估算高度。原先横向写死 168dp，而 6 项约需
+    // 188dp，导致最后一项（2.0x）被 Clip 裁掉一半；横向又没有可见滚动条，
+    // 用户会以为选项缺失。
+    const perItemHeight = 30.0;
+    final contentHeight = children.length * perItemHeight + 8;
+    final maxHeight =
+        vertical ? 360.0 : contentHeight.clamp(120.0, 240.0).toDouble();
 
     return Material(
       color: Colors.black.withValues(alpha: 0.9),
@@ -221,6 +227,11 @@ Future<void> _showSpeedPopover({
   GlobalKey? anchorKey,
 }) async {
   final vertical = presentation == SpeedSelectorPresentation.detailFullscreen;
+  // 面板高度必须与 SpeedSelectorCompact 内部一致（每项 ~30dp + 8dp 内边距），
+  // 否则定位会把菜单放得太靠下、底部被屏幕裁掉。
+  final panelH = vertical
+      ? 360.0
+      : (AppConstants.speedOptions.length * 30.0 + 8);
   final anchorBox = anchorKey?.currentContext?.findRenderObject() as RenderBox?;
   final media = MediaQuery.of(context);
   final screen = media.size;
@@ -228,14 +239,13 @@ Future<void> _showSpeedPopover({
 
     var panelOffset = Offset(
       screen.width - (vertical ? 68 : 236),
-      screen.height - padding.bottom - (vertical ? 360 : 168),
+      screen.height - padding.bottom - panelH,
     );
 
     if (anchorBox != null && anchorBox.hasSize) {
       final anchor = anchorBox.localToGlobal(Offset.zero) & anchorBox.size;
       if (vertical) {
         const panelW = 60.0;
-        const panelH = 360.0;
         var top = anchor.top - panelH - 8;
         if (top < padding.top + 8) {
           top = anchor.bottom + 8;
@@ -246,7 +256,6 @@ Future<void> _showSpeedPopover({
         );
       } else {
         const panelW = 236.0;
-        const panelH = 168.0;
         var top = anchor.top - panelH - 6;
         if (top < padding.top + 8) {
           top = anchor.bottom + 6;

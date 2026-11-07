@@ -3,13 +3,22 @@ import 'package:movie_app/services/playback_strategy.dart';
 
 void main() {
   group('PlaybackStrategyConfig', () {
-    test('smooth favors larger buffer and faster fallback', () {
+    test('smooth 与 balanced 共用 512MB 缓冲，但换线更积极', () {
       final smooth = PlaybackStrategyConfig.fromKey('smooth');
       final balanced = PlaybackStrategyConfig.fromKey('balanced');
+      // 三档共用基础缓冲（512MB），差异只在 hr-seek / 换线阈值 / 超时。
+      // 2026-11-05 起秒数必须跟着字节走：低码率流里 2700s 攒不到 512MB，
+      // 只降字节不降秒会造成 mpv 无限往后读（流量/带宽/耗电全被预读吃掉）。
+      expect(smooth.demuxerBufferBytes, balanced.demuxerBufferBytes);
       expect(
         smooth.demuxerBufferBytes,
-        greaterThan(balanced.demuxerBufferBytes),
+        greaterThanOrEqualTo(512 * 1024 * 1024),
       );
+      expect(
+        smooth.cacheSecs,
+        PlaybackStrategyConfig.secsForBytes(512 * 1024 * 1024),
+      );
+      expect(smooth.cacheSecs, greaterThan(0));
       expect(smooth.routeFallbackSec, lessThan(balanced.routeFallbackSec));
       expect(smooth.hrSeek, 'no');
     });
@@ -18,7 +27,9 @@ void main() {
       final quality = PlaybackStrategyConfig.fromKey('quality');
       final balanced = PlaybackStrategyConfig.fromKey('balanced');
       expect(quality.hrSeek, 'yes');
-      expect(quality.demuxerBufferBytes, lessThan(balanced.demuxerBufferBytes));
+      // 缓冲已三档统一（512MB / 对应秒数），quality 的差异在精细 seek 与更宽松的换线。
+      expect(quality.demuxerBufferBytes, balanced.demuxerBufferBytes);
+      expect(quality.cacheSecs, balanced.cacheSecs);
       // 精细 seek 意味着更长的缓冲等待 → 换线阈值更宽松
       expect(quality.routeFallbackSec, greaterThan(balanced.routeFallbackSec));
     });

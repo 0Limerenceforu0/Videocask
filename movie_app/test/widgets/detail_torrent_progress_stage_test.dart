@@ -131,4 +131,120 @@ void main() {
 
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('传入 null 进度值时走不确定态（不再假装推进）', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Stack(
+            children: [
+              DetailComponents.buildTorrentProgressBar(
+                3,
+                '',
+                torrentStage: 5,
+                stageTotal: 6,
+                stageProgressLabel: '第 5/6 步 · 缓冲首段数据',
+                indeterminate: true,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    final bar = tester.widget<LinearProgressIndicator>(
+      find.byType(LinearProgressIndicator),
+    );
+    expect(bar.value, isNull);
+  });
+
+  testWidgets('传入具体进度值时按传入值画', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Stack(
+            children: [
+              DetailComponents.buildTorrentProgressBar(
+                3,
+                '',
+                torrentStage: 5,
+                stageTotal: 6,
+                stageProgressLabel: '第 5/6 步 · 缓冲首段数据',
+                bufferPct: 100,
+                progressValue: 0.12,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    final bar = tester.widget<LinearProgressIndicator>(
+      find.byType(LinearProgressIndicator),
+    );
+    // 真实缓冲 12% 优先于「第 5/6 步」的 71%。
+    expect(bar.value, 0.12);
+  });
+
+  testWidgets('未传进度值时保持旧映射（兼容旧调用点）', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Stack(
+            children: [
+              DetailComponents.buildTorrentProgressBar(
+                3,
+                '',
+                torrentStage: 5,
+                stageTotal: 6,
+                stageProgressLabel: '第 5/6 步 · 缓冲首段数据',
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    final bar = tester.widget<LinearProgressIndicator>(
+      find.byType(LinearProgressIndicator),
+    );
+    expect(bar.value, closeTo(5 / 7, 1e-9));
+  });
+
+  testWidgets('阶段看门狗：停留时长随计时增长，换阶段归零', (tester) async {
+    var now = DateTime(2026, 11, 3, 9, 0, 0);
+    final seen = <Duration>[];
+    final stage = ValueNotifier<int>(3);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ValueListenableBuilder<int>(
+            valueListenable: stage,
+            builder: (context, s, _) => MagnetPrepStageWatcher(
+              stage: s,
+              now: () => now,
+              builder: (context, elapsed) {
+                seen.add(elapsed);
+                return Text('elapsed=${elapsed.inSeconds}s');
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(seen.last, Duration.zero);
+
+    // 手动推进假时钟：Widget 测试里 Timer 由 FakeAsync 驱动，
+    // 但 DateTime.now() 不会跟着走，所以这里注入自己的时钟。
+    now = now.add(const Duration(seconds: 13));
+    await tester.pump(const Duration(seconds: 13));
+    expect(seen.last.inSeconds, 13);
+
+    // 换阶段（自动重试一轮会回到阶段 1）→ 计时必须归零，
+    // 否则第二轮一开始就判成「卡住」。
+    stage.value = 1;
+    await tester.pump();
+    expect(seen.last, Duration.zero);
+  });
 }

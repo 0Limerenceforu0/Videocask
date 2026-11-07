@@ -152,6 +152,50 @@ void main() {
     });
   });
 
+  group('DetailVideoLayout.formatPlaybackClock', () {
+    test('时长已知 → 当前 / 总时长', () {
+      expect(
+        DetailVideoLayout.formatPlaybackClock(
+          const Duration(minutes: 3, seconds: 4),
+          const Duration(minutes: 45, seconds: 30),
+        ),
+        '3:04 / 45:30',
+      );
+    });
+
+    test('时长未知（磁力/直播没解析出 duration）→ 总时长显示 --:--', () {
+      // 2026-11-03 真机：磁力起播阶段曾显示 `0:01 / 0:00`，position 比
+      // duration 还大，看着像播超时了。
+      expect(
+        DetailVideoLayout.formatPlaybackClock(
+          const Duration(seconds: 1),
+          Duration.zero,
+        ),
+        '0:01 / --:--',
+      );
+    });
+
+    test('时长为负（异常值）同样按未知处理', () {
+      expect(
+        DetailVideoLayout.formatPlaybackClock(
+          const Duration(seconds: 1),
+          const Duration(seconds: -5),
+        ),
+        '0:01 / --:--',
+      );
+    });
+
+    test('时长带小时位', () {
+      expect(
+        DetailVideoLayout.formatPlaybackClock(
+          const Duration(minutes: 2),
+          const Duration(hours: 1, minutes: 5, seconds: 7),
+        ),
+        '2:00 / 1:05:07',
+      );
+    });
+  });
+
   group('DetailVideoLayout.formatSeekBubbleSeconds', () {
     test('shows signed seconds', () {
       expect(DetailVideoLayout.formatSeekBubbleSeconds(12), '+12s');

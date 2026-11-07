@@ -75,6 +75,15 @@ class MagnetSourceCatalog {
           enabled: true,
           isBuiltin: true,
         ),
+        MagnetSourceConfig(
+          id: 'knaben',
+          displayName: 'Knaben',
+          driver: MagnetSourceDriver.knabenJson,
+          // POST 基址；具体查询体在 `_searchKnabenAt` 里构造（非模板 URL）。
+          urlTemplate: 'https://api.knaben.org/v1',
+          enabled: true,
+          isBuiltin: true,
+        ),
       ];
 
   static String encodeList(List<MagnetSourceConfig> list) =>

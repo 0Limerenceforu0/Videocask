@@ -158,10 +158,13 @@ class _DetailCachePanelState extends State<_DetailCachePanel> {
     final useBelowPlayer = widget.belowTopInset != null;
     final panelTop =
         useBelowPlayer ? widget.belowTopInset! + 8 : mq.padding.top + 56;
-    final maxPanelHeight = useBelowPlayer
-        ? (mq.size.height - panelTop - mq.padding.bottom - 24)
-            .clamp(120.0, 520.0)
-        : 520.0;
+    // 高度必须按「面板顶 → 屏幕底」的实际可用空间算，不能写死。
+    // 全屏横屏时逻辑高只有 ~360dp（1080/3x），写死 520 会让面板底边掉出屏幕，
+    // 而 SingleChildScrollView 只能滚到 520 内部，末尾的「缓存当前集 / 下载所选」
+    // 永远落在屏幕外，等于全屏下无法发起下载。
+    final maxPanelHeight =
+        (mq.size.height - panelTop - mq.padding.bottom - 24)
+            .clamp(120.0, 520.0);
 
     return Stack(
       children: [
@@ -208,170 +211,210 @@ class _DetailCachePanelState extends State<_DetailCachePanel> {
 
                 return ConstrainedBox(
                   constraints: BoxConstraints(maxHeight: maxPanelHeight),
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Row(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // —— 可滚动区：标题 / 当前集状态 / 选集 / 任务列表 ——
+                      Flexible(
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      l10n.detailCachePanelTitle,
+                                      style: TextStyle(
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w600,
+                                        color: textColor,
+                                      ),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    tooltip: l10n.detailClose,
+                                    onPressed: widget.onClose,
+                                    icon: Icon(Icons.close, color: subTextColor),
+                                  ),
+                                ],
+                              ),
+                              if (currentTask != null) ...[
+                                const SizedBox(height: 8),
+                                _CurrentEpisodeStatus(
+                                  item: currentTask,
+                                  episodeLabel: _episodeLabel(
+                                    l10n,
+                                    scope.episodeIndex,
+                                    scope.episodeName,
+                                  ),
+                                  textColor: textColor,
+                                  subTextColor: subTextColor,
+                                  theme: theme,
+                                ),
+                              ],
+                              if (canDownload && scope.episodes.length > 1) ...[
+                                const SizedBox(height: 12),
+                                DetailCacheEpisodePicker(
+                                  episodes: scope.episodes,
+                                  movieId: scope.movieId,
+                                  sourceId: scope.sourceId,
+                                  playingEpisodeIndex: scope.episodeIndex,
+                                  selectedIndices: _selectedIndices,
+                                  // 横屏全屏面板只有 ~280dp，选集列表若保持固定
+                                  // 高度会把下方按钮挤到屏幕外，这里跟着可用高度收缩。
+                                  maxListHeight: (maxPanelHeight - 210)
+                                      .clamp(96.0, 240.0),
+                                  onSelectionChanged: (next) {
+                                    setState(() => _selectedIndices = next);
+                                  },
+                                ),
+                              ],
+                              const SizedBox(height: 12),
+                              if (items.isEmpty)
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 8),
+                                  child: Text(
+                                    l10n.detailCacheEmptyForMovie,
+                                    style: TextStyle(
+                                      color: subTextColor,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                )
+                              else
+                                ListView.separated(
+                                  shrinkWrap: true,
+                                  physics:
+                                      const NeverScrollableScrollPhysics(),
+                                  itemCount: items.length,
+                                  separatorBuilder: (_, __) =>
+                                      const SizedBox(height: 8),
+                                  itemBuilder: (context, index) {
+                                    return _CacheTaskTile(
+                                      item: items[index],
+                                      textColor: textColor,
+                                      subTextColor: subTextColor,
+                                      theme: theme,
+                                      onAction: widget.onRefresh,
+                                    );
+                                  },
+                                ),
+                              const SizedBox(height: 12),
+                            ],
+                          ),
+                        ),
+                      ),
+                      // —— 吸底区：下载按钮 + 全部缓存 ——
+                      // 必须固定在面板底部、不参与滚动：横屏全屏时选集列表本身
+                      // 可滚，会把外层的竖向手势全部吃掉，按钮只要跟着滚就永远
+                      // 滚不出来（用户表现为「全屏下点下载后没有下载按钮」）。
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Expanded(
-                              child: Text(
-                                l10n.detailCachePanelTitle,
+                            if (canDownload)
+                              scope.episodes.length > 1
+                                  ? Row(
+                                      children: [
+                                        Expanded(
+                                          child: OutlinedButton.icon(
+                                            onPressed: () async {
+                                              await scope.onDownloadEpisode(
+                                                scope.episodeIndex,
+                                              );
+                                              widget.onRefresh();
+                                            },
+                                            icon: const Icon(
+                                              Icons.playlist_play_outlined,
+                                              size: 18,
+                                            ),
+                                            label: Text(
+                                              l10n
+                                                  .detailCacheDownloadCurrent,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: FilledButton.icon(
+                                            onPressed: _selectedIndices.isEmpty
+                                                ? null
+                                                : () async {
+                                                    final indices =
+                                                        _selectedIndices
+                                                            .toList()
+                                                          ..sort();
+                                                    await scope
+                                                        .onDownloadEpisodes(
+                                                      indices,
+                                                    );
+                                                    widget.onRefresh();
+                                                  },
+                                            icon: const Icon(
+                                              Icons.download_outlined,
+                                              size: 18,
+                                            ),
+                                            label: Text(
+                                              l10n.detailCacheDownloadSelected(
+                                                _selectedIndices.length,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                  : FilledButton.icon(
+                                      onPressed: () async {
+                                        await scope.onDownloadEpisode(
+                                          scope.episodeIndex,
+                                        );
+                                        widget.onRefresh();
+                                      },
+                                      icon: const Icon(
+                                        Icons.download_outlined,
+                                        size: 20,
+                                      ),
+                                      label: Text(
+                                        l10n.detailCacheDownloadCurrent,
+                                      ),
+                                    )
+                            else if (kIsWeb)
+                              Text(
+                                l10n.cacheWebBanner,
                                 style: TextStyle(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w600,
-                                  color: textColor,
+                                  color: subTextColor,
+                                  fontSize: 13,
+                                ),
+                              )
+                            else if (scope.isMagnetDetail)
+                              Text(
+                                l10n.detailCacheMagnetUnsupported,
+                                style: TextStyle(
+                                  color: subTextColor,
+                                  fontSize: 13,
                                 ),
                               ),
-                            ),
-                            IconButton(
-                              tooltip: l10n.detailClose,
-                              onPressed: widget.onClose,
-                              icon: Icon(Icons.close, color: subTextColor),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton(
+                                onPressed: () {
+                                  widget.onClose();
+                                  AppRoutes.toCacheManager(context);
+                                },
+                                child: Text(l10n.detailCacheManageAll),
+                              ),
                             ),
                           ],
                         ),
-                        if (currentTask != null) ...[
-                          const SizedBox(height: 8),
-                          _CurrentEpisodeStatus(
-                            item: currentTask,
-                            episodeLabel: _episodeLabel(
-                              l10n,
-                              scope.episodeIndex,
-                              scope.episodeName,
-                            ),
-                            textColor: textColor,
-                            subTextColor: subTextColor,
-                            theme: theme,
-                          ),
-                        ],
-                        if (canDownload && scope.episodes.length > 1) ...[
-                          const SizedBox(height: 12),
-                          DetailCacheEpisodePicker(
-                            episodes: scope.episodes,
-                            movieId: scope.movieId,
-                            sourceId: scope.sourceId,
-                            playingEpisodeIndex: scope.episodeIndex,
-                            selectedIndices: _selectedIndices,
-                            onSelectionChanged: (next) {
-                              setState(() => _selectedIndices = next);
-                            },
-                          ),
-                        ],
-                        const SizedBox(height: 12),
-                        if (canDownload)
-                          scope.episodes.length > 1
-                              ? Row(
-                                  children: [
-                                    Expanded(
-                                      child: OutlinedButton.icon(
-                                        onPressed: () async {
-                                          await scope.onDownloadEpisode(
-                                            scope.episodeIndex,
-                                          );
-                                          widget.onRefresh();
-                                        },
-                                        icon: const Icon(
-                                          Icons.playlist_play_outlined,
-                                          size: 18,
-                                        ),
-                                        label: Text(
-                                          l10n.detailCacheDownloadCurrent,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: FilledButton.icon(
-                                        onPressed: _selectedIndices.isEmpty
-                                            ? null
-                                            : () async {
-                                                final indices = _selectedIndices
-                                                    .toList()
-                                                  ..sort();
-                                                await scope.onDownloadEpisodes(
-                                                  indices,
-                                                );
-                                                widget.onRefresh();
-                                              },
-                                        icon: const Icon(
-                                          Icons.download_outlined,
-                                          size: 18,
-                                        ),
-                                        label: Text(
-                                          l10n.detailCacheDownloadSelected(
-                                            _selectedIndices.length,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                )
-                              : FilledButton.icon(
-                                  onPressed: () async {
-                                    await scope.onDownloadEpisode(
-                                      scope.episodeIndex,
-                                    );
-                                    widget.onRefresh();
-                                  },
-                                  icon: const Icon(
-                                    Icons.download_outlined,
-                                    size: 20,
-                                  ),
-                                  label: Text(l10n.detailCacheDownloadCurrent),
-                                )
-                        else if (kIsWeb)
-                          Text(
-                            l10n.cacheWebBanner,
-                            style: TextStyle(color: subTextColor, fontSize: 13),
-                          )
-                        else if (scope.isMagnetDetail)
-                          Text(
-                            l10n.detailCacheMagnetUnsupported,
-                            style: TextStyle(color: subTextColor, fontSize: 13),
-                          ),
-                        const SizedBox(height: 12),
-                        if (items.isEmpty)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            child: Text(
-                              l10n.detailCacheEmptyForMovie,
-                              style:
-                                  TextStyle(color: subTextColor, fontSize: 13),
-                            ),
-                          )
-                        else
-                          ListView.separated(
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            itemCount: items.length,
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(height: 8),
-                            itemBuilder: (context, index) {
-                              return _CacheTaskTile(
-                                item: items[index],
-                                textColor: textColor,
-                                subTextColor: subTextColor,
-                                theme: theme,
-                                onAction: widget.onRefresh,
-                              );
-                            },
-                          ),
-                        const SizedBox(height: 8),
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: TextButton(
-                            onPressed: () {
-                              widget.onClose();
-                              AppRoutes.toCacheManager(context);
-                            },
-                            child: Text(l10n.detailCacheManageAll),
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 );
               },

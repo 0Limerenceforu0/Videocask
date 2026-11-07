@@ -4,6 +4,7 @@ import 'package:movie_app/l10n/app_localizations.dart';
 import 'package:movie_app/models/movie.dart';
 import 'package:movie_app/models/torrent_info.dart';
 import 'package:movie_app/utils/torrent_title_display.dart';
+import 'package:movie_app/widgets/magnet_action_widgets.dart';
 
 import 'detail_ui_tokens.dart';
 
@@ -343,6 +344,32 @@ class _TorrentResourceCard extends StatelessWidget {
                   icon: Icons.movie_outlined,
                   text: 'IMDb ${torrent!.imdbId}',
                   colors: colors,
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // 详情页也要能一眼看到字幕状态，并直接下载这个资源。
+          Row(
+            children: [
+              Flexible(
+                child: MagnetSubtitleBadge(
+                  title: torrent?.name ?? resourceTitle ?? '',
+                  compact: true,
+                  muted: colors.muted,
+                  accent: colors.accent,
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (torrent != null)
+                SizedBox(
+                  width: 116,
+                  child: MagnetDownloadButton(
+                    magnetUri: torrent!.magnetUri,
+                    name: torrent!.name,
+                    foreground: colors.onSurface,
+                    borderColor: colors.muted,
+                    compact: true,
+                  ),
                 ),
             ],
           ),

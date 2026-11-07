@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
@@ -5,6 +7,7 @@ import '../../utils/web_http_stub.dart'
     if (dart.library.html) '../../utils/web_http.dart' as web_http;
 
 import '../../models/movie.dart';
+import 'playback/magnet_prep_progress_policy.dart';
 
 /// 可复用的UI组件
 class DetailComponents {
@@ -247,12 +250,19 @@ class DetailComponents {
     // 用户只能对着进度条干等，或整页退出（把详情页一起关掉）。传入后卡片
     // 右上角会出现一个紧凑的「停止」。
     VoidCallback? onStop,
+    // 2026-11-03：进度条取值由 [MagnetPrepProgressPolicy] 决定。
+    // 不传则回退到内部的旧映射（保持旧调用点/测试的行为不变）。
+    double? progressValue,
+    // 不确定态（来回扫动）。必须和 [progressValue] 分开：进度值本身就是
+    // 可空的（null = 未指定 → 走旧映射），没法用一个参数同时表达两种含义。
+    bool indeterminate = false,
   }) {
-    final showStages = stageTotal > 0 &&
-        torrentStage > 0 &&
-        stageProgressLabel.trim().isNotEmpty &&
-        // 已判定「这个资源连不上节点」时，结论优先：不再让步骤假装在推进。
-        !deadSwarm;
+    final showStages = MagnetPrepProgressPolicy.showStages(
+      stageTotal: stageTotal,
+      torrentStage: torrentStage,
+      stageProgressLabel: stageProgressLabel,
+      deadSwarm: deadSwarm,
+    );
 
     final rawMessage = torrentMessage.trim();
     final String primaryText;
@@ -434,13 +444,19 @@ class DetailComponents {
               ClipRRect(
               borderRadius: BorderRadius.circular(2),
               child: LinearProgressIndicator(
-                value: showStages
-                    ? (torrentStage / (stageTotal + 1)).clamp(0.05, 1.0)
-                    : bufferPct > 0
-                        ? (bufferPct / 100).clamp(0.02, 1.0)
-                        : (torrentStep <= 0
-                            ? 0.05
-                            : (torrentStep / 4).clamp(0.05, 1.0)),
+                // 不确定态：卡在同一阶段太久时「画到 71% 不动」比「来回
+                // 扫动」更骗人（2026-11-03 实测）。
+                value: indeterminate
+                    ? null
+                    : (progressValue ??
+                        (showStages
+                            ? (torrentStage / (stageTotal + 1))
+                                .clamp(0.05, 1.0)
+                            : bufferPct > 0
+                                ? (bufferPct / 100).clamp(0.02, 1.0)
+                                : (torrentStep <= 0
+                                    ? 0.05
+                                    : (torrentStep / 4).clamp(0.05, 1.0)))),
                 minHeight: 3,
                 backgroundColor: Colors.white.withValues(alpha: 0.18),
                 valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
@@ -684,5 +700,76 @@ class _TorrentStatChip extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// 阶段停滞看门狗：每 [tick] 重建一次子树，把「当前阶段已停留多久」交给
+/// [builder]。
+///
+/// 存在的理由：进度条需要知道「这一阶段是不是卡住了」，而阶段推进本身不会
+/// 触发重建（[TorrentPlayerService] 的统计回调只更新速度/节点）。放在页面
+/// State 里做定时器会和「磁力准备何时开始/结束」的十几处赋值耦合，做成
+/// 独立的小 StatefulWidget 只要它在树上就计时、下树就停，最省心。
+///
+/// 阶段号变化时重新计时 —— 重试一轮（重新 addMagnet）时阶段号会变，
+/// 计时必须跟着归零，否则第二轮一开始就判成「卡住」。
+class MagnetPrepStageWatcher extends StatefulWidget {
+  const MagnetPrepStageWatcher({
+    super.key,
+    required this.stage,
+    required this.builder,
+    this.tick = const Duration(seconds: 1),
+    this.now = DateTime.now,
+  });
+
+  /// 当前阶段号（1~6，0/-1 表示未开始或已失败）。
+  final int stage;
+
+  /// 用「当前阶段已停留时长」构建内容；返回 null 进度值即不确定态。
+  final Widget Function(BuildContext context, Duration stageElapsed) builder;
+
+  /// 计时粒度。1s 足够（停滞阈值是 12s），也不至于造成明显重建开销。
+  final Duration tick;
+
+  /// 时钟源。测试注入假时钟（Widget 测试里的 Timer 是假的，DateTime 不是）。
+  final DateTime Function() now;
+
+  @override
+  State<MagnetPrepStageWatcher> createState() => _MagnetPrepStageWatcherState();
+}
+
+class _MagnetPrepStageWatcherState extends State<MagnetPrepStageWatcher> {
+  Timer? _timer;
+  DateTime _stageSince;
+
+  _MagnetPrepStageWatcherState() : _stageSince = DateTime.now();
+
+  @override
+  void initState() {
+    super.initState();
+    _stageSince = widget.now();
+    _timer = Timer.periodic(widget.tick, (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant MagnetPrepStageWatcher oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.stage != widget.stage) {
+      _stageSince = widget.now();
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _timer = null;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return widget.builder(context, widget.now().difference(_stageSince));
   }
 }

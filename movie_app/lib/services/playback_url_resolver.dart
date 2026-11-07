@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 
 import 'cache_service.dart';
 import 'local_media_http_server.dart';
+import 'm3u8_playlist_resolver.dart';
 import 'network/dio_factory.dart';
 import 'playback_strategy.dart';
 import 'video_parser.dart';
@@ -87,6 +88,9 @@ class PlaybackUrlResolver {
   }
 
   /// 后台预解析下一集（不阻塞 UI）。
+  ///
+  /// [prefetchEnabled] 必须在解析之前判断：旧实现先 `resolveForPlayback`
+  /// 才看开关，导致关掉「播放预缓冲」照样会解析下一集 URL、发一轮网络请求。
   Future<void> prefetchEpisodeUrl({
     required String episodeUrl,
     required String movieId,
@@ -95,13 +99,13 @@ class PlaybackUrlResolver {
     required String strategy,
     bool prefetchEnabled = true,
   }) async {
+    if (!prefetchEnabled) return;
     final resolved = await resolveForPlayback(
       episodeUrl: episodeUrl,
       movieId: movieId,
       episodeIndex: episodeIndex,
       sourceId: sourceId,
     );
-    if (!prefetchEnabled) return;
 
     final config = PlaybackStrategyConfig.fromKey(strategy);
     if (config.prefetchBytes <= 0) return;
@@ -167,6 +171,14 @@ class PlaybackUrlResolver {
     if (lower.contains('/adfree/') || lower.contains('/hls/')) {
       // 已是本地代理地址，避免重复包装。
       return resolvedUrl;
+    }
+    // 用户设了固定清晰度：先把 master playlist 解析成目标码率的 media 列表。
+    // 这一步与去广告互补——变体确定后再走 adfree，广告过滤仍作用于实际播放
+    // 的那一档；设置「自动」时该方法直接返回 null，零额外请求。
+    final preferred =
+        await M3u8PlaylistResolver().resolvePreferredVariant(resolvedUrl);
+    if (preferred != null && preferred.isNotEmpty) {
+      resolvedUrl = preferred;
     }
     try {
       final adFree = await LocalMediaHttpServer.instance.serveAdFreeHls(

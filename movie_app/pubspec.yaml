@@ -1,7 +1,7 @@
 name: movie_app
 description: 跨端影视播放应用 - 覆盖Android、PC、Web三端
 publish_to: 'none'
-version: 1.1.3+63
+version: 1.1.7+67
 environment:
   sdk: '>=3.0.0 <4.0.0'
 
@@ -129,6 +129,8 @@ flutter:
     - assets/images/
     - assets/icons/
     - assets/ad_block_rules.json
+    # 内封字幕渲染所需中文字体（libass 在 Android 上读不到系统字体）。
+    - assets/fonts/subtitle_zh.otf
 
   fonts:
     - family: AppIcons

@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../config/routes.dart';
 import '../../providers/history_provider.dart';
 import '../../providers/favorite_provider.dart';
+import '../../services/watch_stats.dart';
 
 /// 观影统计页面
 ///
@@ -35,18 +36,15 @@ class StatsPage extends StatelessWidget {
         isDark ? const Color(0xFF999999) : const Color(0xFF999999);
 
     // ===== 计算统计数据 =====
+    // 全部基于可核实的数据：历史记录里的累计播放时长 + 去重后的影片数。
+    // 旧版用 `watchCount * 1.5` 当小时数是凭空编的，已彻底移除。
 
-    // 总观影数（去重，按影片ID）
-    final uniqueMovieIds = <String>{};
-    for (final h in histories) {
-      uniqueMovieIds.add('${h.sourceId}_${h.movieId}');
-    }
-    final totalMovies = uniqueMovieIds.length;
-
-    // 总观影时长
-    final totalWatchCount =
-        histories.fold<int>(0, (sum, h) => sum + h.watchCount);
-    final estimatedHours = (totalWatchCount * 1.5);
+    final aggregates = WatchStats.aggregate(histories);
+    final totalMovies = aggregates.length;
+    final totalWatchedMs = aggregates.fold<int>(
+      0,
+      (sum, item) => sum + item.watchedMs,
+    );
 
     // 类型偏好统计
     final genreCount = <String, int>{};
@@ -60,35 +58,12 @@ class StatsPage extends StatelessWidget {
     final sortedGenres = genreCount.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
-    // 最近30天观影活跃度
-    final now = DateTime.now();
-    final thirtyDaysAgo = now.subtract(const Duration(days: 30));
-    final recentHistories = histories.where((h) {
-      return h.lastWatchTime.isAfter(thirtyDaysAgo);
-    }).toList();
-    final dailyCounts = <String, int>{};
-    for (final h in recentHistories) {
-      final dayKey = '${h.lastWatchTime.month}-${h.lastWatchTime.day}';
-      dailyCounts[dayKey] = (dailyCounts[dayKey] ?? 0) + 1;
-    }
+    // 最近30天观影活跃度（同片多源只算一次）
+    final dailyCounts = WatchStats.dailyMovieCounts(histories);
+    final recentCount = WatchStats.recentMovieCount(histories);
 
-    // 最常观看的影片TOP5
-    final movieWatchCounts = <String, _MovieWatchInfo>{};
-    for (final h in histories) {
-      final key = '${h.sourceId}_${h.movieId}';
-      if (movieWatchCounts.containsKey(key)) {
-        movieWatchCounts[key]!.watchCount += h.watchCount;
-      } else {
-        movieWatchCounts[key] = _MovieWatchInfo(
-          movieName: h.movieName,
-          movieCover: h.movieCover,
-          watchCount: h.watchCount,
-        );
-      }
-    }
-    final topMovies = movieWatchCounts.values.toList()
-      ..sort((a, b) => b.watchCount.compareTo(a.watchCount));
-    final top5Movies = topMovies.take(5).toList();
+    // 最常观看 TOP5（已按累计时长降序，时长为 0 时退化为按进度）
+    final top5Movies = aggregates.take(5).toList();
 
     return Scaffold(
       backgroundColor: bgColor,
@@ -122,7 +97,7 @@ class StatsPage extends StatelessWidget {
             textColor: textColor,
             subTextColor: subTextColor,
             totalMovies: totalMovies,
-            estimatedHours: estimatedHours,
+            totalWatchedMs: totalWatchedMs,
             favoriteCount: favorites.length,
           ),
           const SizedBox(height: 12),
@@ -147,7 +122,7 @@ class StatsPage extends StatelessWidget {
             cardColor: cardColor,
             textColor: textColor,
             subTextColor: subTextColor,
-            recentCount: recentHistories.length,
+            recentCount: recentCount,
             dailyCounts: dailyCounts,
           ),
           const SizedBox(height: 12),
@@ -229,9 +204,10 @@ class StatsPage extends StatelessWidget {
     required Color textColor,
     required Color subTextColor,
     required int totalMovies,
-    required double estimatedHours,
+    required int totalWatchedMs,
     required int favoriteCount,
   }) {
+    final watched = _formatWatched(totalWatchedMs);
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -266,8 +242,8 @@ class StatsPage extends StatelessWidget {
               Expanded(
                 child: _buildBiliStatBlock(
                   context,
-                  value: estimatedHours.toStringAsFixed(0),
-                  label: '小时',
+                  value: watched.value,
+                  label: watched.unit,
                   icon: Icons.schedule,
                   iconColor: const Color(0xFFFFB74D),
                   textColor: textColor,
@@ -287,10 +263,25 @@ class StatsPage extends StatelessWidget {
               ),
             ],
           ),
+          if (totalWatchedMs <= 0) ...[
+            const SizedBox(height: 12),
+            Text(
+              '观看时长从本次更新起开始累计，已看过的老记录不计入。',
+              style: TextStyle(color: subTextColor, fontSize: 12),
+            ),
+          ],
         ],
       ),
     );
   }
+
+  /// 累计时长展示（实现见 [WatchStats.formatDuration]）。
+  ({String value, String unit}) _formatWatched(int ms) =>
+      WatchStats.formatDuration(ms);
+
+  /// TOP 列表右侧角标（实现见 [WatchStats.badgeText]）。
+  String _topMovieBadge(MovieWatchAggregate movie) =>
+      WatchStats.badgeText(movie.watchedMs, movie.progressRatio);
 
   /// B站风格统计块（大数字+标签）
   Widget _buildBiliStatBlock(
@@ -623,7 +614,7 @@ class StatsPage extends StatelessWidget {
     required Color cardColor,
     required Color textColor,
     required Color subTextColor,
-    required List<_MovieWatchInfo> topMovies,
+    required List<MovieWatchAggregate> topMovies,
   }) {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -684,9 +675,9 @@ class StatsPage extends StatelessWidget {
                       borderRadius: BorderRadius.circular(6),
                     ),
                     clipBehavior: Clip.antiAlias,
-                    child: movie.movieCover.isNotEmpty
+                    child: movie.cover.isNotEmpty
                         ? Image.network(
-                            web_http.webProxiedImageUrl(movie.movieCover),
+                            web_http.webProxiedImageUrl(movie.cover),
                             fit: BoxFit.cover,
                             errorBuilder: (_, __, ___) => const Icon(
                               Icons.movie_outlined,
@@ -703,7 +694,7 @@ class StatsPage extends StatelessWidget {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      movie.movieName,
+                      movie.title,
                       style: TextStyle(
                         color: textColor,
                         fontSize: 14,
@@ -721,7 +712,7 @@ class StatsPage extends StatelessWidget {
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
-                      '${movie.watchCount}次',
+                      _topMovieBadge(movie),
                       style: TextStyle(
                         color: theme.colorScheme.primary,
                         fontSize: 12,
@@ -737,22 +728,4 @@ class StatsPage extends StatelessWidget {
       ),
     );
   }
-}
-
-/// 影片观看信息（内部使用）
-class _MovieWatchInfo {
-  /// 影片名称
-  final String movieName;
-
-  /// 影片封面
-  final String movieCover;
-
-  /// 观看次数
-  int watchCount;
-
-  _MovieWatchInfo({
-    required this.movieName,
-    required this.movieCover,
-    required this.watchCount,
-  });
 }

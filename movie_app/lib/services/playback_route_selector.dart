@@ -33,11 +33,14 @@ class PlaybackRouteSelector {
   }
 
   /// 默认清晰度设置与线路名匹配加分。
+  ///
+  /// 只认完整的画质词：早先的 `'标'`、`'hd'`、`'bd'` 这类短词会把「标签」
+  /// 「hdplay」之类的线路名误判成对应画质档，反而让选线偏离用户预期。
   static int defaultQualityBonus(String routeName, String defaultQuality) {
     if (defaultQuality == '自动') return 0;
     final keywords = <String, List<String>>{
-      '标清': ['标', '流畅', '普清', '360', '480'],
-      '高清': ['高清', 'hd', '720', '超清'],
+      '标清': ['标清', '流畅', '普清', '360', '480'],
+      '高清': ['高清', '超清', '720'],
       '1080P': ['1080', '蓝光', 'bd'],
       '4K': ['4k', '2160', 'uhd'],
     };

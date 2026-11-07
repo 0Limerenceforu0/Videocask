@@ -175,6 +175,24 @@ class DetailVideoLayout {
     return screenHeight * androidPortraitDetailScreenFactor;
   }
 
+  /// 时长未知时的占位文案（磁力/直播流还没拿到 duration）。
+  ///
+  /// 2026-11-03 真机实测：磁力起播阶段 UI 显示 `0:01 / 0:00` —— position 比
+  /// duration 还大，看着像「播超时了」。时长没解析出来就该明说不知道，
+  /// 而不是拿 0 当真值。
+  static const String unknownDurationLabel = '--:--';
+
+  /// 控制栏时间行：`当前 / 总时长`。
+  ///
+  /// 时长未知（<= 0）时总时长显示 [unknownDurationLabel]，避免出现
+  /// `0:01 / 0:00` 这种倒挂文案。
+  static String formatPlaybackClock(Duration position, Duration duration) {
+    final total = duration.inMilliseconds > 0
+        ? formatPlaybackDuration(duration)
+        : unknownDurationLabel;
+    return '${formatPlaybackDuration(position)} / $total';
+  }
+
   /// 播放器时间文案：`m:ss` 或 `h:mm:ss`。
   static String formatPlaybackDuration(Duration duration) {
     if (duration.isNegative) return '0:00';

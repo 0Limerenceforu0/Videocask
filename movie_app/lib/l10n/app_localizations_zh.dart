@@ -226,6 +226,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get detailPlayerTooltipCache => '缓存';
 
   @override
+  String get detailPlayerTooltipBack => '返回';
+
+  @override
   String get detailPlayerTooltipRouteQuality => '线路 / 清晰度';
 
   @override
@@ -245,7 +248,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get detailPlayerSubtitleAutoMatchSubtitle =>
-      '磁力等无内嵌字幕时，按片名尝试匹配（需 OpenSubtitles API Key）';
+      '磁力无内嵌字幕时自动匹配简体中文字幕，免费无需配置';
 
   @override
   String get detailPlayerSubtitlePickFile => '选择本地字幕文件…';
@@ -260,17 +263,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get detailPlayerSubtitleNone => '未找到字幕';
 
   @override
-  String get detailPlayerSubtitleNoApiKey => '请先在设置中填写 OpenSubtitles API Key';
-
-  @override
   String get detailPlayerSubtitleApplyFailed => '加载字幕失败';
 
   @override
   String get detailPlayerSubtitleApplied => '已加载字幕';
-
-  @override
-  String get detailPlayerSubtitleNoApiKeyHint =>
-      '磁力资源可自动匹配字幕，需先在「设置 → OpenSubtitles API Key」填写 Key';
 
   @override
   String get detailPlayerSubtitleDelay => '字幕时间轴';
@@ -976,4 +972,16 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get detailMagnetSwitchResource => '换个资源';
+
+  @override
+  String get detailPlayerFitContain => '留边';
+
+  @override
+  String get detailPlayerFitCover => '铺满';
+
+  @override
+  String get detailPlayerFitToCoverHint => '切换为铺满（裁切边缘）';
+
+  @override
+  String get detailPlayerFitToContainHint => '切换为原始比例（保留黑边）';
 }

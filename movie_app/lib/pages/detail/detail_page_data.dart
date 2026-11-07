@@ -188,6 +188,10 @@ extension _DetailPageDataExt on _DetailPageState {
     };
     _playerModule.onPlaybackEnded = _handleDetailPlaybackEnded;
     _playerModule.onBufferingChangedUi = _onPlayerBufferingChanged;
+    // seek 落位 / 超时后，缓冲期常驻的控制栏要重新进入 3 秒隐藏倒计时。
+    _playerModule.onSeekLandedUi = () {
+      if (mounted) _startHideTimer();
+    };
     _playerModule.onPlaybackProgress = _maybePreloadNextEpisode;
     _playerModule.onVideoDimensionsChanged = (_, __) {
       if (!_playerModule.isFullScreen) return;

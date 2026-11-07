@@ -512,6 +512,12 @@ abstract class AppLocalizations {
   /// **'缓存'**
   String get detailPlayerTooltipCache;
 
+  /// No description provided for @detailPlayerTooltipBack.
+  ///
+  /// In zh, this message translates to:
+  /// **'返回'**
+  String get detailPlayerTooltipBack;
+
   /// No description provided for @detailPlayerTooltipRouteQuality.
   ///
   /// In zh, this message translates to:
@@ -551,7 +557,7 @@ abstract class AppLocalizations {
   /// No description provided for @detailPlayerSubtitleAutoMatchSubtitle.
   ///
   /// In zh, this message translates to:
-  /// **'磁力等无内嵌字幕时，按片名尝试匹配（需 OpenSubtitles API Key）'**
+  /// **'磁力无内嵌字幕时自动匹配简体中文字幕，免费无需配置'**
   String get detailPlayerSubtitleAutoMatchSubtitle;
 
   /// No description provided for @detailPlayerSubtitlePickFile.
@@ -578,12 +584,6 @@ abstract class AppLocalizations {
   /// **'未找到字幕'**
   String get detailPlayerSubtitleNone;
 
-  /// No description provided for @detailPlayerSubtitleNoApiKey.
-  ///
-  /// In zh, this message translates to:
-  /// **'请先在设置中填写 OpenSubtitles API Key'**
-  String get detailPlayerSubtitleNoApiKey;
-
   /// No description provided for @detailPlayerSubtitleApplyFailed.
   ///
   /// In zh, this message translates to:
@@ -595,12 +595,6 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'已加载字幕'**
   String get detailPlayerSubtitleApplied;
-
-  /// No description provided for @detailPlayerSubtitleNoApiKeyHint.
-  ///
-  /// In zh, this message translates to:
-  /// **'磁力资源可自动匹配字幕，需先在「设置 → OpenSubtitles API Key」填写 Key'**
-  String get detailPlayerSubtitleNoApiKeyHint;
 
   /// No description provided for @detailPlayerSubtitleDelay.
   ///
@@ -1885,6 +1879,30 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'换个资源'**
   String get detailMagnetSwitchResource;
+
+  /// No description provided for @detailPlayerFitContain.
+  ///
+  /// In zh, this message translates to:
+  /// **'留边'**
+  String get detailPlayerFitContain;
+
+  /// No description provided for @detailPlayerFitCover.
+  ///
+  /// In zh, this message translates to:
+  /// **'铺满'**
+  String get detailPlayerFitCover;
+
+  /// No description provided for @detailPlayerFitToCoverHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'切换为铺满（裁切边缘）'**
+  String get detailPlayerFitToCoverHint;
+
+  /// No description provided for @detailPlayerFitToContainHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'切换为原始比例（保留黑边）'**
+  String get detailPlayerFitToContainHint;
 }
 
 class _AppLocalizationsDelegate

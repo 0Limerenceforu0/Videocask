@@ -4,6 +4,138 @@ part of 'detail_page.dart';
 // 通过 extension on _DetailPageState 直接访问原类的私有成员。
 
 extension _DetailPagePlayerUiExt on _DetailPageState {
+  /// 焦点是否落在文本输入框里（此时空格 / 方向键属于文本编辑，不能抢）。
+  bool _isTextInputFocused() {
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx == null) return false;
+    return ctx.findAncestorWidgetOfExactType<EditableText>() != null;
+  }
+
+  /// 页面级按键处理，由 initState 注册到 [HardwareKeyboard]。
+  ///
+  /// 🔴 2026-11-07：旧实现把 `KeyboardListener` 放在播放器子树里，而
+  /// `KeyboardListener.autofocus` 默认 false、唯一的 requestFocus 又在
+  /// videoController 尚未创建时执行；更致命的是切全屏会整棵换掉播放器子树
+  /// → 焦点丢失 → ESC 退不出全屏、空格不暂停。全局 handler 不依赖焦点树，
+  /// 页面级 Focus 只负责让窗口保持键盘焦点。
+  bool _handleGlobalKeyEvent(KeyEvent event) {
+    if (!mounted) return false;
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return false;
+    final isRepeat = event is KeyRepeatEvent;
+
+    final shortcut = resolvePlayerShortcut(
+      key: event.logicalKey,
+      isShiftPressed: HardwareKeyboard.instance.isShiftPressed,
+      isRepeat: isRepeat,
+      helpVisible: _playerModule.showShortcutHelp,
+      textInputFocused: _isTextInputFocused(),
+      routeIsCurrent: ModalRoute.of(context)?.isCurrent ?? true,
+      playerActive: _playerModule.currentPlayUrl != null,
+      supportsScreenLock: _supportsPlayerScreenLock,
+    );
+    if (shortcut.isNone) return false;
+
+    switch (shortcut.action) {
+      case PlayerShortcutAction.none:
+        return false;
+      case PlayerShortcutAction.escape:
+        if (_playerModule.showShortcutHelp) {
+          _setState(() => _playerModule.showShortcutHelp = false);
+        } else if (_playerModule.showVolumePopover) {
+          _setState(() => _playerModule.showVolumePopover = false);
+        } else if (_playerModule.isFullScreen) {
+          unawaited(_applyDetailFullscreen(false));
+        }
+        return true;
+      case PlayerShortcutAction.toggleHelp:
+        _setState(
+          () => _playerModule.showShortcutHelp =
+              !_playerModule.showShortcutHelp,
+        );
+        if (_playerModule.showShortcutHelp) {
+          _playerModule.hideTimer?.cancel();
+        } else {
+          _startHideTimer();
+        }
+        return true;
+      case PlayerShortcutAction.togglePlayPause:
+        _togglePlayPause();
+        _startHideTimer();
+        return true;
+      case PlayerShortcutAction.toggleFullscreen:
+        unawaited(_applyDetailFullscreen(!_playerModule.isFullScreen));
+        _startHideTimer();
+        return true;
+      case PlayerShortcutAction.toggleMute:
+        _toggleMute();
+        return true;
+      case PlayerShortcutAction.toggleLock:
+        _setState(() {
+          if (_playerModule.isScreenLocked) {
+            _playerModule.isScreenLocked = false;
+            _playerModule.showLockChrome = false;
+            _playerModule.lockChromeHideTimer?.cancel();
+          } else {
+            _playerModule.isScreenLocked = true;
+            _playerModule.showLockChrome = true;
+          }
+        });
+        if (_playerModule.isScreenLocked) {
+          _startLockChromeHideTimer();
+        } else {
+          _startHideTimer();
+        }
+        return true;
+      case PlayerShortcutAction.volumeUp:
+        _adjustVolume(0.1);
+        _startHideTimer();
+        return true;
+      case PlayerShortcutAction.volumeDown:
+        _adjustVolume(-0.1);
+        _startHideTimer();
+        return true;
+      case PlayerShortcutAction.seekBack5:
+      case PlayerShortcutAction.seekBack10:
+        _seekRelative(shortcut.action == PlayerShortcutAction.seekBack10
+            ? -10
+            : -5);
+        _startHideTimer();
+        return true;
+      case PlayerShortcutAction.seekForward5:
+      case PlayerShortcutAction.seekForward10:
+        _seekRelative(shortcut.action == PlayerShortcutAction.seekForward10
+            ? 10
+            : 5);
+        _startHideTimer();
+        return true;
+      case PlayerShortcutAction.toggleSubtitles:
+        _setState(
+          () => _playerModule.showSubtitles = !_playerModule.showSubtitles,
+        );
+        _startHideTimer();
+        return true;
+      case PlayerShortcutAction.speedDown:
+        _cycleSpeed(-1);
+        return true;
+      case PlayerShortcutAction.speedUp:
+        _cycleSpeed(1);
+        return true;
+      case PlayerShortcutAction.seekToFraction:
+        final fraction = shortcut.fraction;
+        if (fraction != null) _seekToPercent(fraction);
+        _startHideTimer();
+        return true;
+      case PlayerShortcutAction.nextEpisode:
+        _playNextEpisode();
+        _startHideTimer();
+        return true;
+      case PlayerShortcutAction.prevEpisode:
+        _playPreviousEpisode();
+        _startHideTimer();
+        return true;
+    }
+  }
+
   double _detailPlayerSlotHeight(double columnWidth, double maxHeight) {
     if (_isAndroidPlatform && !_playerModule.isFullScreen) {
       final portraitHeight =
@@ -136,8 +268,6 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
     }
 
     final playerHeight = _detailPlayerSlotHeight(screenWidth, maxPlayerHeight);
-    final pageFabBottom = MediaQuery.paddingOf(context).bottom +
-        (_showDetailScrollToTop ? 72.0 : 16.0);
 
     return Stack(
       clipBehavior: Clip.none,
@@ -225,20 +355,6 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
             ),
           ],
         ),
-        if (!kIsWeb && !_isMagnetDetailEntry)
-          Positioned(
-            right: 16,
-            bottom: pageFabBottom,
-            child: DetailPlayerCacheFab(
-              movieId: movie.id,
-              sourceId: _detailSourceId(movie),
-              episodeIndex: _playerModule.currentEpisodeIndex,
-              placement: DetailCacheFabPlacement.pageCorner,
-              isFullScreen: false,
-              bottomOffset: 0,
-              onTap: () => _openCachePanel(movie),
-            ),
-          ),
       ],
     );
   }
@@ -249,156 +365,11 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
     if (_playerModule.videoController != null) {
       final showRoutePickerInPlayerChrome =
           _showRoutePickerInPlayerChrome(context, movie);
-      final playerSurface = KeyboardListener(
-        focusNode: _keyboardFocusNode,
-        onKeyEvent: (event) {
-          if (event is! KeyDownEvent) return;
-
-          final key = event.logicalKey;
-
-          // ESC：退出全屏
-          if (key == LogicalKeyboardKey.escape) {
-            if (_playerModule.showShortcutHelp) {
-              _setState(() => _playerModule.showShortcutHelp = false);
-            } else if (_playerModule.showVolumePopover) {
-              _setState(() => _playerModule.showVolumePopover = false);
-            } else if (_playerModule.isFullScreen) {
-              unawaited(_applyDetailFullscreen(false));
-            }
-            return;
-          }
-          // H / ?：快捷键帮助面板
-          if (key == LogicalKeyboardKey.keyH ||
-              (key == LogicalKeyboardKey.slash &&
-                  !HardwareKeyboard.instance.isShiftPressed)) {
-            _setState(
-              () => _playerModule.showShortcutHelp =
-                  !_playerModule.showShortcutHelp,
-            );
-            if (_playerModule.showShortcutHelp) {
-              _playerModule.hideTimer?.cancel();
-            } else {
-              _startHideTimer();
-            }
-            return;
-          }
-          // 当帮助面板显示时，忽略其他快捷键
-          if (_playerModule.showShortcutHelp) return;
-          // Space：播放/暂停
-          if (key == LogicalKeyboardKey.space) {
-            _togglePlayPause();
-            _startHideTimer();
-            return;
-          }
-          // F：全屏切换
-          if (key == LogicalKeyboardKey.keyF) {
-            unawaited(_applyDetailFullscreen(!_playerModule.isFullScreen));
-            _startHideTimer();
-            return;
-          }
-          // M：静音切换
-          if (key == LogicalKeyboardKey.keyM) {
-            _toggleMute();
-            return;
-          }
-          // L：锁屏（仅 Android / iOS）
-          if (_supportsPlayerScreenLock && key == LogicalKeyboardKey.keyL) {
-            _setState(() {
-              if (_playerModule.isScreenLocked) {
-                _playerModule.isScreenLocked = false;
-                _playerModule.showLockChrome = false;
-                _playerModule.lockChromeHideTimer?.cancel();
-              } else {
-                _playerModule.isScreenLocked = true;
-                _playerModule.showLockChrome = true;
-              }
-            });
-            if (_playerModule.isScreenLocked) {
-              _startLockChromeHideTimer();
-            } else {
-              _startHideTimer();
-            }
-            return;
-          }
-          // 上方向键：音量 +10（0–200 标尺）
-          if (key == LogicalKeyboardKey.arrowUp) {
-            _adjustVolume(10);
-            _startHideTimer();
-            return;
-          }
-          // 下方向键：音量 -10
-          if (key == LogicalKeyboardKey.arrowDown) {
-            _adjustVolume(-10);
-            _startHideTimer();
-            return;
-          }
-          // 左方向键：快退 5s；Shift+左：10s
-          if (key == LogicalKeyboardKey.arrowLeft) {
-            _seekRelative(
-              HardwareKeyboard.instance.isShiftPressed ? -10 : -5,
-            );
-            _startHideTimer();
-            return;
-          }
-          // 右方向键：快进 5s；Shift+右：10s
-          if (key == LogicalKeyboardKey.arrowRight) {
-            _seekRelative(
-              HardwareKeyboard.instance.isShiftPressed ? 10 : 5,
-            );
-            _startHideTimer();
-            return;
-          }
-          // C：内嵌字幕开关
-          if (key == LogicalKeyboardKey.keyC) {
-            _setState(
-              () => _playerModule.showSubtitles = !_playerModule.showSubtitles,
-            );
-            _startHideTimer();
-            return;
-          }
-          // [ / ]：减速 / 加速
-          if (key == LogicalKeyboardKey.bracketLeft) {
-            _cycleSpeed(-1);
-            return;
-          }
-          if (key == LogicalKeyboardKey.bracketRight) {
-            _cycleSpeed(1);
-            return;
-          }
-          final digitSeek = <LogicalKeyboardKey, double>{
-            LogicalKeyboardKey.digit0: 0.0,
-            LogicalKeyboardKey.digit1: 0.1,
-            LogicalKeyboardKey.digit2: 0.2,
-            LogicalKeyboardKey.digit3: 0.3,
-            LogicalKeyboardKey.digit4: 0.4,
-            LogicalKeyboardKey.digit5: 0.5,
-            LogicalKeyboardKey.digit6: 0.6,
-            LogicalKeyboardKey.digit7: 0.7,
-            LogicalKeyboardKey.digit8: 0.8,
-            LogicalKeyboardKey.digit9: 0.9,
-          };
-          final seekFrac = digitSeek[key];
-          if (seekFrac != null) {
-            _seekToPercent(seekFrac);
-            _startHideTimer();
-            return;
-          }
-          // N：下一集
-          if (key == LogicalKeyboardKey.keyN) {
-            _playNextEpisode();
-            _startHideTimer();
-            return;
-          }
-          // P：上一集
-          if (key == LogicalKeyboardKey.keyP) {
-            _playPreviousEpisode();
-            _startHideTimer();
-            return;
-          }
-        },
-        child: Listener(
-          behavior: HitTestBehavior.translucent,
-          // 移动端触摸会产生 pointer move，若在 onTap 前把控制栏设为显示，onTap 会立刻走「已显示→隐藏」分支。
+      // 快捷键不再挂在这里：切全屏时本子树会整体换父节点，FocusNode 必然失焦。
+      // 见 _handleGlobalKeyEvent（注册在页面级 HardwareKeyboard 上）。
+      final playerSurface = Listener(
+        behavior: HitTestBehavior.translucent,
+        // 移动端触摸会产生 pointer move，若在 onTap 前把控制栏设为显示，onTap 会立刻走「已显示→隐藏」分支。
           onPointerMove:
               _isDesktopPlatform ? (_) => _onPlayerPointerActivity() : null,
           onPointerHover:
@@ -448,6 +419,9 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
                     final isLeftSide =
                         details.globalPosition.dx < screenWidth / 2;
                     // 初始化手势提示
+                    // 新一次手势：清掉上一次残留的累计位移，否则首帧会跳一下。
+                    _playerModule.pendingGestureDy = 0;
+                    _playerModule.verticalGestureActive = true;
                     _setState(() {
                       _playerModule.verticalGestureIsLeftSide = isLeftSide;
                       if (isLeftSide) {
@@ -457,18 +431,22 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
                         _playerModule.isBrightnessGesture = true;
                       } else {
                         _playerModule.gestureHintIcon = Icons.volume_up;
-                        _playerModule.gestureHintValue =
-                            _playerModule.volume / 200;
+                        // volume 已是 0.0–1.0 归一化值，不能再除 200（旧 mpv 量程残留）。
+                        _playerModule.gestureHintValue = _playerModule.volume;
                         _playerModule.isBrightnessGesture = false;
                       }
                       _playerModule.showGestureHint = true;
                       _playerModule.gestureProgress = isLeftSide
                           ? _playerModule.brightness
-                          : _playerModule.volume / 200;
+                          : _playerModule.volume;
                       _playerModule.showGestureBar = true;
                     });
                     if (isLeftSide && !kIsWeb) {
                       unawaited(_refreshBrightnessFromSystem());
+                    } else if (!isLeftSide) {
+                      // 用系统真实音量当起点：App 内 volume 可能因错过广播而陈旧，
+                      // 不拉齐会导致「系统 67% 时一上滑先跳到 0」。
+                      unawaited(_playerModule.syncSystemVolume(force: true));
                     }
                   },
             onVerticalDragUpdate: _playerModule.isScreenLocked
@@ -479,6 +457,10 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
             onVerticalDragEnd: _playerModule.isScreenLocked
                 ? null
                 : (_) {
+                    // 手势结束时把最后一段还没到节流窗口的位移补上，否则每次拖动
+                    // 都会丢掉末尾 ~50ms 的量，短促滑动尤其明显。
+                    _flushVerticalGesture();
+                    _playerModule.verticalGestureActive = false;
                     _playerModule.gestureHintTimer?.cancel();
                     _playerModule.gestureHintTimer =
                         Timer(const Duration(seconds: 2), () {
@@ -661,8 +643,7 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
                   fullScreen: _playerModule.isFullScreen,
                   screenLocked: _playerModule.isScreenLocked,
                   magnetBusyOrFailed: _showMagnetPrepIndicator() ||
-                      _playerModule.playbackErrorType !=
-                          PlaybackErrorType.none,
+                      _playerModule.playbackErrorType != PlaybackErrorType.none,
                 ))
                   _buildPlayerPersistentBackButton(),
 
@@ -871,7 +852,6 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
               ],
             ),
           ),
-        ),
       );
       if (_playerModule.isFullScreen) {
         return SizedBox.expand(child: playerSurface);
@@ -991,11 +971,15 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
           rotate: _playerModule.videoRotate,
         );
 
-        final fit = cropFill
-            ? BoxFit.cover
-            : (_playerModule.isFullScreen
-                ? BoxFit.contain
-                : (letterbox ? BoxFit.contain : BoxFit.fitWidth));
+        // 画面比例模式：cropFill（旧的「全屏裁剪」选项）与用户手动切的「铺满」
+        // 都走 cover；其余一律 contain（原始比例、对称留边，绝不变形/裁切）。
+        // 旧逻辑非全屏无条件 fitWidth：当片源比槽「高」（4:3/方图/竖屏进宽槽）
+        // 时会纵向溢出裁切，且片源比槽「宽」时也无法保证水平居中 —— 这就是
+        // 之前出现「右边单边黑带」的根。统一 contain 后，所有留边自动对称。
+        final fit = resolvePlayerFit(
+          cropFill: cropFill,
+          fitCover: _playerModule.fitCover,
+        );
 
         // 关键：Flutter Web 上 media_kit 的 Video 用 HtmlElementView(平台视图)
         // 承载 <video>。平台视图在 Web 上无法正确测量 double.infinity 尺寸，
@@ -1011,10 +995,17 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
             height: finiteH,
             controls: null,
             fit: fit,
+            // 前后台行为由 BackgroundPlaybackPolicy 统一接管：
+            // media_kit 的默认值是「切后台自动暂停 + 回前台不恢复」，
+            // 实测导致切出去 60 秒回来还停在原地（playing=false）。
+            // 关掉它，改由详情页的 didChangeAppLifecycleState 按用户设置决定。
+            pauseUponEnteringBackgroundMode: false,
           ),
         );
 
-        if (_playerModule.isFullScreen && !cropFill) {
+        // 全屏、或用户选了「铺满」：让视频填充满整个播放槽（cover 会裁掉溢出部分）。
+        // 否则走原始比例居中（contain 的 letterbox/pillarbox 由 media_kit 内部 FittedBox 居中）。
+        if (_playerModule.isFullScreen || _playerModule.fitCover) {
           video = SizedBox(
             width: maxW,
             height: maxH,
@@ -1049,6 +1040,18 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
     );
   }
 
+  /// 切换画面铺满/原始，并持久化选择。
+  void _toggleFitCover() {
+    _setState(() => _playerModule.fitCover = !_playerModule.fitCover);
+    unawaited(
+      StorageService().saveBoolSetting(
+        AppConstants.keyPlayerFitCover,
+        _playerModule.fitCover,
+      ),
+    );
+    _startHideTimer();
+  }
+
   Widget _buildPlayerCover(Movie movie) {
     final imageUrl = movie.backdrop.isNotEmpty ? movie.backdrop : movie.cover;
     if (imageUrl.isEmpty) {
@@ -1076,6 +1079,18 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
     final topInset = _playerModule.isFullScreen ? safeTop : 0.0;
     final compact = _isMobilePlatform && !kIsWeb && !_playerModule.isFullScreen;
     final actionIcons = <Widget>[
+      // 画面比例（留边 / 铺满）：放进顶栏而不是画面中部悬浮，避免与垂直居中的
+      // 锁钮撞到同一水平带、也避免遮挡画面；顶栏在控制栏显示时全屏/非全屏都可达。
+      _buildPlayerTopBarIcon(
+        icon: _playerModule.fitCover
+            ? Icons.aspect_ratio_rounded
+            : Icons.fit_screen_rounded,
+        tooltip: _playerModule.fitCover
+            ? l10n.detailPlayerFitToContainHint
+            : l10n.detailPlayerFitToCoverHint,
+        compact: compact,
+        onTap: _toggleFitCover,
+      ),
       if (_isMobilePlatform && !kIsWeb) ...[
         _buildPlayerTopBarIcon(
           icon: Icons.playlist_play_rounded,
@@ -1172,9 +1187,12 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
   }
 
   Widget _buildPlayerTopBarBackButton() {
+    final l10n = AppLocalizations.of(context)!;
     final compact = _isMobilePlatform && !kIsWeb && !_playerModule.isFullScreen;
     final (pad, iconSize) = _playerTopBarButtonMetrics(compact: compact);
-    return GestureDetector(
+    return PlayerOverlayIconButton(
+      icon: Icons.arrow_back,
+      tooltip: l10n.detailPlayerTooltipBack ?? '',
       onTap: () {
         if (_playerModule.isFullScreen) {
           unawaited(_toggleFullScreen());
@@ -1182,18 +1200,8 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
           unawaited(_leaveDetailPage());
         }
       },
-      child: Container(
-        padding: EdgeInsets.all(pad),
-        decoration: BoxDecoration(
-          color: Colors.black38,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Icon(
-          Icons.arrow_back,
-          color: Colors.white,
-          size: iconSize,
-        ),
-      ),
+      iconSize: iconSize,
+      padding: pad,
     );
   }
 
@@ -1207,23 +1215,12 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
     final outerPad = _playerModule.isFullScreen ? 6.0 : (compact ? 4.0 : 8.0);
     return Padding(
       padding: EdgeInsets.only(left: outerPad),
-      child: Tooltip(
-        message: tooltip,
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            padding: EdgeInsets.all(pad),
-            decoration: BoxDecoration(
-              color: Colors.black38,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Icon(
-              icon,
-              color: Colors.white,
-              size: iconSize,
-            ),
-          ),
-        ),
+      child: PlayerOverlayIconButton(
+        icon: icon,
+        tooltip: tooltip,
+        onTap: onTap,
+        iconSize: iconSize,
+        padding: pad,
       ),
     );
   }
@@ -1341,15 +1338,23 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(
-                            '${DetailVideoLayout.formatPlaybackDuration(_controlsDisplayPosition())} / ${DetailVideoLayout.formatPlaybackDuration(_playerModule.duration)}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                              fontFeatures: [FontFeature.tabularFigures()],
+                          ValueListenableBuilder<Duration>(
+                            valueListenable: _playerModule.positionListenable,
+                            builder: (context, _, __) => Text(
+                              // 时长没解析出来（磁力起播、直播）时右侧显示
+                              // `--:--`，别再出现 `0:01 / 0:00` 的倒挂。
+                              DetailVideoLayout.formatPlaybackClock(
+                                _controlsDisplayPosition(),
+                                _playerModule.duration,
+                              ),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                fontFeatures: [FontFeature.tabularFigures()],
+                              ),
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            overflow: TextOverflow.ellipsis,
                           ),
                           if (_playerModule.cacheSpeed > 0) ...[
                             const SizedBox(width: 8),
@@ -1447,740 +1452,5 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
         ),
       ),
     );
-  }
-
-  /// B 站风格：点击喇叭展开/收起上方纵向音量条；弹层内可拖动滑块、点图标静音。
-  Widget _buildVolumePopoverControl() {
-    final l10n = AppLocalizations.of(context)!;
-    return Tooltip(
-      message: l10n.detailVolumeTooltip,
-      child: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.bottomCenter,
-        children: [
-          if (_playerModule.showVolumePopover)
-            Positioned(
-              bottom: 40,
-              child: MouseRegion(
-                onEnter: (_) => _onPlayerPointerActivity(),
-                child: Material(
-                  color: Colors.black.withValues(alpha: 0.9),
-                  borderRadius: BorderRadius.circular(8),
-                  elevation: 8,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '${_playerModule.volume.round()}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            fontFeatures: [FontFeature.tabularFigures()],
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        SizedBox(
-                          width: 120,
-                          height: 32,
-                          child: RotatedBox(
-                            quarterTurns: 3,
-                            child: SliderTheme(
-                              data: SliderThemeData(
-                                trackHeight: 3,
-                                activeTrackColor: detailAccentColor(context),
-                                inactiveTrackColor: Colors.white24,
-                                thumbColor: Colors.white,
-                                thumbShape: const RoundSliderThumbShape(
-                                  enabledThumbRadius: 6,
-                                ),
-                                overlayShape: SliderComponentShape.noOverlay,
-                              ),
-                              child: Slider(
-                                value: _playerModule.volume
-                                    .clamp(0, DetailPlayer.maxVolumeUi),
-                                min: 0,
-                                max: DetailPlayer.maxVolumeUi,
-                                onChanged: (v) {
-                                  _setState(() {
-                                    _playerModule.volume = v;
-                                    _playerModule.isMuted = false;
-                                  });
-                                  unawaited(
-                                    _playerModule.playerService.setVolume(v),
-                                  );
-                                  _startHideTimer();
-                                },
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        TextButton(
-                          onPressed: () {
-                            _toggleMute();
-                            _startHideTimer();
-                          },
-                          style: TextButton.styleFrom(
-                            foregroundColor: Colors.white60,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                          child: Text(
-                            _playerModule.isMuted
-                                ? l10n.detailUnmute
-                                : l10n.detailMute,
-                            style: const TextStyle(fontSize: 11),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          Material(
-            color: Colors.transparent,
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: () {
-                _setState(() {
-                  _playerModule.showVolumePopover =
-                      !_playerModule.showVolumePopover;
-                });
-                _startHideTimer();
-              },
-              child: Padding(
-                padding: const EdgeInsets.all(4),
-                child: Icon(
-                  _playerModule.isMuted
-                      ? Icons.volume_off_rounded
-                      : Icons.volume_up_rounded,
-                  color: Colors.white,
-                  size: 28,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _playerChromeIconButton({
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback onPressed,
-    double size = 28,
-    bool enabled = true,
-  }) {
-    return Tooltip(
-      message: tooltip,
-      child: Opacity(
-        opacity: enabled ? 1 : 0.35,
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: enabled
-                ? () {
-                    onPressed();
-                    _startHideTimer();
-                  }
-                : null,
-            customBorder: const CircleBorder(),
-            child: Padding(
-              padding: const EdgeInsets.all(4),
-              child: Icon(
-                icon,
-                color: Colors.white,
-                size: size,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Duration _controlsDisplayPosition() {
-    if (_scrubbingProgress) return _scrubPreviewPosition;
-    final d = _playerModule.duration;
-    final p = _playerModule.position;
-    if (!_playerModule.isPlaying &&
-        d > Duration.zero &&
-        p >= d - const Duration(seconds: 2)) {
-      return d;
-    }
-    return p;
-  }
-
-  double _timelineFraction() {
-    final d = _playerModule.duration.inMilliseconds;
-    if (d <= 0) return 0;
-    final posMs = _scrubbingProgress
-        ? _scrubPreviewPosition.inMilliseconds
-        : _controlsDisplayPosition().inMilliseconds;
-    if (!_playerModule.isPlaying &&
-        _playerModule.currentPlayUrl != null &&
-        posMs >= d - 1500) {
-      return 1.0;
-    }
-    return (posMs / d).clamp(0.0, 1.0);
-  }
-
-  double _bufferFraction() {
-    final d = _playerModule.duration.inMilliseconds;
-    if (d <= 0) return 0;
-    return (_playerModule.bufferedPosition.inMilliseconds / d).clamp(0.0, 1.0);
-  }
-
-  Widget _buildProgressBar() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        Duration positionFromLocal(Offset local) {
-          final w = constraints.maxWidth;
-          final dMs = _playerModule.duration.inMilliseconds;
-          if (w <= 0 || dMs <= 0) return Duration.zero;
-          final f = (local.dx / w).clamp(0.0, 1.0);
-          return Duration(milliseconds: (dMs * f).round());
-        }
-
-        void previewAt(Offset local) {
-          final newPos = positionFromLocal(local);
-          _setState(() {
-            _scrubbingProgress = true;
-            _scrubPreviewPosition = newPos;
-          });
-          _scrubFastSeekThrottled(newPos);
-        }
-
-        void commitSeek(Duration newPos, {required bool precise}) {
-          _scrubFastSeekTimer?.cancel();
-          _scrubFastSeekTarget = null;
-          if (_playerModule.currentPlayUrl == null) return;
-          // 统一走 coordinator seek：先更新 authoritative 再真正 seek，
-          // 避免 seek 后回跳被 PlayheadAuthority 误判为 discontinuity。
-          unawaited(
-            _playerModule.seek(newPos).then((_) {
-              if (!mounted) return;
-              _setState(() => _scrubbingProgress = false);
-            }),
-          );
-          _setState(() {
-            if (precise) _scrubbingProgress = false;
-          });
-        }
-
-        return SizedBox(
-          height: 22,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onHorizontalDragStart: (d) {
-              _playerModule.hideTimer?.cancel();
-              previewAt(d.localPosition);
-            },
-            onHorizontalDragUpdate: (d) => previewAt(d.localPosition),
-            onHorizontalDragEnd: (_) {
-              commitSeek(_scrubPreviewPosition, precise: true);
-              _startHideTimer();
-            },
-            onTapDown: (d) {
-              _playerModule.hideTimer?.cancel();
-              final target = positionFromLocal(d.localPosition);
-              _setState(() {
-                _scrubbingProgress = true;
-                _scrubPreviewPosition = target;
-              });
-              commitSeek(target, precise: true);
-              _startHideTimer();
-            },
-            child: Stack(
-              alignment: Alignment.centerLeft,
-              children: [
-                Container(
-                  height: 4,
-                  margin: const EdgeInsets.symmetric(vertical: 9),
-                  decoration: BoxDecoration(
-                    color: Colors.white24,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                FractionallySizedBox(
-                  widthFactor: _bufferFraction(),
-                  child: Container(
-                    height: 4,
-                    margin: const EdgeInsets.symmetric(vertical: 9),
-                    decoration: BoxDecoration(
-                      color: Colors.white38,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                FractionallySizedBox(
-                  widthFactor: _timelineFraction(),
-                  child: Container(
-                    height: 4,
-                    margin: const EdgeInsets.symmetric(vertical: 9),
-                    decoration: BoxDecoration(
-                      color: detailAccentColor(context),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                Align(
-                  alignment: Alignment(_timelineFraction() * 2 - 1, 0),
-                  child: Container(
-                    width: 11,
-                    height: 11,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white,
-                      border: Border.all(
-                        color:
-                            detailAccentColor(context).withValues(alpha: 0.9),
-                        width: 1.5,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildGestureIndicator() {
-    return DetailComponents.buildGestureIndicator(
-      _playerModule.gestureHintIcon,
-      _playerModule.gestureHintValue,
-    );
-  }
-
-  Widget _buildSpeedHintOverlay() {
-    return DetailComponents.buildSpeedHintOverlay(2.0);
-  }
-
-  /// 磁力失败的错误面板与普通在线源失败是两套动作：
-  /// 磁力要能「重新解析一次」或「直接回去换资源」，而不是重放一个空 URL。
-  bool get _isMagnetError =>
-      _playerModule.playbackErrorType == PlaybackErrorType.magnetFailed;
-
-  Widget _buildErrorActionButton({
-    required String label,
-    required bool primary,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-        decoration: BoxDecoration(
-          color: primary ? Colors.blue : Colors.white24,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Text(
-          label,
-          style: const TextStyle(color: Colors.white, fontSize: 13),
-        ),
-      ),
-    );
-  }
-
-  /// 磁力失败卡片（紧凑版）。
-  ///
-  /// ⚠️ 必须比在线源那张卡矮：磁力播放器是详情页顶部的小窗（约 300dp 高），
-  /// 大图标 + 大间距 + 三段文字会直接 `BOTTOM OVERFLOWED`
-  /// （2026-10-28 真机实测溢出 45px，按钮被画到播放器外面去）。
-  Widget _buildMagnetErrorCard(AppLocalizations l10n) {
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 320),
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-      decoration: BoxDecoration(
-        color: Colors.black87,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                // 「连不上」和「连上了读不出画面」是两件事，图标别再混用同一个断链。
-                _playerModule.magnetNoFrameFailure
-                    ? Icons.videocam_off_rounded
-                    : Icons.link_off_rounded,
-                color: const Color(0xFFFF8A80),
-                size: 17,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                l10n.detailPlaybackErrorMagnet,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 5),
-          Text(
-            _playerModule.playerErrorMessage,
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 11.5,
-              height: 1.35,
-            ),
-            textAlign: TextAlign.center,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: 4),
-          // 「为什么失败 + 该怎么办」完整说清楚。
-          //
-          // 三种磁力失败要分开说：
-          // * 交接后一直读不出画面/时长（0:00 黑屏）→ 多半是封装/编码不支持；
-          // * 起播阶段彻底停下（stage=-1，例如种子里没有视频文件）；
-          // * 播到一半断源（stage=0）。
-          Text(
-            _playerModule.magnetNoFrameFailure
-                ? l10n.detailMagnetNoFrameHint
-                : _playerModule.torrentStage == -1
-                    ? l10n.detailMagnetExhaustedHint
-                    : l10n.detailMagnetStreamLostHint,
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 11.5,
-              height: 1.4,
-            ),
-            textAlign: TextAlign.center,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-          ),
-          // 2026-10-28 用户明确要求：磁力连不上**不要「再试一次」按钮**，
-          // 直接自动重试并给文字提示。重试由 DetailMagnetPlayback.play()
-          // 无限循环承担，这里只保留失败结论，不再放置任何按钮；
-          // 退出走左上角常驻返回键，换源走下方资源列表。
-        ],
-      ),
-    );
-  }
-
-  /// 在线线路失败卡片（保持原有观感：大图标 + 重试）。
-  Widget _buildGenericErrorCard(AppLocalizations l10n) {
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 340),
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-      decoration: BoxDecoration(
-        color: Colors.black87,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(
-            Icons.error_outline,
-            color: Colors.white54,
-            size: 40,
-          ),
-          const SizedBox(height: 12),
-          Text(
-            l10n.detailPlaybackFailed,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 15,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: Colors.white12,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Text(
-              _playbackErrorLabel(),
-              style: const TextStyle(color: Colors.white70, fontSize: 11),
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            _playerModule.playerErrorMessage,
-            style: const TextStyle(color: Colors.white60, fontSize: 12),
-            textAlign: TextAlign.center,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: 12),
-          _buildErrorActionButton(
-            label: l10n.detailRetry,
-            primary: true,
-            onTap: () {
-              _setState(() {
-                _playerModule.retryCount = 0;
-                _clearPlaybackError();
-              });
-              if (_playerModule.currentPlayUrl != null) {
-                final pos = _playbackPreservePosition();
-                final retryUrl = _playerModule.currentOpenUrl ??
-                    _playerModule.activeStreamUrl ??
-                    _playerModule.currentPlayUrl!;
-                unawaited(
-                  _playerModule.playerService.play(retryUrl, startAt: pos),
-                );
-                if (pos != null) {
-                  _playerModule.markResumeStartApplied(pos);
-                }
-              }
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 磁力失败卡片不再提供任何按钮（用户 2026-10-28：直接自动重试，不要按钮）。
-  /// 起播阶段由 DetailMagnetPlayback.play() 无限自动重试；只有在「重试也不会有救」
-  /// （种子里没有视频文件）时才停下来说原因。断流同样是文字结论 + 返回键退出，
-  /// 换源走详情页下方的磁力资源列表。
-
-  /// 磁力阶段总数：启动引擎 → 解析元数据 → 连接节点 → 选定文件 → 缓冲 → 交接。
-  static const int _magnetStageTotal = 6;
-
-  /// 只返回**当前这一步**的提示（用户 2026-10-28：提示每次显示一行就够），
-  /// 例如「第 2/6 步 · 解析种子元数据」。stage 越界时返回空串，由组件回退到
-  /// 原来的 torrentMessage。
-  ///
-  /// 从第 2 轮起整轮都带「正在自动重试第 N 次」前缀：重试是自动的，用户必须
-  /// 一直看得见它在动，而不是只在两次尝试之间的 1.5 秒里闪一下。
-  String _magnetStageProgressLabel(AppLocalizations l10n) {
-    // 交接完成、正在等第一帧：这时候显示「第 6/6 步 · 交给播放器」会让人
-    // 以为已经播上了，而实际画面还是黑的。直接说「正在等画面」。
-    if (_playerModule.magnetWaitingFirstFrame) {
-      return l10n.detailMagnetWaitingFrame;
-    }
-    final stage = _playerModule.torrentStage;
-    final labels = <String>[
-      l10n.detailMagnetStageInit,
-      l10n.detailMagnetStageMeta,
-      l10n.detailMagnetStagePeers,
-      l10n.detailMagnetStagePickFile,
-      l10n.detailMagnetStageBuffer,
-      l10n.detailMagnetStageHandoff,
-    ];
-    final stageLabel =
-        (stage > 0 && stage <= _magnetStageTotal) ? labels[stage - 1] : '';
-    if (_playerModule.magnetRetrying) {
-      final attempt = '${_playerModule.torrentAttempt}';
-      if (stageLabel.isEmpty) {
-        return l10n.detailMagnetAutoRetry(attempt);
-      }
-      return l10n.detailMagnetAutoRetryStage(attempt, stageLabel);
-    }
-    if (stageLabel.isEmpty) return '';
-    return l10n.detailMagnetStageProgress(
-      '$stage',
-      '$_magnetStageTotal',
-      stageLabel,
-    );
-  }
-
-  Widget _buildTorrentProgressBar() {
-    final t = _playerModule.torrentService;
-    final l10n = AppLocalizations.of(context)!;
-    return DetailComponents.buildTorrentProgressBar(
-      _playerModule.torrentStep,
-      _playerModule.torrentMessage,
-      downloadSpeed: t.downloadSpeed,
-      peers: t.peers,
-      seeds: t.seeds,
-      activePeers: t.activePeers,
-      bufferPct: t.bufferPct,
-      etaFormatted: t.etaFormatted,
-      metaWait: t.metaWaitFormatted,
-      webFallback: kIsWeb,
-      deadSwarm: t.handoverWithoutPeers,
-      deadSwarmMessage: l10n.detailMagnetNoPeers,
-      deadSwarmHint: l10n.detailMagnetNoPeersHint,
-      torrentStage: _playerModule.torrentStage,
-      stageTotal: _magnetStageTotal,
-      stageProgressLabel: _magnetStageProgressLabel(l10n),
-      attempt: _playerModule.torrentAttempt,
-      // 重试等待期标题已经写了「正在自动重试（第 N 次）」，徽标再标一次是重复。
-      attemptLabel: _playerModule.magnetRetrying
-          ? ''
-          : l10n.detailMagnetAttemptLabel('${_playerModule.torrentAttempt}'),
-      onStop: _stopMagnetLoading,
-    );
-  }
-
-  /// 用户主动停止磁力解析/起流。
-  ///
-  /// 磁力最长要等 45s，原先没有中途取消入口：用户只能干等，或整页退出
-  /// （退出会把详情页一起关掉，历史进度也跟着丢界面）。停止后落到
-  /// `magnetFailed` 错误面板，复用它已有的「再试一次 / 换个资源」，
-  /// 而不是留一块黑屏让用户猜。
-  void _stopMagnetLoading() {
-    // 不需要等待完成：停止是「放弃这次加载」，立刻回到可操作界面更重要。
-    unawaited(_playerModule.torrentService.stop());
-    _setState(() {
-      _playerModule.magnetSourcePreparing = false;
-      _playerModule.magnetRetrying = false;
-      _playerModule.magnetWaitingFirstFrame = false;
-      _playerModule.isBuffering = false;
-      _playerModule.torrentStep = -1;
-      _playerModule.torrentStage = -1;
-      const msg = '已停止加载';
-      _playerModule.torrentMessage = msg;
-      _playerModule.playerErrorMessage = msg;
-      _playerModule.playbackErrorType = PlaybackErrorType.magnetFailed;
-    });
-    DebugLog.log('Magnet', '用户主动停止磁力加载', flush: true);
-  }
-
-  Widget _buildShortcutHelpPanel() {
-    return DetailComponents.buildShortcutHelpPanel(
-      _playerModule.showShortcutHelp,
-      showLockShortcut: _supportsPlayerScreenLock,
-      onClose: () {
-        _setState(() => _playerModule.showShortcutHelp = false);
-      },
-    );
-  }
-
-  void _engagePlayerScreenLock() {
-    if (!_supportsPlayerScreenLock) return;
-    _setState(() {
-      _playerModule.isScreenLocked = true;
-      _playerModule.showLockChrome = true;
-    });
-    _startLockChromeHideTimer();
-  }
-
-  void _releasePlayerScreenLock() {
-    _setState(() {
-      _playerModule.isScreenLocked = false;
-      _playerModule.showLockChrome = false;
-    });
-    _playerModule.lockChromeHideTimer?.cancel();
-    _startHideTimer();
-  }
-
-  void _clearUnsupportedPlayerScreenLock() {
-    if (_supportsPlayerScreenLock || !_playerModule.isScreenLocked) return;
-    _playerModule.isScreenLocked = false;
-    _playerModule.showLockChrome = false;
-    _playerModule.lockChromeHideTimer?.cancel();
-  }
-
-  List<Widget> _buildPlayerLockEngageButtons() {
-    if (!_supportsPlayerScreenLock) return const [];
-    final l10n = AppLocalizations.of(context)!;
-    return [
-      _buildPlayerSideLockButton(
-        onLeft: true,
-        locked: false,
-        semanticsLabel: l10n.detailPlayerLockControls,
-        onTap: _engagePlayerScreenLock,
-      ),
-      if (_playerLockButtonsOnBothSides)
-        _buildPlayerSideLockButton(
-          onLeft: false,
-          locked: false,
-          semanticsLabel: l10n.detailPlayerLockControls,
-          onTap: _engagePlayerScreenLock,
-        ),
-    ];
-  }
-
-  List<Widget> _buildPlayerLockReleaseButtons() {
-    if (!_supportsPlayerScreenLock ||
-        !_playerModule.isScreenLocked ||
-        !_playerModule.showLockChrome) {
-      return const [];
-    }
-    final l10n = AppLocalizations.of(context)!;
-    return [
-      _buildPlayerSideLockButton(
-        onLeft: true,
-        locked: true,
-        semanticsLabel: l10n.detailPlayerUnlockControls,
-        onTap: _releasePlayerScreenLock,
-      ),
-      if (_playerLockButtonsOnBothSides)
-        _buildPlayerSideLockButton(
-          onLeft: false,
-          locked: true,
-          semanticsLabel: l10n.detailPlayerUnlockControls,
-          onTap: _releasePlayerScreenLock,
-        ),
-    ];
-  }
-
-  Widget _buildPlayerSideLockButton({
-    required bool onLeft,
-    required bool locked,
-    required String semanticsLabel,
-    required VoidCallback onTap,
-  }) {
-    return Positioned(
-      left: onLeft ? 8 : null,
-      right: onLeft ? null : 8,
-      top: 0,
-      bottom: 0,
-      child: Center(
-        child: Semantics(
-          button: true,
-          label: semanticsLabel,
-          child: GestureDetector(
-            onTap: onTap,
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.black38,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Icon(
-                locked ? Icons.lock_outline : Icons.lock_open,
-                color: Colors.white70,
-                size: 20,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// [delta] 为相对变化量（如键盘 ±10）
-  void _adjustVolume(double delta) {
-    _setState(() {
-      _playerModule.volume =
-          (_playerModule.volume + delta).clamp(0.0, DetailPlayer.maxVolumeUi);
-      unawaited(_playerModule.playerService.setVolume(_playerModule.volume));
-      if (_playerModule.isMuted) {
-        _playerModule.muteVolume = _playerModule.volume;
-      }
-    });
-  }
-
-  void _startLockChromeHideTimer() {
-    _playerModule.lockChromeHideTimer?.cancel();
-    if (!_playerModule.isScreenLocked) return;
-    _playerModule.lockChromeHideTimer = Timer(const Duration(seconds: 3), () {
-      if (mounted && _playerModule.isScreenLocked) {
-        _setState(() => _playerModule.showLockChrome = false);
-      }
-    });
   }
 }

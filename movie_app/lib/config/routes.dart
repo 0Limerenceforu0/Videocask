@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
+import '../config/app_navigator.dart';
 import '../pages/main_page.dart';
 import '../pages/home/search_page.dart';
 import '../pages/detail/detail_page.dart';
@@ -114,6 +115,9 @@ class AppRoutes {
   /// 全局路由配置
   static final GoRouter router = GoRouter(
     initialLocation: home,
+    // 显式指定根导航 key：更新弹窗等「非页面层」需要从任意位置拿到根 context，
+    // 用独立文件里的 key 避免与 settings_page 形成循环 import。
+    navigatorKey: appRootNavigatorKey,
     // 🔴 必须显式忽略平台默认路由。
     // go_router（实测 13.2.5）的 `_effectiveInitialLocation` 在
     // `overridePlatformDefaultLocation == false` 时，**即使传了 initialLocation**，
@@ -198,7 +202,11 @@ class AppRoutes {
       GoRoute(
         path: settings,
         name: 'settings',
-        pageBuilder: _fadeUpBuilder((context, state) => const SettingsPage()),
+        pageBuilder: _fadeUpBuilder(
+          (context, state) => SettingsPage(
+            anchor: state.uri.queryParameters['anchor'],
+          ),
+        ),
       ),
       // 个人中心
       GoRoute(
@@ -654,9 +662,11 @@ class AppRoutes {
     );
   }
 
-  /// 导航到设置页
-  static void toSettings(BuildContext context) {
-    context.push(settings);
+  /// 导航到设置页。[anchor] 指定要置顶的分组（如 `webdav`）。
+  static void toSettings(BuildContext context, {String? anchor}) {
+    context.push(
+      anchor == null ? settings : '$settings?anchor=$anchor',
+    );
   }
 
   /// 导航到个人中心

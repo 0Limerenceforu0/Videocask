@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../providers/cache_provider.dart';
 import '../../providers/settings_provider.dart';
+import '../../services/cache_service.dart';
 import '../../models/cache_item.dart';
 import '../../utils/cache_playback_helper.dart';
 import '../../widgets/empty_widget.dart';
@@ -184,10 +185,12 @@ class CacheManagerPage extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      l10n.cacheManagerUsedLabel(
-                        cacheProvider.formattedTotalSize,
-                        cacheProvider.formattedMaxCacheSize,
-                      ),
+                      CacheService.maxCacheBytes <= 0
+                          ? '已用 ${cacheProvider.formattedTotalSize} · 不设上限'
+                          : l10n.cacheManagerUsedLabel(
+                              cacheProvider.formattedTotalSize,
+                              cacheProvider.formattedMaxCacheSize,
+                            ),
                       style: TextStyle(color: subTextColor, fontSize: 12),
                     ),
                     Text(

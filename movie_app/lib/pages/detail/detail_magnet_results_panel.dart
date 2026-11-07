@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:movie_app/config/routes.dart';
@@ -7,6 +6,7 @@ import 'package:movie_app/l10n/app_localizations.dart';
 import 'package:movie_app/models/movie.dart';
 import 'package:movie_app/models/torrent_info.dart';
 import 'package:movie_app/utils/torrent_title_display.dart';
+import 'package:movie_app/widgets/magnet_action_widgets.dart';
 
 import 'detail_ui_tokens.dart';
 
@@ -520,52 +520,74 @@ class _MagnetResultTile extends StatelessWidget {
                 ),
                 if (torrent.imdbId != null && torrent.imdbId!.isNotEmpty)
                   _meta(Icons.movie_outlined, torrent.imdbId!, colors),
+                MagnetSubtitleBadge(
+                  title: torrent.name,
+                  compact: true,
+                  muted: colors.muted,
+                  accent: colors.accent,
+                ),
               ],
             ),
             const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
+            // 用 Row + Expanded 平分三份，保证「播放 / 磁力详情 / 下载」
+            // 恒在同一行；以前用 Wrap，窄屏上下载按钮会掉到第二行。
+            Row(
               children: [
-                FilledButton.icon(
-                  onPressed: () => AppRoutes.toMagnetTorrentDetail(
-                    context,
-                    torrent,
-                    enrichFrom: movie,
-                    displayTitleHint: _magnetHintFromMovie(movie),
-                  ),
-                  icon: const Icon(Icons.play_arrow, size: 20),
-                  label: Text(l10n.detailMagnetPlay),
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 8,
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () => AppRoutes.toMagnetTorrentDetail(
+                      context,
+                      torrent,
+                      enrichFrom: movie,
+                      displayTitleHint: _magnetHintFromMovie(movie),
+                    ),
+                    icon: const Icon(Icons.play_arrow, size: 18),
+                    label: Flexible(
+                      child: Text(
+                        l10n.detailMagnetPlay,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 8,
+                      ),
+                      minimumSize: const Size(0, 36),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                   ),
                 ),
-                TextButton(
-                  onPressed: () => AppRoutes.toMagnetTorrentDetail(
-                    context,
-                    torrent,
-                    enrichFrom: movie,
-                    displayTitleHint: _magnetHintFromMovie(movie),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: TextButton(
+                    onPressed: () => AppRoutes.toMagnetTorrentDetail(
+                      context,
+                      torrent,
+                      enrichFrom: movie,
+                      displayTitleHint: _magnetHintFromMovie(movie),
+                    ),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      minimumSize: const Size(0, 36),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Text(
+                      l10n.detailMagnetOpenDetail,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                  child: Text(l10n.detailMagnetOpenDetail),
                 ),
-                OutlinedButton.icon(
-                  onPressed: () => _copyMagnet(context, torrent, l10n, colors),
-                  icon: const Icon(Icons.download_outlined, size: 18),
-                  label: Text(l10n.detailMagnetDownload),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: colors.onSurface,
-                    side: BorderSide(
-                      color: colors.muted.withValues(alpha: 0.6),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: MagnetDownloadButton(
+                    magnetUri: torrent.magnetUri,
+                    name: torrent.name,
+                    foreground: colors.onSurface,
+                    borderColor: colors.muted,
+                    compact: true,
                   ),
                 ),
               ],
@@ -595,18 +617,6 @@ class _MagnetResultTile extends StatelessWidget {
     );
   }
 
-  void _copyMagnet(
-    BuildContext context,
-    TorrentInfo torrent,
-    AppLocalizations l10n,
-    DetailPageColors colors,
-  ) {
-    Clipboard.setData(ClipboardData(text: torrent.magnetUri));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(l10n.detailMagnetCopiedToast),
-        duration: const Duration(seconds: 2),
-      ),
-    );
-  }
+  // 「下载」改为直接触发 App 内 BT 下载（见 MagnetDownloadButton），
+  // 不再只把磁力链接复制到剪贴板。
 }

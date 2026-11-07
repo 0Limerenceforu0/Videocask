@@ -23,6 +23,8 @@ String _driverTitle(MagnetSourceDriver d) {
       return 'SolidTorrents 类 HTML';
     case MagnetSourceDriver.jackettApi:
       return 'Jackett Results JSON';
+    case MagnetSourceDriver.knabenJson:
+      return 'Knaben 聚合 API（POST）';
   }
 }
 
@@ -73,10 +75,34 @@ class MagnetSourcesPage extends StatelessWidget {
       ),
       body: Consumer<SettingsProvider>(
         builder: (context, settings, _) {
-          final list = settings.magnetSources;
+          final list = settings.visibleMagnetSources;
+          final autoDisabled = settings.deadSourcesAutoDisabled;
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 88),
             children: [
+              if (autoDisabled > 0)
+                Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 8, 6),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '已自动关闭 $autoDisabled 个长期不可达的内置源'
+                            '（YTS / 1337x / BT4G / Nyaa），'
+                            '不再让每次搜索白等超时。',
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () =>
+                              settings.acknowledgeDeadSourcesNotice(),
+                          child: const Text('知道了'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               Text(
                 '聚合搜索仅在详情页「磁力」等场景发起。请使用 {query} 占位关键词；部分驱动支持 {page}（如 Apibay）。',
                 style: theme.textTheme.bodySmall

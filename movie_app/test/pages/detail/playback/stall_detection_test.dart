@@ -34,7 +34,7 @@ void main() {
       );
     });
 
-    test('正在播放 → 不是停滞（哪怕缓存贴近播放头）', () {
+    test('正在播放且位置在推进 → 不是停滞（哪怕缓存贴近播放头）', () {
       expect(
         isBufferExhaustedStall(
           duration: const Duration(hours: 2),
@@ -42,6 +42,34 @@ void main() {
           bufferedPosition: s(135),
           isPlaying: true,
           isBuffering: false,
+        ),
+        isFalse,
+      );
+    });
+
+    test('playing=true 但位置不推进 → 仍是停滞（mpv 僵死 34 分钟的现场）', () {
+      expect(
+        isBufferExhaustedStall(
+          duration: const Duration(hours: 2),
+          position: s(135),
+          bufferedPosition: s(135),
+          isPlaying: true,
+          isBuffering: false,
+          advancing: false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('playing=true、不推进、但缓存还有富余 → 不是停滞（还在下载）', () {
+      expect(
+        isBufferExhaustedStall(
+          duration: const Duration(hours: 2),
+          position: s(135),
+          bufferedPosition: s(900),
+          isPlaying: true,
+          isBuffering: false,
+          advancing: false,
         ),
         isFalse,
       );
@@ -83,6 +111,38 @@ void main() {
           isBuffering: false,
         ),
         isFalse,
+      );
+    });
+
+    test('🔴 seek 到未缓冲点后用户主动暂停 → 不是停滞（摘修复即红）', () {
+      // 2026-11-07 现场：点进度条后立刻暂停，缓冲前沿恰好贴合播放头，
+      // 旧判据（靠「暂停时缓存还有富余」区分）失效 → 被当成缓冲耗尽停滞，
+      // 点播放就走软重载，画面回来时位置已经被拽回 seek 之前。
+      expect(
+        isBufferExhaustedStall(
+          duration: const Duration(hours: 2),
+          position: s(3000),
+          bufferedPosition: s(3000),
+          isPlaying: false,
+          isBuffering: false,
+          userPaused: true,
+        ),
+        isFalse,
+      );
+    });
+
+    test('用户暂停豁免不影响「mpv 僵死但 playing=true」的判定', () {
+      expect(
+        isBufferExhaustedStall(
+          duration: const Duration(hours: 2),
+          position: s(135),
+          bufferedPosition: s(135),
+          isPlaying: true,
+          isBuffering: false,
+          advancing: false,
+          userPaused: true,
+        ),
+        isTrue,
       );
     });
   });
@@ -176,6 +236,31 @@ void main() {
         resolveReloadStartAt(
           authoritative: s(120),
           reported: Duration.zero,
+        ),
+        s(120),
+      );
+    });
+
+    test('🔴 刚显式 seek 过 → 软重载优先用用户选的位置（摘修复即红）', () {
+      // 用户从 2:00 拖到 50:00，mpv 迟到的旧上报仍是 2:00。
+      // 旧实现按「偏差>30s 以实际上报为准」会把重载起点定成 2:00，
+      // 于是「过一会恢复画面，但是播放位置完全不对」。
+      expect(
+        resolveReloadStartAt(
+          authoritative: s(3000),
+          reported: s(120),
+          preferAuthoritative: true,
+        ),
+        s(3000),
+      );
+    });
+
+    test('未处于显式 seek 保护窗口 → 仍按脱节规则用实际上报', () {
+      expect(
+        resolveReloadStartAt(
+          authoritative: s(3000),
+          reported: s(120),
+          preferAuthoritative: false,
         ),
         s(120),
       );

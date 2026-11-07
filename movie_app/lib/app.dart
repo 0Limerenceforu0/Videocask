@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'config/app_env.dart';
+import 'config/app_locale_policy.dart';
 import 'config/routes.dart';
 import 'providers/theme_provider.dart';
 import 'providers/user_provider.dart';
@@ -24,6 +25,7 @@ import 'services/cache_service.dart';
 import 'services/sync_service.dart';
 import 'l10n/app_localizations.dart';
 import 'widgets/material_app_deep_link_child.dart';
+import 'pages/settings/update_dialog.dart';
 import 'services/deep_link_stream_service.dart';
 import 'services/dlna_service.dart';
 import 'services/local_media_http_server.dart';
@@ -141,6 +143,9 @@ class _MovieAppState extends State<MovieApp> {
         });
         WidgetsBinding.instance.addPostFrameCallback((_) {
           unawaited(DeepLinkStreamService.instance.start());
+          // 启动后延迟静默检查更新：只在新版本时弹窗，失败不打扰。
+          // 放在首帧之后，避免和首页数据加载抢带宽。
+          scheduleStartupUpdateCheck();
         });
       }
     } catch (e) {
@@ -159,6 +164,8 @@ class _MovieAppState extends State<MovieApp> {
         debugShowCheckedModeBanner: false,
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
+        // 与应用主体保持一致，避免初始化页在英文系统下闪一屏英文。
+        locale: resolveAppLocale(AppLocalizations.supportedLocales),
         home: Scaffold(
           backgroundColor: const Color(0xFF121212),
           body: Center(
@@ -324,17 +331,9 @@ class _MovieAppState extends State<MovieApp> {
                 routerConfig: AppRoutes.router,
                 localizationsDelegates: AppLocalizations.localizationsDelegates,
                 supportedLocales: AppLocalizations.supportedLocales,
-                localeListResolutionCallback: (locales, supported) {
-                  if (locales == null) return const Locale('zh');
-                  for (final locale in locales) {
-                    for (final s in supported) {
-                      if (s.languageCode == locale.languageCode) {
-                        return s;
-                      }
-                    }
-                  }
-                  return const Locale('zh');
-                },
+                // 固定中文：跟随系统语言会与界面里的中文硬编码文案混排，
+                // 详见 config/app_locale_policy.dart 的说明。
+                locale: resolveAppLocale(AppLocalizations.supportedLocales),
                 builder: (context, child) =>
                     MaterialAppDeepLinkChild(child: child),
               );

@@ -11,6 +11,7 @@ import '../utils/commentary_content_filter.dart';
 import 'imdb_lookup_service.dart';
 import 'storage_service.dart';
 import 'torrent_player_models.dart';
+import 'torrent_search_cache.dart';
 import 'video_title_resolve_service.dart';
 
 /// Torrentio 单条流的统计信息（从 `streams[].title` 的
@@ -22,6 +23,11 @@ class TorrentioStreamStats {
   const TorrentioStreamStats({this.seeders = 0, this.sizeBytes = 0});
 
   bool get isEmpty => seeders == 0 && sizeBytes == 0;
+}
+
+/// [searchWithConfig] 超时哨兵：区分「超时」与「正常空结果」。
+class _TimeoutSentinel {
+  const _TimeoutSentinel();
 }
 
 /// 磁力链接搜索服务
@@ -49,16 +55,15 @@ class TorrentSearchService {
   ///
   /// 曾经用 15s 一刀切，导致 4 个死源各耗 15s、整轮 28.6s；
   /// 后来收到 6s 一刀切，又把 Torrentio 自己掐死了。分级才对。
-  static const Duration _fastSourceTimeout = Duration(seconds: 12);
-  static const Duration _slowSourceTimeout = Duration(seconds: 35);
+  /// 具体数值见 [_timeoutFor]（快源 8s / 慢源 14s）。
 
-  /// `searchPreferringImdb` 的**总体预算**：超过这个时长就不再跑第二轮。
+  /// `searchPreferringImdb` 的**软性总预算**（仅用于日志观测，不再硬失败）。
   ///
-  /// 慢源（Torrentio）实测可能吃掉 20–30s，如果它空手而归还要再跑一轮
-  /// 标题搜索，就会撞上调用方的 45s 整体超时 —— 整轮结果被当超时丢掉，
-  /// 用户看到的是「磁力模块直接没了」。宁可不跑第二轮，也要把第一轮的
-  /// 结果（哪怕是空）按时交出去。
-  static const Duration _roundBudget = Duration(seconds: 34);
+  /// 旧实现：超过这个时长就 `return const []`，直接把标题轮掐掉 →
+  /// 用户看到的就是「偶尔失败、再点一次又有了」（2026-10-28 复盘）。
+  /// 现在两轮**并行**且各自有单源超时兜底，整轮最坏 ≈ 单轮时长（~14s），
+  /// 远小于调用方 45s；因此不再因预算用尽而丢弃结果，只打日志。
+  static const Duration _roundBudget = Duration(seconds: 40);
 
   static final Map<String, String> _browserHeaders = {
     'User-Agent':
@@ -70,9 +75,10 @@ class TorrentSearchService {
   final Dio _dio = Dio(
     BaseOptions(
       // 快源（HTML / JSON 文本站）：连不上就是连不上，不值得等太久。
-      // apibay 实测偶尔要 8s+ 才回包（真机 18:38 记录），留到 8s/12s。
-      connectTimeout: const Duration(seconds: 6),
-      receiveTimeout: const Duration(seconds: 12),
+      // receiveTimeout(8s) 需 ≤ 外层单源快超时(8s)：让 Dio 自身先于外层
+      // 超时报错，日志里才能区分「网络慢」与「被超时掐断」。
+      connectTimeout: const Duration(seconds: 5),
+      receiveTimeout: const Duration(seconds: 8),
     ),
   );
 
@@ -81,11 +87,12 @@ class TorrentSearchService {
   /// （2026-10-27 实测：connect timeout 5s，一条结果都没拿到）。
   final Dio _slowDio = Dio(
     BaseOptions(
-      // 真机实测（2026-10-27 18:46）：`curl -m 15` 拿不到完整响应体，
-      // 但 ping 稳定 350ms、HTTP 200 —— Torrentio 是**服务端慢**
-      // （它要实时聚合多个 provider），不是网络不通。必须给足预算。
-      connectTimeout: const Duration(seconds: 12),
-      receiveTimeout: const Duration(seconds: 34),
+      // Torrentio 是**服务端慢**（实时聚合多个 provider），不是网络不通，
+      // 必须给足预算；但 receiveTimeout(12s) 必须 < 外层单源超时(14s)，
+      // 这样先由 Dio 自身报错、重试逻辑才好判定「是超时而非空结果」。
+      // Knaben 也走这个 Dio（POST，实测尾部能到 14s）。
+      connectTimeout: const Duration(seconds: 8),
+      receiveTimeout: const Duration(seconds: 12),
     ),
   );
 
@@ -202,7 +209,10 @@ class TorrentSearchService {
     return MagnetSourceCatalog.builtInDefaults.where((c) => c.enabled).toList();
   }
 
-  /// 搜索磁力链接（聚合多源）
+  /// 搜索磁力链接（聚合多源）。
+  ///
+  /// P1-4 先到先交付：每完成一个源就合并去重，并通过 [onBatch] 把当前快照
+  /// 回传一次（首屏一出即可停转圈）；最终仍返回完整去重后的列表。
   Future<List<TorrentInfo>> search(
     String query, {
     int page = 1,
@@ -213,6 +223,7 @@ class TorrentSearchService {
     bool strictMatchForDetailPage = false,
     String? refineImdbId,
     Set<MagnetSourceDriver>? restrictDrivers,
+    void Function(List<TorrentInfo>)? onBatch,
   }) async {
     final q = query.trim();
     if (q.isEmpty) return [];
@@ -220,31 +231,47 @@ class TorrentSearchService {
     final title = (refineTitle ?? q).trim();
     var configs = activeConfigs();
     // 2026-10-25：IMDb 轮只允许「tt-id 索引源」（Torrentio / YTS）参与。
-    // 把 `tt` id 丢给 1337x / BT4G / Apibay / Nyaa / Solid / Jackett 这类
-    // 文本源只会返回垃圾并各自撞 15s 超时，`Future.wait` 等最慢的源 →
-    // 整轮被拖到 15s+，正是「搜索框磁力出来很慢」的根因。
+    // 把 `tt` id 丢给文本源只会返回垃圾并各自撞超时。
     if (restrictDrivers != null && restrictDrivers.isNotEmpty) {
       configs =
           configs.where((c) => restrictDrivers.contains(c.driver)).toList();
     }
     if (configs.isEmpty) return [];
 
-    // 2026-10-24：给每个源加**独立硬超时**。
-    //
-    // Dio 自身的 connect 12s + receive 18s，单源最坏 30s；`Future.wait`
-    // 等的是**最慢的那个源**，所以一个半死不活的源能把整轮搜索拖到 30s。
-    // 而 `searchPreferringImdb` 最多跑两轮（IMDb 轮 + 回退标题轮），
-    // 最坏 60s —— 必然撞上调用方的 45s 整体超时，于是整轮结果被当作
-    // 超时丢弃（用户看到的就是「磁力资源模块直接没了」）。
-    // 封顶 15s/源后：单轮 ≤15s，两轮 ≤30s + 解析，稳定落在 45s 以内。
+    // P1-4：先到先交付。每完成一个源就合并去重后回调一批。
+    final merged = <TorrentInfo>[];
+    final seenHashes = <String>{};
+    void emit() {
+      if (onBatch != null) {
+        onBatch(
+          _finalizeResults(
+            List.of(merged),
+            refineTitle: title,
+            refineYear: refineYear?.trim(),
+            refineAlias: refineAlias?.trim(),
+            refineEpisodeIndexZeroBased: refineEpisodeIndexZeroBased,
+            strictMatchForDetailPage: strictMatchForDetailPage,
+            refineImdbId: refineImdbId?.trim(),
+          ),
+        );
+      }
+    }
+
+    // 每个源独立超时 + 慢源抖动重试 1 次（见 [_runSourceWithRetry]）。
     final futures = configs.map((c) {
-      final limit = _isSlowDriver(c.driver)
-          ? _slowSourceTimeout
-          : _fastSourceTimeout;
-      return _searchWithConfig(c, q, page).timeout(
-            limit,
-            onTimeout: () => null,
-          );
+      return _runSourceWithRetry(c, q, page).then((res) {
+        if (res != null) {
+          for (final r in res) {
+            final h = extractBtih(r.magnetUri);
+            if (h != null && !seenHashes.contains(h)) {
+              seenHashes.add(h);
+              merged.add(r);
+            }
+          }
+          emit();
+        }
+        return res;
+      });
     });
     final responses = await Future.wait(futures, eagerError: false);
 
@@ -267,36 +294,128 @@ class TorrentSearchService {
   }
 
   /// 先解析 IMDb ID（豆瓣 / TMDB / IMDb 联想）并用 `tt` 搜磁力，无结果再回退片名搜索。
+  ///
+  /// P0-3 缓存：命中立即返回旧结果 + 后台静默刷新；P1-5 两轮并行；P0 取消
+  /// 「预算用尽即丢结果」的硬失败；P1-4 通过 [onBatch] 先到先交付。
   Future<List<TorrentInfo>> searchPreferringImdb({
     required String displayTitle,
     String? year,
     String? alias,
     int? refineEpisodeIndexZeroBased,
     bool strictMatchForDetailPage = false,
+    bool forceRefresh = false,
+    void Function(List<TorrentInfo>)? onBatch,
   }) async {
-    final sw = Stopwatch()..start();
-    final resolved = await VideoTitleResolveService.instance.resolve(
+    final cacheKey = TorrentSearchCache.key(
       displayTitle,
+      year,
+      strictMatchForDetailPage,
+    );
+    if (!forceRefresh) {
+      final cached = TorrentSearchCache().get(cacheKey);
+      if (cached != null) {
+        debugPrint('磁力搜索命中缓存（${cached.length} 条），立即返回并后台刷新');
+        onBatch?.call(cached);
+        // 后台静默刷新（fire-and-forget）：旧结果已返回，刷新失败不影响 UI。
+        final Future<void> _ = _refreshCacheInBackground(
+          cacheKey,
+          displayTitle: displayTitle,
+          year: year,
+          alias: alias,
+          refineEpisodeIndexZeroBased: refineEpisodeIndexZeroBased,
+          strictMatchForDetailPage: strictMatchForDetailPage,
+        );
+        return cached;
+      }
+    }
+
+    final results = await _searchPreferringImdbCore(
+      displayTitle: displayTitle,
       year: year,
       alias: alias,
-    );
-    final effectiveYear = resolved?.year ?? year;
-    final relevanceTitle = _relevanceTitleForResolved(
-      displayTitle,
-      alias,
-      resolved,
+      refineEpisodeIndexZeroBased: refineEpisodeIndexZeroBased,
+      strictMatchForDetailPage: strictMatchForDetailPage,
+      onBatch: onBatch,
     );
 
-    final direct = ImdbLookupService.parseImdbIdFromText(displayTitle);
-    final imdb = direct ?? resolved?.imdbId;
+    // 仅缓存非空结果（空结果不缓存，避免「抖动一次就缓存了空」）。
+    if (results.isNotEmpty) {
+      TorrentSearchCache().put(cacheKey, results);
+    } else {
+      TorrentSearchCache().invalidate(cacheKey);
+    }
+    return results;
+  }
+
+  /// [searchPreferringImdb] 的实际搜索实现（不含缓存层）。
+  ///
+  /// 关键改动（P1-5）：IMDb 解析不再**阻塞**标题轮。
+  /// - 标题轮（原名轮）立刻用原始片名开跑，走 Knaben 等支持中文的源；
+  /// - IMDb 解析（最多 8s）完成后，若拿到 tt-id 再并行补一轮 IMDb 轮
+  ///   （Torrentio / YTS，走 tt-id 索引）；
+  /// - 两轮**并行**，总时长 ≈ 单轮（不再 2×），且合并后 btih 去重。
+  /// 这样即便 IMDb 解析错（战狼→Logan），原名轮也能把正确的《战狼》捞回来。
+  Future<List<TorrentInfo>> _searchPreferringImdbCore({
+    required String displayTitle,
+    String? year,
+    String? alias,
+    int? refineEpisodeIndexZeroBased,
+    bool strictMatchForDetailPage = false,
+    void Function(List<TorrentInfo>)? onBatch,
+  }) async {
+    final sw = Stopwatch()..start();
+
+    // 跨轮去重累加器：任一轮先出结果即通过 [onBatch] 上屏（P1-4）。
+    final running = <TorrentInfo>[];
+    final seenHashes = <String>{};
+    void bridge(List<TorrentInfo> roundBatch) {
+      for (final r in roundBatch) {
+        final h = extractBtih(r.magnetUri);
+        if (h != null && !seenHashes.contains(h)) {
+          seenHashes.add(h);
+          running.add(r);
+        }
+      }
+      if (onBatch != null) {
+        onBatch(
+          _finalizeResults(
+            List.of(running),
+            refineTitle: displayTitle,
+            refineYear: year?.trim(),
+            refineAlias: alias?.trim(),
+            refineEpisodeIndexZeroBased: refineEpisodeIndexZeroBased,
+            strictMatchForDetailPage: strictMatchForDetailPage,
+          ),
+        );
+      }
+    }
+
+    // 原名轮：立刻开跑，不等服务端 IMDb 解析。
+    final titleRoundFuture = search(
+      _buildFallbackTitleQuery(displayTitle, year, alias),
+      refineTitle: displayTitle,
+      refineYear: year?.trim(),
+      refineAlias: alias?.trim(),
+      refineEpisodeIndexZeroBased: refineEpisodeIndexZeroBased,
+      strictMatchForDetailPage: strictMatchForDetailPage,
+      onBatch: bridge,
+    );
+
+    // IMDb 解析（最多 8s，失败/超时不阻塞标题轮）。
+    final resolved = await VideoTitleResolveService.instance
+        .resolve(displayTitle, year: year, alias: alias)
+        .timeout(const Duration(seconds: 8));
+    final effectiveYear = resolved?.year ?? year;
+    final imdb = ImdbLookupService.parseImdbIdFromText(displayTitle) ??
+        resolved?.imdbId;
+
+    Future<List<TorrentInfo>>? imdbRoundFuture;
     if (imdb != null) {
-      // IMDb 轮：只查 tt-id 索引源（Torrentio / YTS），不把 `tt` id 丢给文本源。
-      // 文本源对 tt id 返回垃圾并各自撞 15s 超时，会拖垮整轮。
-      final narrowed = await search(
+      imdbRoundFuture = search(
         imdb,
         refineTitle: displayTitle,
-        refineYear: effectiveYear,
-        refineAlias: alias,
+        refineYear: effectiveYear?.trim(),
+        refineAlias: alias?.trim(),
         refineEpisodeIndexZeroBased: refineEpisodeIndexZeroBased,
         strictMatchForDetailPage: strictMatchForDetailPage,
         refineImdbId: imdb,
@@ -304,40 +423,76 @@ class TorrentSearchService {
           MagnetSourceDriver.torrentioJson,
           MagnetSourceDriver.ytsMxApi,
         },
+        onBatch: bridge,
       );
-      final trustedImdb = resolved?.imdbId != null && resolved!.imdbId == imdb;
-      if (narrowed.isNotEmpty &&
-          (trustedImdb || _areResultsRelevant(narrowed, relevanceTitle))) {
-        return narrowed;
-      }
     }
-    if (sw.elapsed >= _roundBudget) {
-      debugPrint(
-        '磁力两轮预算用尽(${sw.elapsed.inSeconds}s)，跳过标题轮，'
-        '避免撞调用方 45s 整体超时',
-      );
-      return const [];
-    }
-    final q = _buildFallbackTitleQuery(
-      displayTitle,
-      effectiveYear,
-      alias,
-      resolved: resolved,
-    );
-    // 回退标题轮：用片名查所有源。此处**不再**传 `refineImdbId` ——
-    // 标题轮结果来自文本源，名字里不含 tt id，传了反而被
-    // `_finalizeResults` 的 imdb 硬过滤整批删光（旧实现「详情页磁力一直为空」）。
-    final results = await search(
-      q,
+
+    // 两轮均已在 `bridge` 中实时并入 `running`；此处仅等待它们结束。
+    await titleRoundFuture;
+    if (imdbRoundFuture != null) await imdbRoundFuture;
+
+    // 合并：btih 去重已在 bridge 完成；此处做相关性过滤（P1-6，带逃生口）。
+    final relevanceTitle =
+        _relevanceTitleForResolved(displayTitle, alias, resolved);
+    final merged = _applyRelevanceFilter(running, relevanceTitle);
+    final finalList = _finalizeResults(
+      merged,
       refineTitle: displayTitle,
-      refineYear: effectiveYear,
-      refineAlias: alias,
+      refineYear: year?.trim(),
+      refineAlias: alias?.trim(),
       refineEpisodeIndexZeroBased: refineEpisodeIndexZeroBased,
       strictMatchForDetailPage: strictMatchForDetailPage,
     );
-    return results
-        .where((result) => _isResultRelevant(result, relevanceTitle))
+
+    if (sw.elapsed >= _roundBudget) {
+      debugPrint('磁力搜索耗时 ${sw.elapsed.inSeconds}s（已并行，仍返回已收集结果）');
+    }
+    onBatch?.call(finalList);
+    return finalList;
+  }
+
+  /// 相关性过滤（P1-6，学 magnet-cli 的位置与规则）。
+  ///
+  /// - 用底层 `isTorrentResultRelevant` 判定单条是否相关；
+  /// - **逃生口**：过滤后剩 < 2 条时，极可能是「中文名 vs 英文发布名」的
+  ///   误杀，直接放行原列表（宁可多给几条近似，也不留空）。
+  List<TorrentInfo> _applyRelevanceFilter(
+    List<TorrentInfo> list,
+    String relevanceTitle,
+  ) {
+    if (relevanceTitle.trim().isEmpty) return list;
+    final kept = list
+        .where((t) => isTorrentResultRelevant(t.name, relevanceTitle))
         .toList();
+    if (kept.length < 2) return list;
+    return kept;
+  }
+
+  /// 缓存命中后的后台静默刷新（stale-while-revalidate）。
+  ///
+  /// 失败不改变任何 UI，也不抛异常（旧结果已返回给用户）。
+  Future<void> _refreshCacheInBackground(
+    String cacheKey, {
+    required String displayTitle,
+    String? year,
+    String? alias,
+    int? refineEpisodeIndexZeroBased,
+    bool strictMatchForDetailPage = false,
+  }) async {
+    try {
+      final fresh = await _searchPreferringImdbCore(
+        displayTitle: displayTitle,
+        year: year,
+        alias: alias,
+        refineEpisodeIndexZeroBased: refineEpisodeIndexZeroBased,
+        strictMatchForDetailPage: strictMatchForDetailPage,
+      );
+      if (fresh.isNotEmpty) {
+        TorrentSearchCache().put(cacheKey, fresh);
+      }
+    } catch (e) {
+      debugPrint('磁力缓存后台刷新失败（忽略）: $e');
+    }
   }
 
   /// 优先用 TMDB/豆瓣解析出的英文名，否则别名或显示标题。
@@ -360,23 +515,6 @@ class TorrentSearchService {
       return a;
     }
     return displayTitle;
-  }
-
-  /// 检查搜索结果是否与显示标题相关
-  bool _areResultsRelevant(List<TorrentInfo> results, String displayTitle) {
-    if (results.isEmpty) return false;
-    // 至少有一半的结果应该与显示标题相关
-    final relevantCount = results
-        .where((result) => _isResultRelevant(result, displayTitle))
-        .length;
-    return relevantCount >= results.length / 2;
-  }
-
-  /// 检查单个搜索结果是否与显示标题相关
-  ///
-  /// 2026-10-24：判定逻辑抽到 `isTorrentResultRelevant`（纯函数，可单测）。
-  bool _isResultRelevant(TorrentInfo result, String displayTitle) {
-    return isTorrentResultRelevant(result.name, displayTitle);
   }
 
   String _buildFallbackTitleQuery(
@@ -414,6 +552,7 @@ class TorrentSearchService {
     switch (d) {
       case MagnetSourceDriver.torrentioJson:
       case MagnetSourceDriver.jackettApi:
+      case MagnetSourceDriver.knabenJson:
         return true;
       case MagnetSourceDriver.ytsMxApi:
       case MagnetSourceDriver.html1337x:
@@ -430,7 +569,9 @@ class TorrentSearchService {
     switch (d) {
       case MagnetSourceDriver.torrentioJson:
       case MagnetSourceDriver.jackettApi:
-        // Torrentio 靠 IMDb id；Jackett 是用户自建索引器，可能带中文库。
+      case MagnetSourceDriver.knabenJson:
+        // Torrentio 靠 IMDb id；Jackett 是用户自建索引器，可能带中文库；
+        // Knaben 聚合站支持中文原名直查（实测「我不是药神」直接出结果）。
         return false;
       case MagnetSourceDriver.ytsMxApi:
       case MagnetSourceDriver.html1337x:
@@ -439,6 +580,62 @@ class TorrentSearchService {
       case MagnetSourceDriver.apibay:
       case MagnetSourceDriver.solidHtml:
         return true;
+    }
+  }
+
+  /// 单源超时（P0-2：消除层层倒挂）。
+  ///
+  /// 慢源（Torrentio / Jackett / Knaben）给 14s；快源 8s。
+  /// 它必须 ≤ Dio 自身的 receiveTimeout（快源 Dio=8s / 慢源 Dio=12s），
+  /// 这样先由 Dio 自身报错、重试逻辑才好判定「是超时而非空结果」。
+  static Duration _timeoutFor(MagnetSourceDriver d) {
+    switch (d) {
+      case MagnetSourceDriver.torrentioJson:
+      case MagnetSourceDriver.jackettApi:
+      case MagnetSourceDriver.knabenJson:
+        return const Duration(seconds: 14);
+      case MagnetSourceDriver.ytsMxApi:
+      case MagnetSourceDriver.html1337x:
+      case MagnetSourceDriver.htmlBt4g:
+      case MagnetSourceDriver.rssNyaa:
+      case MagnetSourceDriver.apibay:
+      case MagnetSourceDriver.solidHtml:
+        return const Duration(seconds: 8);
+    }
+  }
+
+  /// 超时哨兵（顶层 [_TimeoutSentinel]）用以在 [Future.timeout] 中区分
+  /// 「超时」与「正常空结果」。
+
+  /// 单源执行 + 抖动重试（P0/P1：单源抖动退避重试 1 次）。
+  ///
+  /// 仅对「慢源」（Torrentio / Jackett / Knaben）在**超时**时重试一次；
+  /// genuine 空结果（对端正常返回空 streams）不重试，避免无谓翻倍延迟。
+  Future<List<TorrentInfo>?> _runSourceWithRetry(
+    MagnetSourceConfig c,
+    String query,
+    int page,
+  ) async {
+    final limit = _timeoutFor(c.driver);
+    try {
+      // 超时不返回 null，而是抛哨兵，便于下方区分「超时」与「空结果」。
+      final first = await _searchWithConfig(c, query, page)
+          .timeout(limit, onTimeout: () => throw const _TimeoutSentinel());
+      return first; // 可能为 null（空结果），不重试
+    } on _TimeoutSentinel {
+      if (!_isSlowDriver(c.driver)) return null;
+      // 慢源超时 → 退避 2s 后重试一次（抖动常常第二次就成功）
+      await Future.delayed(const Duration(seconds: 2));
+      try {
+        return await _searchWithConfig(c, query, page)
+            .timeout(limit, onTimeout: () => null);
+      } catch (e) {
+        debugPrint('磁力源 ${c.displayName} 重试仍失败: $e');
+        return null;
+      }
+    } catch (e) {
+      debugPrint('磁力源 ${c.displayName} 搜索失败: $e');
+      return null;
     }
   }
 
@@ -462,6 +659,14 @@ class TorrentSearchService {
       debugPrint('磁力源 ${c.displayName} 跳过：查询词含中文，该源不索引中文名');
       return null;
     }
+    // Torrentio 只认 IMDb id（/movie/tt...）。拿中文文本去查必然空，
+    // 还白占一次 14s 慢源超时、甚至再重试一次，把中文场景整体拖慢。
+    // 中文查询的 Torrentio 结果交给 IMDb 轮（会用 tt-id 重新查）。
+    if (_cjkPattern.hasMatch(query) &&
+        c.driver == MagnetSourceDriver.torrentioJson) {
+      debugPrint('磁力源 ${c.displayName} 跳过：只认 IMDb id，中文文本查询无意义');
+      return null;
+    }
     try {
       switch (c.driver) {
         case MagnetSourceDriver.ytsMxApi:
@@ -480,6 +685,8 @@ class TorrentSearchService {
           return _searchSolidAt(c.buildUrl(query, page: page), c.displayName);
         case MagnetSourceDriver.jackettApi:
           return _searchJackettAt(c.buildUrl(query, page: page), c.displayName);
+        case MagnetSourceDriver.knabenJson:
+          return _searchKnabenAt(c, query, c.displayName);
       }
     } catch (e) {
       debugPrint('磁力源 ${c.displayName} 搜索失败: $e');
@@ -1089,6 +1296,130 @@ class TorrentSearchService {
       debugPrint('Jackett 搜索失败: $e');
       return null;
     }
+  }
+
+  /// Knaben 聚合 API（POST `https://api.knaben.org/v1`）。
+  ///
+  /// 独立生态的冗余第二源（2026-10-28 实测手机 200/3.6s，支持中文原名直查）。
+  /// 响应体信封是 `{"hits":[...]}`；字段：`hash`/`magnetUrl`、`liveSeeders`/
+  /// `livePeers`（实时做种，比 Torrentio 标题正则解析可靠）、`seeders`/`peers`
+  /// （索引统计）、`bytes`、`description`/`title`、`category`、`cachedOrigin`、`virusDetection`。
+  ///
+  /// 关键：中文查询直接走原名（不经过 IMDb），天然避开「战狼→Logan」错配；
+  /// 但聚合站会用热门行填充不匹配的查询（实测「战狼」前 3 条是牙狼/金刚狼），
+  /// 所以**上层必须在合并后用相关性过滤兜底**（见 [_applyRelevanceFilter]）。
+  Future<List<TorrentInfo>?> _searchKnabenAt(
+    MagnetSourceConfig config,
+    String query,
+    String sourceLabel,
+  ) async {
+    final q = query.trim();
+    if (q.isEmpty) return null;
+    try {
+      final resp = await _slowDio.post(
+        config.urlTemplate,
+        data: {
+          'query': q,
+          'hide_unsafe': true,
+          'categories': [2000000, 3000000],
+          'order_by': 'seeders',
+          // 40 条足够首屏；100 条会让服务端多花时间组装，中文场景反而更慢。
+          'size': 40,
+        },
+        options: Options(
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': _browserHeaders['User-Agent']!,
+          },
+          responseType: ResponseType.json,
+          validateStatus: (s) => s != null && s < 500,
+        ),
+      );
+      final data = resp.data;
+      List<dynamic>? hits;
+      if (data is Map) {
+        final h = data['hits'];
+        if (h is List) hits = h;
+      } else if (data is List) {
+        hits = data;
+      }
+      if (hits == null || hits.isEmpty) return null;
+
+      final results = <TorrentInfo>[];
+      for (final raw in hits) {
+        if (raw is! Map) continue;
+        final hash = (raw['hash']?.toString() ?? '').trim().toLowerCase();
+        if (hash.length != 40 || RegExp(r'[^0-9a-f]').hasMatch(hash)) {
+          continue;
+        }
+        String? magnet = raw['magnetUrl']?.toString();
+        if (magnet == null || !magnet.startsWith('magnet:')) {
+          magnet = 'magnet:?xt=urn:btih:$hash'
+              '&dn=${Uri.encodeComponent(_knabenTitle(raw))}';
+        }
+        if (!magnetHasValidBtih(magnet)) continue;
+        final name = _knabenTitle(raw);
+        if (name.isEmpty) continue;
+
+        // 做种数：优先实时 `liveSeeders`，其次索引 `seeders`；两者皆缺 → -1（未知）。
+        final liveSeeders =
+            int.tryParse(raw['liveSeeders']?.toString() ?? '');
+        final idxSeeders =
+            int.tryParse(raw['seeders']?.toString() ?? '');
+        final seeders = liveSeeders ?? idxSeeders;
+        final origin = raw['cachedOrigin']?.toString() ?? '';
+        results.add(
+          TorrentInfo(
+            name: name,
+            size: int.tryParse(raw['bytes']?.toString() ?? '0') ?? 0,
+            seeders: seeders ?? -1,
+            leechers: int.tryParse(raw['livePeers']?.toString() ?? '0') ?? 0,
+            magnetUri: Uri.decodeFull(magnet),
+            source: origin.isNotEmpty ? '$sourceLabel · $origin' : sourceLabel,
+          ),
+        );
+      }
+      return results.isEmpty ? null : results;
+    } catch (e) {
+      debugPrint('Knaben 搜索失败: $e');
+      return null;
+    }
+  }
+
+  /// Knaben 结果标题：优先 `description` 里的发布名，其次 `title`，再退到 magnet 的 `dn`。
+  ///
+  /// description 形如 `Uploader: YIFY<br>Inception (2010) 1080p ...`：
+  /// 按 `<br>` 切行后**跳过 `Uploader:` 这类元信息行**，取第一条真正的发布名。
+  /// 某些条目只有 `Uploader: xxx` 而没有任何发布名（实测「我不是药神」有一条），
+  /// 此时必须继续回退到 `title` / magnet 的 `dn`，否则标题会显示成上传者名。
+  static String _knabenTitle(Map<dynamic, dynamic> raw) {
+    final desc = (raw['description']?.toString() ?? '').trim();
+    if (desc.isNotEmpty) {
+      for (final seg
+          in desc.split(RegExp(r'<br\s*/?>', caseSensitive: false))) {
+        final line = seg.trim();
+        if (line.isEmpty) continue;
+        if (RegExp(r'^uploader\s*:', caseSensitive: false).hasMatch(line)) {
+          continue; // 上传者行不是片名
+        }
+        return line;
+      }
+    }
+    final t = (raw['title']?.toString() ?? '').trim();
+    if (t.isNotEmpty) return t;
+    final dn = RegExp(r'[?&]dn=([^&]+)')
+        .firstMatch(raw['magnetUrl']?.toString() ?? '');
+    if (dn != null) {
+      final rawDn = dn.group(1) ?? '';
+      String decoded;
+      try {
+        decoded = Uri.decodeComponent(rawDn).trim();
+      } catch (_) {
+        decoded = rawDn.trim();
+      }
+      if (decoded.isNotEmpty) return decoded;
+    }
+    return '';
   }
 
   List<TorrentInfo> _finalizeResults(

@@ -51,4 +51,55 @@ void main() {
   test('既无控制器也无磁力状态（空播放器）→ 不凭空出现返回', () {
     expect(show(), isFalse);
   });
+
+  // 2026-11-07：点进度条 → mpv 正在向未缓冲位置 seek、没有画面，
+  // 控制栏若照常 3 秒隐藏，用户就「既黑屏又丢了进度条」。
+  bool startTimer({
+    bool controlsVisible = true,
+    bool helpVisible = false,
+    bool buffering = false,
+    bool openingMedia = false,
+    bool magnetPreparing = false,
+    bool seekLandingPending = false,
+  }) {
+    return shouldStartControlsHideTimer(
+      controlsVisible: controlsVisible,
+      helpVisible: helpVisible,
+      buffering: buffering,
+      openingMedia: openingMedia,
+      magnetPreparing: magnetPreparing,
+      seekLandingPending: seekLandingPending,
+    );
+  }
+
+  group('shouldStartControlsHideTimer', () {
+    test('稳态播放 → 正常启动 3 秒隐藏计时', () {
+      expect(startTimer(), isTrue);
+    });
+
+    test('🔴 seek 未落位 → 控制栏常驻（摘修复即红）', () {
+      expect(startTimer(seekLandingPending: true), isFalse);
+    });
+
+    test('🔴 缓冲中 → 控制栏常驻（摘修复即红）', () {
+      expect(startTimer(buffering: true), isFalse);
+    });
+
+    test('打开媒体 / 磁力准备中 → 控制栏常驻', () {
+      expect(startTimer(openingMedia: true), isFalse);
+      expect(startTimer(magnetPreparing: true), isFalse);
+    });
+
+    test('控制栏本来隐藏 / 帮助面板打开 → 不需要隐藏计时', () {
+      expect(startTimer(controlsVisible: false), isFalse);
+      expect(startTimer(helpVisible: true), isFalse);
+    });
+
+    test('多个忙碌状态叠加仍常驻', () {
+      expect(
+        startTimer(buffering: true, seekLandingPending: true),
+        isFalse,
+      );
+    });
+  });
 }

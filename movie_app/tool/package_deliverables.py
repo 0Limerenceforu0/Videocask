@@ -10,18 +10,21 @@
   deliverables/罐子_web_v{ver}.zip     + 同名解压目录
 
 要点：
-- Windows 只打包 build/windows/x64_ninja/bundle/（唯一可运行目录）。
+- Windows 只打包 build/windows/x64/runner/Release/（当前 VS 生成器的唯一可运行
+  目录；旧 ninja 生成器的 x64_ninja/bundle 已不存在，以 WIN_BUNDLE 常量为准）。
 - Web 包 = build/web + web_dev_server.py + serve_web.bat。
   这两个脚本不能少：视频/图片地址会被改写成同源 /proxy /hls，
   裸 http.server 没有这两个端点 → 点播放器一片灰（历史坑）。
 - 解压目录按包内容**同步**（多出来的旧文件会被清掉），避免交付目录里
   残留上一次构建的文件（例如已删依赖的插件 DLL）。
 """
+import glob
 import os
 import re
 import shutil
 import stat
 import sys
+import time
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -141,7 +144,58 @@ def sync_dir(zip_path, dest):
     print('  %-34s 已同步（清理 %d 个旧文件）' % (os.path.basename(dest), removed))
 
 
+def check_artifact_freshness(strict=False):
+    """核对三端产物是否是「同一次构建」，防止新旧代码混装进一个交付包。
+
+    历史坑（2026-11-06）：只判断 os.path.exists()，结果是新 Android + 11-04 的
+    旧 Windows/Web 一起打包。默认只警告不阻断；--strict 时直接失败。
+    """
+    win_exes = sorted(glob.glob(os.path.join(WIN_BUNDLE, '*.exe')))
+    # Windows 的 movie_app.exe 是 C++ runner，业务代码没动时 flutter build windows
+    # 不会重编它（时间戳可以停在几个月前）；随 Dart 代码重建的是 data/app.so。
+    # 拿 exe 当代表会把「刚构建完」误判成「旧产物」（2026-11-06 实测）。
+    win_aot = os.path.join(WIN_BUNDLE, 'data', 'app.so')
+    reps = {
+        'Android': os.path.join(APK_SRC, 'app-arm64-v8a-release.apk'),
+        'Windows': win_aot,
+        'Web': os.path.join(WEB_DIR, 'main.dart.js'),
+    }
+    stamps = {}
+    print('三端产物时间戳：')
+    for name, path in reps.items():
+        if not os.path.exists(path) or '*' in path:
+            print('  %-8s 缺失  %s' % (name, path))
+            stamps[name] = None
+            continue
+        t = os.path.getmtime(path)
+        stamps[name] = t
+        print('  %-8s %s  %s' % (
+            name, time.strftime('%Y-%m-%d %H:%M', time.localtime(t)), path))
+
+    if win_exes:
+        print('  Windows runner exe: %s（C++ runner，不随 Dart 代码重建）'
+              % os.path.basename(win_exes[0]))
+    else:
+        print('  Windows runner exe: 缺失，交付目录会跑不起来')
+
+    valid = [t for t in stamps.values() if t is not None]
+    if len(valid) < 3 or not win_exes:
+        problem = '有端尚未构建或 Windows runner exe 缺失，交付包会缺件'
+    elif max(valid) - min(valid) > 6 * 3600:
+        problem = '三端产物时间跨度超过 6 小时，极可能是新 Android + 旧 Windows/Web 混装'
+    else:
+        return True
+    if strict:
+        print('  [错误] %s；--strict 已终止打包。请先三端串行全量重建。' % problem)
+        return False
+    print('  [警告] %s' % problem)
+    return True
+
+
 def main():
+    strict = '--strict' in sys.argv
+    if not check_artifact_freshness(strict=strict):
+        return 1
     os.makedirs(DELIV, exist_ok=True)
 
     print('版本: %s' % VERSION)

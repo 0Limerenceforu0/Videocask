@@ -23,3 +23,25 @@ bool shouldShowPersistentPlayerBackButton({
   if (screenLocked || fullScreen || controlsVisible) return false;
   return hasVideoController || magnetBusyOrFailed;
 }
+
+/// 是否启动「3 秒后自动隐藏控制栏」的计时。
+///
+/// 2026-11-07 用户反馈「点进度条再点暂停 → 黑屏，进度条直接丢失」：
+/// 旧实现在点进度条时无条件 `_startHideTimer()`，而此时 mpv 正在向未缓冲
+/// 位置 seek、根本没画面，3 秒后控制栏照常隐藏 → 用户既看不到画面也看不到
+/// 进度条。缓冲 / 起播 / 在途 seek 期间必须让控制栏常驻；状态结束时由
+/// `onBufferingChangedUi` / `onSeekLandedUi` 重新调 `_startHideTimer()`。
+bool shouldStartControlsHideTimer({
+  required bool controlsVisible,
+  required bool helpVisible,
+  required bool buffering,
+  required bool openingMedia,
+  required bool magnetPreparing,
+  required bool seekLandingPending,
+}) {
+  if (!controlsVisible || helpVisible) return false;
+  if (buffering || openingMedia || magnetPreparing || seekLandingPending) {
+    return false;
+  }
+  return true;
+}

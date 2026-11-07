@@ -25,6 +25,9 @@ enum MagnetSourceDriver {
 
   /// Jackett `api/v2.0/.../results` JSON（Results[].MagnetUri）
   jackettApi,
+
+  /// Knaben 聚合 API（POST `https://api.knaben.org/v1`，独立生态冗余第二源，支持中文原名直查）
+  knabenJson,
 }
 
 /// 单条磁力搜索源配置（内置或可自定义）

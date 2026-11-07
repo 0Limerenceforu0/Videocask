@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../config/constants.dart';
 import '../models/watch_history.dart';
 import '../services/storage_service.dart';
+import '../services/watch_time_accumulator.dart';
 
 /// 观看历史状态管理
 class HistoryProvider extends ChangeNotifier {
@@ -87,6 +88,14 @@ class HistoryProvider extends ChangeNotifier {
         ? 1
         : (episodeChanged ? existing.watchCount + 1 : existing.watchCount);
 
+    // 累计观看时长：只加「正常播放推进」的部分，拖动进度条跨越的区间不计。
+    final watchedDeltaMs = countWatchedAdvanceMs(
+      progressMs: effectiveProgress,
+      sameEpisode: existing != null && !episodeChanged,
+      previousProgressMs: existing?.progress,
+    );
+    final nextWatchedMs = (existing?.watchedMs ?? 0) + watchedDeltaMs;
+
     final history = WatchHistory(
       id: '${sourceId}_$movieId',
       movieId: movieId,
@@ -100,6 +109,7 @@ class HistoryProvider extends ChangeNotifier {
       routeIndex: routeIndex,
       lastWatchTime: DateTime.now(),
       watchCount: nextWatchCount,
+      watchedMs: nextWatchedMs,
       magnetUri: resolvedMagnet,
     );
 

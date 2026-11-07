@@ -31,11 +31,13 @@ class CacheProvider extends ChangeNotifier {
   /// 格式化的缓存总大小
   String get formattedTotalSize => CacheService.formatFileSize(_totalCacheSize);
 
-  /// 缓存容量上限（格式化）
+  /// 缓存容量上限（格式化）；不设上限时直接给出文案，避免出现「0 B」。
   String get formattedMaxCacheSize =>
-      CacheService.formatFileSize(CacheService.maxCacheBytes);
+      CacheService.maxCacheBytes <= 0
+          ? '不设上限'
+          : CacheService.formatFileSize(CacheService.maxCacheBytes);
 
-  /// 已用空间占上限比例（0~1）
+  /// 已用空间占上限比例（0~1）；不设上限时没有比例可算，进度条留空。
   double get storageUsageRatio {
     final max = CacheService.maxCacheBytes;
     if (max <= 0) return 0;

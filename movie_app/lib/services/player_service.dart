@@ -155,6 +155,31 @@ class PlayerService {
   /// 位置更新节流间隔（毫秒）
   static const _positionThrottleMs = 200;
 
+  // ===== 位置跳变取证（2026-11-04「正常播放被跳过片段」） =====
+  //
+  // 现象：录屏 14.83s 弹「正在缓冲…」、14.92s 已换成另一场戏、随后画面冻 4 帧。
+  // 说明不是时间轴缓慢漂移，而是**瞬时位置切换 + rebuffer**。
+  // 但 30s 一次的心跳抓不到 17s 录屏里的那一下，[Playhead] 也一条都没有。
+  // 这里在**未经节流的原始 position 流**上做突变检测：无论跳变来自 App 的
+  // seek、mpv 内部 seek，还是 HLS 分片 pts 错乱，都会被记下来。
+
+  /// 上一次原始上报的位置与墙钟（节流前，200ms 粒度的真实采样）
+  Duration? _lastRawPos;
+  int _lastRawPosMs = 0;
+
+  /// 最近一次 App 主动 seek 的目标/来源/时刻（用于区分「我们跳的」和「它自己跳的」）
+  Duration? _lastSeekTarget;
+  String _lastSeekSource = '';
+  int _lastSeekAtMs = 0;
+
+  /// 最近一次 buffering 事件（跳变时一并记录，判断是否伴随 rebuffer）
+  bool _lastBuffering = false;
+
+  /// 判定为「跳变」的最小位移与最大墙钟间隔。
+  /// 正常播放 200ms 只前进 0.2s，所以 2s 位移足够区分；
+  /// 墙钟间隔 >1.5s 说明中间被暂停/切后台，不算同一段连续播放。
+  static const _jumpMinMs = 2000;
+
   Future<void>? _playChain;
   bool _disposed = false;
 
@@ -205,6 +230,23 @@ class PlayerService {
   /// 播放速度
   double get playbackSpeed => _playbackSpeed;
 
+  /// 播放器配置。
+  ///
+  /// [PlayerConfiguration.libass] 默认是 `false`，media_kit 会在每次 open 时
+  /// 把 `sub-ass` / `sub-visibility` / `secondary-sub-visibility` 写成 `no`。
+  /// 后果是内封字幕轨即使被 `sid` 选中也永远不会绘制：2026-11-07 真机实测
+  /// 回读为 `期望sid=1 实际sid=no visibility=no sub-ass=no sub-text=`。
+  /// 因此必须显式开启 libass；Android 的 libass/fontconfig 读不到系统字体，
+  /// 还要随包内置一份中文字体（子集化 Noto Sans CJK SC，约 1.8MB）。
+  PlayerConfiguration _playerConfiguration() {
+    return PlayerConfiguration(
+      bufferSize: _strategyConfig.demuxerBufferBytes,
+      libass: true,
+      libassAndroidFont: 'assets/fonts/subtitle_zh.otf',
+      libassAndroidFontName: 'Noto Sans CJK SC',
+    );
+  }
+
   /// 初始化播放器
   Future<void> init() async {
     if (_player != null) return;
@@ -212,11 +254,7 @@ class PlayerService {
     // 矩阵测试 override 先读盘（debug deeplink 写入；release 下无 key 恒 null）。
     _loadDebugOverridesFromStorage();
 
-    _player = Player(
-      configuration: PlayerConfiguration(
-        bufferSize: _strategyConfig.demuxerBufferBytes,
-      ),
-    );
+    _player = Player(configuration: _playerConfiguration());
     // 硬解档位沿用当前生效值（由设置层下发），**不**在这里硬编码关闭。
     await _applyMpvTuning();
     // 矩阵测试专用：显式指定 mpv gpu-api（vulkan/opengl），仅 debug 下发。
@@ -265,6 +303,9 @@ class PlayerService {
     _scope.addSubscription(
       _player!.stream.position.listen((position) {
         final now = DateTime.now().millisecondsSinceEpoch;
+        // 取证必须在节流**之前**：节流会丢掉 200ms 内的采样，
+        // 而一次 seek 的跳变恰好就发生在两次上报之间。
+        _detectPositionJump(position, now);
         if (now - _lastPositionUpdateMs < _positionThrottleMs) return;
         _lastPositionUpdateMs = now;
         positionChanged.emit(position);
@@ -283,6 +324,7 @@ class PlayerService {
     // 监听缓冲状态
     _scope.addSubscription(
       _player!.stream.buffering.listen((buffering) {
+        _lastBuffering = buffering;
         bufferingChanged.emit(buffering);
       }),
       label: 'stream:buffering',
@@ -608,6 +650,8 @@ class PlayerService {
       'demuxer-seekable-cache': c.demuxerSeekableCache,
       'cache-secs': '${c.cacheSecs}',
       'demuxer-max-bytes': '${c.demuxerMaxBytes}',
+      'demuxer-readahead-secs': '${c.demuxerReadaheadSecs}',
+      'demuxer-readahead-bytes': '${c.demuxerReadaheadBytes}',
       'network-timeout': '${c.networkTimeoutSecs}',
       'hwdec': mpvHwDecValue(_hwDecodeMode),
     };
@@ -616,9 +660,23 @@ class PlayerService {
       try {
         await setMpvProperty(_player!, entry.key, entry.value);
       } catch (e) {
+        // 注意：失败只进 logcat（debugPrint），不进文件日志，故下面再读回确认。
         debugPrint('mpv setProperty ${entry.key} failed: $e');
       }
     }
+    // 诊断：读回实际生效值。mpv 对越界/只读选项会拒收，而失败只 debugPrint，
+    // 文件日志里看不出来；这里把读回值写进文件，用于确认缓存参数真的落地。
+    final applied = <String>[];
+    for (final key in const [
+      'cache-secs',
+      'demuxer-max-bytes',
+      'demuxer-readahead-secs',
+      'demuxer-readahead-bytes',
+      'cache-size',
+    ]) {
+      applied.add('$key=${await _safeMpvProperty(key) ?? '?'}');
+    }
+    DebugLog.log('Play', 'mpv 缓存参数生效值: ${applied.join(' ')}', flush: true);
     await _persistHwDecodeState();
   }
 
@@ -835,6 +893,138 @@ class PlayerService {
     );
   }
 
+  /// 缓存/预读实时状态。
+  ///
+  /// `demuxer-cache-time` 才是 mpv 真正「已解封装、可立即播放」的缓冲末端，
+  /// 比 media_kit 的 `state.buffer` 更能反映预读是否生效；用于诊断「缓冲永远
+  /// 贴着播放位置」到底是预读没下发，还是 HLS 分支不吃该参数。
+  Future<void> probeCacheState() async {
+    if (kIsWeb || _player == null) return;
+    final ct = await _safeMpvProperty('demuxer-cache-time');
+    final cd = await _safeMpvProperty('demuxer-cache-duration');
+    final idle = await _safeMpvProperty('demuxer-cache-idle');
+    final bs = await _safeMpvProperty('cache-buffering-state');
+    final sp = await _safeMpvProperty('cache-speed');
+    DebugLog.log(
+      'Play',
+      '缓存: demuxer-cache-time=$ct cache-duration=$cd idle=$idle '
+          'buffering-state=$bs cache-speed=$sp',
+    );
+  }
+
+  /// 把**实际生效**的播放速率写进日志（排查「正常播放却像被跳过片段」）。
+  ///
+  /// 2026-11-04：用户日志显示心跳每 30s 前进 57~62s（≈2x），同段却零纠偏记录，
+  /// 但日志里没有任何 rate 数据，无法判断是「倍速卡住」还是「时间轴错位」。
+  /// 这里每心跳读一次 mpv 的 `speed` 并与模块字段对照：两者不一致就说明
+  /// setRate 没落到当前实例上（旧实例已 dispose / 新实例没应用）。
+  Future<void> probePlaybackRate() async {
+    if (kIsWeb || _player == null) return;
+    final speed = await _safeMpvProperty('speed');
+    final pitch = await _safeMpvProperty('audio-pitch-correction');
+    DebugLog.log(
+      'Speed',
+      'mpv speed=${speed ?? '?'} audio-pitch-correction=${pitch ?? '?'} '
+          '模块 playbackSpeed=$_playbackSpeed',
+    );
+  }
+
+  /// 位置跳变取证：原始上报相对上一次的位移超过阈值就落盘。
+  ///
+  /// 判据是「位移偏离预期」而不是「位移大小」：
+  /// 按当前播放速率，墙钟过去 [wall] 毫秒，位置本该前进 `wall * rate`；
+  /// 实际位移与这个预期相差超过 [_jumpMinMs] 才算异常。
+  ///
+  /// 为什么不再用「两次上报间隔 <=1.5s」当门槛：用户报的「跳几分钟」是静置
+  /// 观看时出现的，那时上报本来就稀疏，老逻辑会把整段都丢弃——199 次里只记到
+  /// 1~2 条，最关键的现场反而抓不到。改用速率预期后，间隔多长都不影响判定。
+  ///
+  /// 打点带三个关键信息：
+  /// - `appSeek`：最近 3s 内 App 是否主动 seek 过（含调用方文件:行号与目标位置）；
+  /// - `buffering`：跳变瞬间是否处于缓冲态（对应录屏里那一下 rebuffer）；
+  /// - 随后异步读 mpv 的 time-pos / playback-time（两者脱节 = 分片 pts 问题，
+  ///   不是 seek）。
+  void _detectPositionJump(Duration pos, int nowMs) {
+    final last = _lastRawPos;
+    final lastMs = _lastRawPosMs;
+    _lastRawPos = pos;
+    _lastRawPosMs = nowMs;
+    if (last == null || lastMs == 0) return;
+    final wall = nowMs - lastMs;
+    if (wall <= 0) return;
+
+    final deltaMs = pos.inMilliseconds - last.inMilliseconds;
+    // 位置一点没动（暂停 / 缓冲卡住 / 卡死）：不是跳变，交给停滞看门狗。
+    if (deltaMs == 0) return;
+
+    final rate = _playbackSpeed <= 0 ? 1.0 : _playbackSpeed;
+    final expected = (wall * rate).round();
+    final deviation = deltaMs - expected;
+    if (deviation.abs() < _jumpMinMs) return;
+
+    final sinceSeek =
+        _lastSeekAtMs == 0 ? -1 : nowMs - _lastSeekAtMs;
+    final appSeek = sinceSeek >= 0 && sinceSeek < 3000
+        ? '${_lastSeekSource.isEmpty ? '?' : _lastSeekSource}'
+            '@+${sinceSeek}ms target=${_lastSeekTarget?.inSeconds ?? -1}s'
+        : 'none';
+    DebugLog.log(
+      'Jump',
+      '位置跳变 ${last.inMilliseconds}ms -> ${pos.inMilliseconds}ms '
+          '(delta=${deltaMs >= 0 ? '+' : ''}${deltaMs}ms '
+          'expected=${expected}ms deviation=${deviation >= 0 ? '+' : ''}${deviation}ms '
+          'wall=${wall}ms) '
+          'appSeek=$appSeek buffering=$_lastBuffering '
+          'rate=$_playbackSpeed',
+      flush: true,
+    );
+    unawaited(_logJumpMpvState(pos));
+  }
+
+  /// 跳变瞬间读一次 mpv 侧时间轴，区分「真的 seek 了」和「时间戳本身错乱」。
+  Future<void> _logJumpMpvState(Duration pos) async {
+    if (kIsWeb || _player == null) return;
+    final tp = await _safeMpvProperty('time-pos');
+    final pt = await _safeMpvProperty('playback-time');
+    final seeking = await _safeMpvProperty('seeking');
+    final cacheT = await _safeMpvProperty('demuxer-cache-time');
+    final cacheD = await _safeMpvProperty('demuxer-cache-duration');
+    final bufState = await _safeMpvProperty('cache-buffering-state');
+    DebugLog.log(
+      'Jump',
+      'mpv 快照 time-pos=$tp playback-time=$pt seeking=$seeking '
+          'demuxer-cache-time=$cacheT cache-duration=$cacheD '
+          'buffering-state=$bufState (上报=${pos.inMilliseconds}ms)',
+      flush: true,
+    );
+  }
+
+  /// 记录一次 App 主动 seek 的来源（文件:行号），供 [_detectPositionJump] 对照。
+  void _markAppSeek(String source, Duration target) {
+    _lastSeekSource = source;
+    _lastSeekTarget = target;
+    _lastSeekAtMs = DateTime.now().millisecondsSinceEpoch;
+  }
+
+  /// 从当前调用栈里取第一个非本文件的帧，作为 seek 发起方标记。
+  String _seekCallerTag() {
+    final lines = StackTrace.current.toString().split('\n');
+    for (final line in lines) {
+      final t = line.trim();
+      if (!t.startsWith('#')) continue;
+      if (t.contains('player_service.dart')) continue;
+      if (t.contains('dart:async')) continue;
+      // #3  DetailPlayer.seek (package:.../detail_player.dart:1163:17)
+      final open = t.indexOf('(');
+      if (open < 0) return t;
+      final body = t.substring(open + 1).split(' ').first;
+      final parts = body.split('/');
+      final fileLine = parts.length > 1 ? parts.last : body;
+      return fileLine.replaceAll(')', '');
+    }
+    return 'unknown';
+  }
+
   /// 跳转到指定位置（精确 seek，松手时用）
   Future<void> seek(Duration position) async {
     await seekPrecise(position);
@@ -843,6 +1033,7 @@ class PlayerService {
   /// 拖动进度条：关键帧快速 seek，减少卡顿。
   Future<void> seekFast(Duration position) async {
     if (_player == null) return;
+    _markAppSeek('seekFast/${_seekCallerTag()}', position);
     try {
       final done = await runMpvCommand(_player!, [
         'seek',
@@ -860,6 +1051,8 @@ class PlayerService {
   /// 精确 seek（松手 / 点击定位）
   Future<void> seekPrecise(Duration position) async {
     if (_player == null) return;
+    // 记来源：栈里第一个非 player_service.dart 的帧，就是真正发起方。
+    _markAppSeek('precise/${_seekCallerTag()}', position);
     if (_strategyConfig.hrSeek == 'yes') {
       try {
         final done = await runMpvCommand(_player!, [
@@ -950,11 +1143,7 @@ class PlayerService {
       _videoController = null;
 
       _scope = ResourceScope(name: 'player');
-      _player = Player(
-        configuration: PlayerConfiguration(
-          bufferSize: _strategyConfig.demuxerBufferBytes,
-        ),
-      );
+      _player = Player(configuration: _playerConfiguration());
       await _applyMpvTuning();
       // 矩阵测试专用：回收重建后同样要重新下发 gpu-api 覆盖（新 Player）。
       if (debugGpuApiOverride != null) {
@@ -982,6 +1171,13 @@ class PlayerService {
         }
       }
       if (rate != 1.0) {
+        // 记录「非 1.0 速率被带进新实例」这件事：长按 2x 若在重建瞬间没复位，
+        // 2.0 会被新播放器沿用，之后整场都是 2 倍速（用户观感=剧情被跳过）。
+        DebugLog.log(
+          'Speed',
+          'recyclePlayer 继承旧 rate=$rate（新实例继续沿用）',
+          flush: true,
+        );
         await _player!.setRate(rate);
       }
     } catch (e) {

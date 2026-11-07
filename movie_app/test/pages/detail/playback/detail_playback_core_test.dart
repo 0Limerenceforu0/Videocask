@@ -26,6 +26,55 @@ void main() {
       expect(playhead.authoritative, const Duration(minutes: 8));
     });
 
+    test('凭空前跳（PTS 跳变）同样判 discontinuity，进度不被弹走', () {
+      final playhead = PlayheadAuthority();
+      final t0 = DateTime(2026, 11, 5, 12, 0, 0);
+      playhead.setExplicit(const Duration(minutes: 5));
+      // 200ms 后 mpv 突然报 5 分钟之后的位置 —— 真实时间解释不了
+      expect(
+        playhead.ingest(
+          const Duration(minutes: 10),
+          now: t0.add(const Duration(milliseconds: 200)),
+        ),
+        PlayheadTickAction.discontinuity,
+      );
+      expect(playhead.authoritative, const Duration(minutes: 5));
+    });
+
+    test('正常 2x 播放的前进不被误判', () {
+      final playhead = PlayheadAuthority();
+      final t0 = DateTime(2026, 11, 5, 12, 0, 0);
+      playhead
+        ..setExplicit(const Duration(minutes: 5))
+        ..ingest(const Duration(minutes: 5), now: t0);
+      // 1 秒后到 5:02（2x），属于可解释范围
+      expect(
+        playhead.ingest(
+          const Duration(minutes: 5, seconds: 2),
+          now: t0.add(const Duration(seconds: 1)),
+        ),
+        PlayheadTickAction.accept,
+      );
+      expect(playhead.authoritative, const Duration(minutes: 5, seconds: 2));
+    });
+
+    test('切后台挂起后的一次性补报不被当成跳变（按墙钟放宽）', () {
+      final playhead = PlayheadAuthority();
+      final t0 = DateTime(2026, 11, 5, 12, 0, 0);
+      playhead
+        ..setExplicit(const Duration(minutes: 5))
+        ..ingest(const Duration(minutes: 5), now: t0);
+      // 5 分钟没上报，回前台第一条直接到 10:00 —— 这是真进度，必须接受
+      expect(
+        playhead.ingest(
+          const Duration(minutes: 10),
+          now: t0.add(const Duration(minutes: 5)),
+        ),
+        PlayheadTickAction.accept,
+      );
+      expect(playhead.authoritative, const Duration(minutes: 10));
+    });
+
     test('preserveForMediaSwitch returns null near end', () {
       final playhead = PlayheadAuthority();
       playhead.setExplicit(const Duration(minutes: 59, seconds: 58));

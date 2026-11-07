@@ -131,8 +131,21 @@ void main() {
       );
     });
 
-    test('maxCacheBytes uses AppConstants', () {
-      expect(CacheService.maxCacheBytes, greaterThan(0));
+    test('不设上限：maxCacheBytes 为 0，不再按 2GB 淘汰已下载剧集', () {
+      // 用户明确要求取消缓存上限。若这里改回正数，说明又会把用户下载好的
+      // 剧集按 LRU 悄悄删掉，必须让这条测试红。
+      expect(CacheService.maxCacheBytes, 0);
+    });
+
+    test('不设上限时容量检查直接放行，不触发任何清理', () async {
+      // 上限为 0 时 ensureSpaceForDownload 应在第一行就返回，
+      // 不会去枚举缓存目录、更不会调用 deleteCache。
+      expect(cacheService.getAllCacheItems(), isEmpty);
+      await expectLater(
+        cacheService.ensureSpaceForDownload(estimatedBytes: 1 << 30),
+        completes,
+      );
+      expect(cacheService.getAllCacheItems(), isEmpty);
     });
 
     test('headersFor uses pageUrl referer', () {

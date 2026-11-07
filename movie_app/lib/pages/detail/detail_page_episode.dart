@@ -29,7 +29,7 @@ extension _DetailPageEpisodeExt on _DetailPageState {
         episodeIndex: next,
         sourceId: _detailSourceId(movie),
         strategy: settings.playbackStrategy,
-        prefetchEnabled: settings.playbackPrefetch,
+        prefetchEnabled: settings.preloadNextEpisode,
       ),
     );
   }
@@ -285,6 +285,8 @@ extension _DetailPageEpisodeExt on _DetailPageState {
           episodeIndex != _playerModule.currentEpisodeIndex ||
               routeIndex != _playerModule.currentRouteIndex;
       if (switchingEpisode) {
+        // 旧集的纠偏/片尾恢复预约一律作废，否则会在新集起播后 fire。
+        _playerModule.cancelPendingRecovery();
         // 2026-10-28 用户实测：「换集以后进度条还是不对，过一会才反应过来」。
         //
         // 磁力换集走的是 `_playMagnet`（stop → addMagnet → 重新等元数据），
@@ -356,6 +358,9 @@ extension _DetailPageEpisodeExt on _DetailPageState {
 
     final knownDuration =
         _playerModule.duration > Duration.zero ? _playerModule.duration : null;
+    // 每次 open（换集或换线）都是新的一次媒体加载：上一集遗留的纠偏预约 /
+    // 片尾恢复定时器必须在这里作废，不能再对新媒体生效。
+    _playerModule.cancelPendingRecovery();
     final openPlan = _playerModule.playback.prepareOpen(
       isNewEpisode: isNewEpisode,
       explicitPreserve: preservePosition,
@@ -382,6 +387,31 @@ extension _DetailPageEpisodeExt on _DetailPageState {
     _playerModule.currentRouteIndex = routeIndex;
     _playerModule.cacheSpeed = 0;
     _playerModule.showReplayOverlay = false;
+
+    // 换集当帧必须把上一集的时长/位置/缓冲清掉。
+    //
+    // 2026-11-03 真机抓到：点第 7 集后第一帧显示 `2:59 / 47:04` —— 位置已经是
+    // 新集的续播点 2:59，时长却还是上一集的 47:04，进度条按旧时长算比例会画错
+    // 一段（若位置上报再晚一点，就是「22:24 / 47:04」，滑块停在上一集的 47%）。
+    // [prepareOpen] 只重置进度权威（playhead），`duration` 是独立字段，原本要等
+    // 新集 durationChanged 才更新；磁力换集分支早已清零，普通分支漏了这一步。
+    //
+    // 2026-11-04 加日志（不改行为）：真机复现出「切集后 pos 钉在上一集位置不动、
+    // 同时 discontinuity 每 0.2s 刷一条」，需要看清 prepareOpen 到底有没有把
+    // 进度权威清零、以及 isNewEpisode 是否被算成 false。
+    DebugLog.log(
+      'Playhead',
+      '换集 open: isNewEpisode=$isNewEpisode '
+          'preserve=${openPlan.preservePlayhead?.inSeconds ?? 'null'} '
+          'authoritative=${_playerModule.playback.authoritativePosition.inSeconds}s '
+          'position=${_playerModule.position.inSeconds}s',
+      flush: true,
+    );
+    if (isNewEpisode && openPlan.preservePlayhead == null) {
+      _playerModule.position = Duration.zero;
+      _playerModule.duration = Duration.zero;
+      _playerModule.bufferedPosition = Duration.zero;
+    }
 
     if (!matchResume && preservePosition == null) {
       _playerModule.pendingResumePosition = null;

@@ -20,8 +20,14 @@ import 'playback/playback_lifecycle.dart';
 import 'playback/detail_playback_coordinator.dart';
 import 'playback/playhead_authority.dart';
 import 'playback/stall_detection.dart';
+import 'playback/seek_landing_policy.dart';
 import 'playback/discontinuity_recovery_policy.dart';
+import 'playback/completion_policy.dart';
+import 'playback/magnet_failure_dismiss_policy.dart';
 import 'playback_error_type.dart';
+import '../../services/system_volume.dart';
+import '../../config/constants.dart';
+import '../../services/storage_service.dart';
 
 /// 纠偏（discontinuity 恢复 seek）连续失败上限：达到即放弃本次 open 的纠偏。
 ///
@@ -31,8 +37,8 @@ const int kMaxDiscontinuityRecoveryAttempts = 3;
 
 /// 播放器相关逻辑
 class DetailPlayer {
-  /// 音量 UI 上限（可超过 100 以尝试 mpv 高音量）
-  static const double maxVolumeUi = 200.0;
+  /// 音量 UI 上限：系统音量归一化（0.0–1.0），与系统音量统一。
+  static const double maxVolumeUi = 1.0;
 
   /// 播放器服务
   final PlayerService playerService = PlayerService();
@@ -52,6 +58,8 @@ class DetailPlayer {
   DetailPlayer() {
     _openElapsedTicker = OpenElapsedTicker(openElapsedSeconds);
     playback.session.lifecycleNotifier.addListener(_onLifecycleChanged);
+    // 读取上次选择的画面比例模式（铺满/原始），默认原始。
+    fitCover = StorageService().getBoolSetting(AppConstants.keyPlayerFitCover);
   }
 
   void _onLifecycleChanged() {
@@ -62,7 +70,26 @@ class DetailPlayer {
     }
     // 同步给 UI 用的 notifier
     playerLifecycleNotifier.value = playback.session.lifecycle;
+    _notifyPlaybackActiveChanged();
   }
+
+  /// 播放是否处于「有媒体在跑」的状态（决定自动缓冲挡位要不要每 10 分钟评估）。
+  ///
+  /// [PlaybackLifecycle.isActive] 已包含 paused：暂停时 demuxer 缓存仍然占着
+  /// 内存，此时降档不会伤到体验，反而正是内存最该回收的时候。
+  bool get _playbackActive => playback.session.lifecycle.isActive;
+
+  bool _lastPlaybackActive = false;
+
+  void _notifyPlaybackActiveChanged() {
+    final active = _playbackActive;
+    if (active == _lastPlaybackActive) return;
+    _lastPlaybackActive = active;
+    onPlaybackActiveChanged?.call(active);
+  }
+
+  /// 播放活跃状态变化回调：由详情页接到 SettingsProvider 的自动缓冲挡位定时器。
+  void Function(bool active)? onPlaybackActiveChanged;
 
   void disposeLifecycleListener() {
     playback.session.lifecycleNotifier.removeListener(_onLifecycleChanged);
@@ -105,7 +132,31 @@ class DetailPlayer {
   int videoRotate = 0;
 
   /// 当前播放位置（UI 展示；真相源为 [playback.authoritativePosition]）。
-  Duration position = Duration.zero;
+  ///
+  /// 写入会同步到 [positionListenable]，并按 [_uiNotifyMinIntervalMs] 节流。
+  /// 进度条/时间文本只监听这个 notifier，从而不再因为每 200ms 的位置回调
+  /// 重建整个详情页（这是详情页最热的重建源）。
+  Duration get position => _position;
+  set position(Duration value) {
+    _position = value;
+    _publishPositionThrottled();
+  }
+
+  Duration _position = Duration.zero;
+
+  /// 高频播放位置通知（仅进度条与时间文本消费）。
+  final ValueNotifier<Duration> positionListenable =
+      ValueNotifier(Duration.zero);
+
+  int _lastPositionPublishMs = 0;
+
+  void _publishPositionThrottled() {
+    if (_disposing) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastPositionPublishMs < _uiNotifyMinIntervalMs) return;
+    _lastPositionPublishMs = now;
+    positionListenable.value = _position;
+  }
 
   /// 兼容旧引用：等同 [playback.authoritativePosition]。
   Duration get peakPlaybackPosition => playback.authoritativePosition;
@@ -154,6 +205,13 @@ class DetailPlayer {
   String playerErrorMessage = '';
   PlaybackErrorType playbackErrorType = PlaybackErrorType.none;
 
+  /// 磁力失败态下「连续推进量」与上一次位置回调的位置。
+  ///
+  /// 见 [MagnetFailureDismissPolicy]：失败判定是看门狗拍的快照，慢种子可能在
+  /// 快照之后才真正出画面。只要位置在连续往前推，就说明这次判定是误报。
+  Duration _magnetErrorProgress = Duration.zero;
+  Duration? _lastMagnetErrorTick;
+
   /// 重试次数
   int retryCount = 0;
 
@@ -169,11 +227,10 @@ class DetailPlayer {
   /// 是否全屏
   bool isFullScreen = false;
 
-  /// 当前音量（0–200，UI 与手势；>100 依赖 mpv 对高 volume 的支持）
-  double volume = 100.0;
-  double muteVolume = 100.0;
+  /// 当前音量（0.0–1.0，系统音量归一化；UI 与手势统一走系统音量）
+  double volume = 1.0;
 
-  /// 是否静音
+  /// 是否静音（静音走播放器自身增益 0/100，不影响系统音量）
   bool isMuted = false;
 
   /// 是否显示控制栏
@@ -213,17 +270,38 @@ class DetailPlayer {
   /// 竖滑手势起始是否在左半屏（亮度）；由 [DetailPage] 在 dragStart 写入
   bool verticalGestureIsLeftSide = false;
 
+  /// 节流窗口内累积的竖向位移（像素）。
+  ///
+  /// 🔴 之前 [DetailPlayer.gestureThrottleMs] 到期前直接 `return`，把被跳过事件的
+  /// `details.delta` 一起丢掉了。真实手指事件 60–120Hz，50ms 窗口只能放行 1/3，
+  /// 相当于满程距离从 110px 变成 ~330px，手势明显发木。改为无条件累计、窗口到期
+  /// 一次性应用，节流只影响刷新频率、不再吃掉位移。
+  double pendingGestureDy = 0;
+
+  /// 竖滑手势进行中（用于避免异步回读系统音量覆盖用户拖动结果）。
+  bool verticalGestureActive = false;
+
+  /// 系统音量变化订阅（硬件音量键 / 系统音量面板 → App 内 volume）。
+  StreamSubscription<double>? _systemVolumeSub;
+
+  /// 竖滑满程距离（像素）。拖这么远恰好走完 0→1。
+  static const double gesturePixelsFullRange = 110;
+
   void _notifyUiThrottled() {
     if (_disposing) return;
     final now = DateTime.now().millisecondsSinceEpoch;
     if (now - _lastUiNotifyMs < _uiNotifyMinIntervalMs) return;
     _lastUiNotifyMs = now;
+    // 非位置事件（暂停/缓冲/时长变化）后也要把进度条对齐到最新位置，
+    // 否则节流窗口内最后一次位置更新可能被丢掉。
+    positionListenable.value = _position;
     onUiChanged?.call();
   }
 
   void _notifyUiImmediate() {
     if (_disposing) return;
     _lastUiNotifyMs = DateTime.now().millisecondsSinceEpoch;
+    positionListenable.value = _position;
     onUiChanged?.call();
   }
 
@@ -316,6 +394,12 @@ class DetailPlayer {
 
   /// 当前画面比例（0 表示原始比例，999/999 表示填充）
   double aspectRatio = 16 / 9;
+
+  /// 画面铺满模式：true=cover（裁切铺满，零黑边）/ false=contain（原始比例，留对称黑边）。
+  ///
+  /// 默认 contain（保整帧、对称留边，绝不变形/裁切）；用户可在播放器右侧悬浮按钮
+  /// 一键切到 cover。选择持久化到 [AppConstants.keyPlayerFitCover]。
+  bool fitCover = false;
 
   /// 画面比例选项列表
   final List<MapEntry<String, double>> aspectRatios = [
@@ -444,7 +528,8 @@ class DetailPlayer {
 
   /// 纠偏失败计数与放弃判定（连续失败达上限即停止纠偏，见策略类注释）。
   final DiscontinuityRecoveryPolicy _discontinuityRecovery =
-      DiscontinuityRecoveryPolicy(maxAttempts: kMaxDiscontinuityRecoveryAttempts);
+      DiscontinuityRecoveryPolicy(
+          maxAttempts: kMaxDiscontinuityRecoveryAttempts);
 
   /// 最近一次用户主动 seek 的时刻；刚拖过进度条的一小段时间内禁止「采纳
   /// 实际上报」，否则 mpv 迟到的旧位置报告会把用户刚拖到的进度拽回去。
@@ -452,7 +537,44 @@ class DetailPlayer {
 
   /// 用户主动 seek 后禁止采纳上报的保护窗口。
   static const Duration kAdoptGuardAfterExplicitSeek = Duration(seconds: 10);
+
+  /// 用户主动暂停后不走「缓冲耗尽停滞」软重载的保护窗口。
+  static const Duration kUserPauseStallGuard = Duration(seconds: 10);
+  DateTime? _lastUserPauseAt;
+
+  /// 播放/暂停请求的代次：seek 落位期间连点两下时只执行最后一次。
+  int _playPauseRequestSeq = 0;
+
+  /// 在途用户 seek 的目标；非空表示 lifecycle 仍应保持 seeking，
+  /// 且 mpv 迟到的旧 position 上报必须整条丢弃（见 seek_landing_policy.dart）。
+  Duration? _pendingSeekTarget;
+  Timer? _seekLandingTimer;
+  Completer<void>? _seekLandingCompleter;
+
+  bool get hasSeekLandingPending => _pendingSeekTarget != null;
+
+  /// seek 落位（或超时/失败）后通知 UI 恢复控制栏隐藏计时。
+  void Function()? onSeekLandedUi;
   Timer? _heartbeatTimer;
+
+  /// 「提前完成」恢复次数与兜底定时器。
+  ///
+  /// 2026-11-05 实测：片源声明时长比真实可播内容长（广告段计了 EXTINF、PTS
+  /// 不推进），播到真实末端时 `completed` 会比 `duration` 早 50~66 秒到达，
+  /// 被 [PlayheadAuthority.isPrematureComplete] 判成「提前完成」。原实现只做
+  /// 恢复 seek，而恢复目标本身就在流的尽头 → mpv 直接 idle，此后 16 次 seek
+  /// 全部无效，画面定格 34 分钟、自动连播永不触发。必须有次数上限和退路。
+  int _prematureRecoveryAttempts = 0;
+  Timer? _prematureFallbackTimer;
+  Duration? _prematureAnchor;
+
+  /// 卡死看门狗：连续多少次心跳位置不推进即判僵死（30s/次）。
+  static const int kStalledHeartbeatsBeforeReload = 3;
+  static const int kMaxStallReloadAttempts = 2;
+  int _stalledHeartbeats = 0;
+  int _stallReloadAttempts = 0;
+  bool _stallGiveUpLogged = false;
+  Duration? _lastWatchdogPosition;
 
   /// 初始化播放器（并发安全，多次调用只会执行一次）
   Future<void> ensureInitialized() {
@@ -491,18 +613,36 @@ class DetailPlayer {
     };
 
     unawaited(_syncBrightnessFromSystem());
+    unawaited(syncSystemVolume());
+    _listenSystemVolume();
 
     // 心跳：稳态播放不打日志，崩在无 [Crash] 的原生崩溃时无法判断「活了多久」。
     // 每 30s 记一次位置/时长/缓冲，下次崩溃日志末尾的时间戳即可定位存活时长与崩溃点。
     _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (_) => _heartbeat());
+    _heartbeatTimer =
+        Timer.periodic(const Duration(seconds: 30), (_) => _heartbeat());
   }
 
   void _handlePositionChanged(Duration pos) {
+    // 在途用户 seek：只认「落在目标附近」的第一条上报，其余都是 seek 前的
+    // 旧值，整条丢弃。旧实现在 mpv `seek` 命令一返回就结束 seeking，这些旧值
+    // 被 ingest 后会被 PlayheadAuthority 判成回跳 → 纠偏 / 采纳旧值 →
+    // 「过一会画面回来，播放位置完全不对」。
+    final verdict = classifySeekPosition(
+      pendingTarget: _pendingSeekTarget,
+      reported: pos,
+    );
+    if (verdict == SeekPositionVerdict.ignoreStale) return;
+    if (verdict == SeekPositionVerdict.landed) _finishSeekLanding();
+
     if (_shouldIgnoreResumePositionReport(pos)) return;
-    // seek 期间 mpv 可能报告 seek 前的旧位置，此时若更新 authoritative
-    // 会导致 seek 完成后被误判为 discontinuity。因此 seeking 期间直接忽略。
+    // 纠偏恢复 seek 期间（没有 _pendingSeekTarget）仍按旧规则忽略上报。
     if (playback.lifecycle == PlaybackLifecycle.seeking) return;
+    // 位置在推进却停在 error：非致命错误（如 codec 提示）后 mpv 已继续播，
+    // 把状态拉回 playing，恢复心跳与看门狗。
+    if (playback.lifecycle == PlaybackLifecycle.error && pos > Duration.zero) {
+      playback.noteProgressWhileErrored();
+    }
     final action = playback.ingestPlayerPosition(pos, duration: duration);
     switch (action) {
       case PlayheadTickAction.accept:
@@ -513,15 +653,91 @@ class DetailPlayer {
         _scheduleDiscontinuityRecovery();
     }
     position = playback.authoritativePosition;
+    _trackMagnetFailureRecovery(position);
+    // 真的往前走了（越过触发「提前完成」时的位置）就说明恢复成功，计数归零，
+    // 否则下一集片尾又会被历史上限挡住。
+    final anchor = _prematureAnchor;
+    if (anchor != null && position > anchor + const Duration(seconds: 5)) {
+      _prematureAnchor = null;
+      _prematureRecoveryAttempts = 0;
+    }
     final total = duration;
     if (total > Duration.zero) {
       onPlaybackProgress?.call(playback.authoritativePosition, total);
     }
-    _notifyUiThrottled();
+    // 不再整页 setState：position 的 setter 已经把新值推给 positionListenable，
+    // 只有进度条/时间文本会重建（见 DetailPage 的 ValueListenableBuilder）。
+  }
+
+  /// 磁力失败态的自动撤销（见 [MagnetFailureDismissPolicy]）。
+  ///
+  /// 失败结论由首帧看门狗在看门窗口末尾拍板，而慢种子常常在窗口边沿才刚出
+  /// 画面（真机 2026-11-07：卡片挂着、画面正常播）。失败态本身不会自己消失，
+  /// 所以这里用「位置是否连续推进」这条唯一可信的证据把它撤掉：
+  /// 位置在连续往前走 = 画面是活的 = 刚才那条失败结论是误报。
+  ///
+  /// 只在磁力失败态下累计；seek 跳变与回退都会把计数清零（拖进度条不是播放）。
+  void _trackMagnetFailureRecovery(Duration pos) {
+    if (playbackErrorType != PlaybackErrorType.magnetFailed) {
+      _magnetErrorProgress = Duration.zero;
+      _lastMagnetErrorTick = null;
+      return;
+    }
+    final previous = _lastMagnetErrorTick ?? pos;
+    _lastMagnetErrorTick = pos;
+    _magnetErrorProgress = MagnetFailureDismissPolicy.accumulate(
+      accumulated: _magnetErrorProgress,
+      previousPosition: previous,
+      currentPosition: pos,
+    );
+    if (!MagnetFailureDismissPolicy.shouldDismiss(
+      magnetFailed: true,
+      accumulated: _magnetErrorProgress,
+    )) {
+      return;
+    }
+    DebugLog.log(
+      'Magnet',
+      '失败态自愈: 位置连续推进 ${_magnetErrorProgress.inMilliseconds}ms '
+          '→ 撤销「磁力播放失败」卡片',
+      flush: true,
+    );
+    _dismissMagnetFailure();
+  }
+
+  /// 撤销磁力失败态，把播放器状态拉回「正常播放」。
+  ///
+  /// 只清失败相关的 UI 状态：不碰片源/路由、不重新 open、不动进度，
+  /// 避免把一次明明正常的播放打断。
+  void _dismissMagnetFailure() {
+    playbackErrorType = PlaybackErrorType.none;
+    playerErrorMessage = '';
+    magnetNoFrameFailure = false;
+    magnetWaitingFirstFrame = false;
+    magnetSourcePreparing = false;
+    magnetRetrying = false;
+    torrentStep = 0;
+    torrentStage = 0;
+    torrentMessage = '';
+    retryCount = 0;
+    _magnetErrorProgress = Duration.zero;
+    _lastMagnetErrorTick = null;
+    _notifyUiImmediate();
   }
 
   void _handleDurationChanged(Duration duration) {
+    final changedShow = this.duration > Duration.zero &&
+        (this.duration - duration).abs() > const Duration(seconds: 5);
     this.duration = duration;
+    if (changedShow) {
+      // 换集/换源：上一集的片尾恢复计数不能带到下一集。
+      _prematureRecoveryAttempts = 0;
+      _prematureAnchor = null;
+      _stalledHeartbeats = 0;
+      _stallReloadAttempts = 0;
+      _stallGiveUpLogged = false;
+      _lastWatchdogPosition = null;
+    }
     if (duration > Duration.zero) {
       playback.onOpenSucceeded();
       _applyPendingResume(duration);
@@ -592,10 +808,33 @@ class DetailPlayer {
         e.contains('failed to seek');
   }
 
+  /// codec 打开失败不是终态错误。
+  ///
+  /// ffmpeg 打不开某个解码器（典型是硬解不可用、或音轨编码不被支持）时，
+  /// mpv 会先抛 `Could not open codec.`，随后回退到软解/其它轨道继续播。
+  /// 实测 04:10 与 09:51 两次都是「报了错、画面正常、位置正常推进」。
+  ///
+  /// 之所以必须单独识别：一旦走 _handlePlayerError 的常规分支，
+  /// `playback.onPlaybackError()` 会把 lifecycle 钉在 error，而心跳只认
+  /// playing/paused —— 整段日志一条心跳都没有，后面所有排查都失明。
+  /// 如果这次真的打不开（黑屏无位置推进），停滞看门狗会在 90 秒后接管。
+  static bool _isNonFatalCodecError(String error) {
+    final e = error.toLowerCase();
+    return e.contains('could not open codec') ||
+        e.contains('could not open audio codec') ||
+        e.contains('could not open video codec');
+  }
+
   void _handlePlayerError(String error) {
     if (_isNonFatalSeekError(error)) {
       // 续播 seek 失败已有 PlaybackStartSeekException 重试路径兜底，这里只记录。
       DebugLog.log('Play', 'player seek 提示(非致命): $error');
+      return;
+    }
+    if (_isNonFatalCodecError(error)) {
+      // 只记日志，不置 error 态：mpv 通常已经回退继续播。
+      // 真黑屏的话位置不会推进，90 秒后停滞看门狗会软重载。
+      DebugLog.log('Play', 'player codec 提示(非致命，继续观察): $error', flush: true);
       return;
     }
     DebugLog.log('Play', 'player error: $error', flush: true);
@@ -617,13 +856,40 @@ class DetailPlayer {
 
   void _handleCompleted(int _) {
     if (playback.isPrematureComplete(duration)) {
-      debugPrint(
-        'Ignoring premature completed at '
-        '${playback.authoritativePosition.inSeconds}s / ${duration.inSeconds}s',
+      final action = resolvePrematureCompletion(
+        recoveryAttempts: _prematureRecoveryAttempts,
       );
-      unawaited(_recoverFromDiscontinuity(playback.authoritativePosition));
-      return;
+      if (action == CompletionAction.recover) {
+        _prematureRecoveryAttempts++;
+        _prematureAnchor = playback.authoritativePosition;
+        DebugLog.log(
+          'Play',
+          '提前完成 pos=${playback.authoritativePosition.inSeconds}s '
+              'dur=${duration.inSeconds}s buffered=${bufferedPosition.inSeconds}s '
+              '→ 第 $_prematureRecoveryAttempts 次恢复 seek',
+          flush: true,
+        );
+        unawaited(_recoverFromDiscontinuity(playback.authoritativePosition));
+        _armPrematureFallback();
+        return;
+      }
+      // 恢复用尽仍然「提前完成」：这就是片源时长虚标，不是流被截断。
+      // 继续 seek 只会永远停在流的尽头，必须按本集结束，让自动连播接上。
+      DebugLog.log(
+        'Play',
+        '提前完成且恢复已用尽（pos=${playback.authoritativePosition.inSeconds}s '
+            'dur=${duration.inSeconds}s buffered=${bufferedPosition.inSeconds}s）'
+            ' → 按本集结束',
+        flush: true,
+      );
     }
+    _finishPlayback();
+  }
+
+  /// 本集播放结束：落状态 + 通知上层（自动连播/显示重播）。
+  void _finishPlayback() {
+    _prematureFallbackTimer?.cancel();
+    _prematureFallbackTimer = null;
     isPlaying = false;
     playback.onPlaybackEnded(duration: duration);
     if (duration > Duration.zero) {
@@ -633,15 +899,45 @@ class DetailPlayer {
     _notifyUiImmediate();
   }
 
+  /// 恢复 seek 之后的位置验证：观察窗结束时位置没往前走，就说明 seek 落在了
+  /// 流的尽头（恢复无效），按结束处理，绝不允许停在「completed 已发、却没有后续」的死角。
+  void _armPrematureFallback() {
+    _prematureFallbackTimer?.cancel();
+    final anchor = playback.authoritativePosition;
+    _prematureFallbackTimer = Timer(kPrematureRecoveryVerifyWindow, () {
+      if (_disposing) return;
+      if (didPlayheadAdvance(
+        anchor: anchor,
+        current: playback.authoritativePosition,
+      )) {
+        return;
+      }
+      DebugLog.log(
+        'Play',
+        '恢复 seek 后 ${kPrematureRecoveryVerifyWindow.inSeconds}s '
+            '位置未推进（仍停在 ${anchor.inSeconds}s）→ 按本集结束',
+        flush: true,
+      );
+      _finishPlayback();
+    });
+  }
+
   void _heartbeat() {
     if (_disposing) return;
     final lc = playback.lifecycle;
-    if (lc != PlaybackLifecycle.playing && lc != PlaybackLifecycle.paused) return;
-    if (duration <= Duration.zero) return;
+    // 看门狗必须跑在生命周期过滤之前：2026-11-05 的僵死现场 lifecycle 一直没
+    // 进 playing（心跳全被下面这行吞掉），只看 playing/paused 就永远发现不了。
+    if (duration > Duration.zero) _checkStallWatchdog(lc);
+    // 只跳过 idle/ended：opening/seeking/error 也必须留心跳。
+    // 2026-11-05 事故——`Could not open codec.` 后 lifecycle 停在 opening/error，
+    // 心跳被这行全部吞掉，整段日志没有任何位置记录，无法判断是「卡死」还是
+    // 「其实在播」；用户看到的画面明明在动，我们的诊断却是全黑。
+    if (lc == PlaybackLifecycle.idle || lc == PlaybackLifecycle.ended) return;
     DebugLog.log(
       'Play',
       'heartbeat pos=${position.inSeconds}s dur=${duration.inSeconds}s '
-          'buffered=${bufferedPosition.inSeconds}s playing=$isPlaying',
+          'buffered=${bufferedPosition.inSeconds}s playing=$isPlaying '
+          'rate=${playbackSpeed.toStringAsFixed(2)} lc=${lc.name}',
     );
     // 内存诊断：记录进程 RSS 与系统可用内存，崩溃日志可据此判断是否被系统低内存(LMK)杀死。
     _logMemory();
@@ -653,8 +949,62 @@ class DetailPlayer {
     // 帧率：与 [Res] 采样同一心跳，便于比对「泄漏 fd/s ≈ 送显帧率」
     // （验证每送显一帧是否漏一个 fd，2026-10-23 fd 泄漏排查）。
     unawaited(playerService.probeFrameRate());
+    // 缓存/预读真实状态：排查「缓冲永远贴着播放位置」。
+    unawaited(playerService.probeCacheState());
+    // 实际播放速率：与心跳里的 rate= 对照，确认 mpv 实例真的是 1.0x。
+    unawaited(playerService.probePlaybackRate());
     // 存活标记：每次心跳刷新时间戳，供下次启动推断「是否正常退出」。
     _writeAliveMarker();
+  }
+
+  /// 卡死看门狗：`playing=true` 但位置长时间不推进 = 播放器僵死。
+  ///
+  /// 2026-11-03 的日志里有 4 次位置定格（7 / 8 / 31 / 24 分钟），全是缓冲耗尽后
+  /// mpv 放弃读流、又不发 error：`isBufferExhaustedStall` 首行 `if (isPlaying)
+  /// return false` 把它们全部排除，而 `reloadStalled()` 只在用户手动点播放时才
+  /// 触发 —— 用户不点，画面就一直黑着。这里补上自动兜底。
+  ///
+  /// 只数 **mpv 真的在播** 的心跳：暂停 / 主动 seek 中都不算僵死。
+  /// 注意不能只信 `lifecycle == playing` —— 2026-11-05 的事故里 lifecycle
+  /// 从 open 之后就没进过 playing，靠它判断会漏掉整整 34 分钟。
+  void _checkStallWatchdog(PlaybackLifecycle lc) {
+    if (!isPlaying || lc == PlaybackLifecycle.seeking) {
+      _stalledHeartbeats = 0;
+      _lastWatchdogPosition = null;
+      return;
+    }
+    final pos = position;
+    final prev = _lastWatchdogPosition;
+    if (prev == null || pos > prev + const Duration(seconds: 1)) {
+      _stalledHeartbeats = 0;
+      _stallReloadAttempts = 0;
+      _stallGiveUpLogged = false;
+    } else {
+      _stalledHeartbeats++;
+    }
+    _lastWatchdogPosition = pos;
+    if (_stalledHeartbeats < kStalledHeartbeatsBeforeReload) return;
+    if (_stallReloadAttempts >= kMaxStallReloadAttempts) {
+      if (!_stallGiveUpLogged) {
+        _stallGiveUpLogged = true;
+        DebugLog.log(
+          'Play',
+          '位置连续 ${_stalledHeartbeats * 30}s 未推进，软重载已用尽，停止自动恢复',
+          flush: true,
+        );
+      }
+      return;
+    }
+    _stallReloadAttempts++;
+    _stalledHeartbeats = 0;
+    DebugLog.log(
+      'Play',
+      '位置定格 ${kStalledHeartbeatsBeforeReload * 30}s 未推进'
+          '（pos=${pos.inSeconds}s buffered=${bufferedPosition.inSeconds}s）'
+          ' → 第 $_stallReloadAttempts 次软重载',
+      flush: true,
+    );
+    unawaited(reloadStalled());
   }
 
   static const MethodChannel _crashChannel = MethodChannel('guanzi/crash');
@@ -666,7 +1016,9 @@ class DetailPlayer {
     _crashHandlerReasserted = true;
     try {
       await _crashChannel.invokeMethod<void>('reassert');
-      DebugLog.log('Crash', 'native crash handler re-asserted after player init', flush: true);
+      DebugLog.log(
+          'Crash', 'native crash handler re-asserted after player init',
+          flush: true);
     } catch (_) {
       // 通道未就绪时忽略，下次不再尝试
     }
@@ -703,7 +1055,8 @@ class DetailPlayer {
 
   void _writeAliveMarker() {
     try {
-      final f = File('${DebugLog.directoryPath}${Platform.pathSeparator}alive_marker.txt');
+      final f = File(
+          '${DebugLog.directoryPath}${Platform.pathSeparator}alive_marker.txt');
       f.writeAsStringSync('${DateTime.now().millisecondsSinceEpoch}\n');
     } catch (_) {}
   }
@@ -826,8 +1179,7 @@ class DetailPlayer {
         // 会永远停在失效的旧续播点上（画面在开头、进度条显示 49:04）。
         final lastSeek = _lastExplicitSeekAt;
         final recentlySought = lastSeek != null &&
-            DateTime.now().difference(lastSeek) <
-                kAdoptGuardAfterExplicitSeek;
+            DateTime.now().difference(lastSeek) < kAdoptGuardAfterExplicitSeek;
         if (!recentlySought &&
             playback.adoptPlayerPosition(
               playback.lastPlayerReport,
@@ -836,7 +1188,7 @@ class DetailPlayer {
           DebugLog.log(
             'Playhead',
             '进度权威值与实际上报脱节，已对齐 '
-            '权威→${playback.authoritativePosition.inSeconds}s',
+                '权威→${playback.authoritativePosition.inSeconds}s',
             flush: true,
           );
           position = playback.authoritativePosition;
@@ -851,6 +1203,28 @@ class DetailPlayer {
       );
       unawaited(_recoverFromDiscontinuity(playback.authoritativePosition));
     });
+  }
+
+  /// 换集/换片前作废「上一集遗留」的在途恢复动作。
+  ///
+  /// 两类定时器都属于**旧媒体**，跨集必须清：
+  /// - `_discontinuityRecoveryTimer`：2026-11-05 实测旧集的纠偏预约在新集 open
+  ///   之后才 fire，于是对新集补发一次精确 seek（目标还是旧集进度），表现为
+  ///   换集后进度莫名 +55/+47/+39s；
+  /// - `_prematureFallbackTimer`：它用「位置有没有越过 anchor」判断恢复是否成功，
+  ///   换集后位置归零必然判失败 → 直接把新集按「结束」处理，触发自动连播跳集。
+  ///
+  /// 同时清掉 12s 纠偏冷却：那是旧集留下的，不该拖住新集的恢复。
+  void cancelPendingRecovery() {
+    _discontinuityRecoveryTimer?.cancel();
+    _discontinuityRecoveryTimer = null;
+    _prematureFallbackTimer?.cancel();
+    _prematureFallbackTimer = null;
+    _lastDiscontinuityRecoveryAt = null;
+    // 上一片的「在途 seek / 用户暂停」不能带进新的一次 open。
+    _clearSeekLanding();
+    _lastUserPauseAt = null;
+    _lastExplicitSeekAt = null;
   }
 
   Future<void> _recoverFromDiscontinuity(Duration target) async {
@@ -869,31 +1243,45 @@ class DetailPlayer {
     }
     _discontinuityRecoveryInFlight = true;
     _lastDiscontinuityRecoveryAt = DateTime.now();
+    // 在途 seek 必须绑定发起时的 open 代次：seekPrecise 与后面 1.2s 落位校验
+    // 都是 async 的，期间用户完全可能换集。代次变了就立刻放弃，
+    // 否则会拿旧集的目标位置去 pace 新集（实测 +55/+47/+39s 偏移就是这么来的）。
+    final generation = playback.openGeneration;
     DebugLog.log(
       'Playhead',
-      'recover seek 执行 target=${target.inSeconds}s',
+      'recover seek 执行 target=${target.inSeconds}s gen=$generation',
       flush: true,
     );
     try {
       playback.onSeekStarted();
       await playerService.seekPrecise(target);
-      if (_disposing) return;
+      if (_disposing || playback.openGeneration != generation) {
+        if (!_disposing) {
+          DebugLog.log(
+            'Playhead',
+            'recover seek 已作废：open 代次变化 '
+                '$generation→${playback.openGeneration}',
+            flush: true,
+          );
+        }
+        return;
+      }
       // 落位校验：断网时 seek 不抛异常也不生效（流已死），必须等一小段看
       // mpv 实际上报是否真的到了目标附近，否则会一直空转纠偏。
       await Future<void>.delayed(const Duration(milliseconds: 1200));
-      if (_disposing) return;
+      if (_disposing || playback.openGeneration != generation) return;
       final landed = playback.lastPlayerReport;
       if ((landed - target).abs() > const Duration(seconds: 10)) {
         _registerDiscontinuityRecoveryFailure(
           'seek 未落位 target=${target.inSeconds}s 实际=${landed.inSeconds}s',
         );
-        playback.onSeekFinished();
+        playback.onSeekFinished(playing: isPlaying);
         return;
       }
       _discontinuityRecovery.recordSuccess();
       playback.confirmExplicitPosition(target, duration: duration);
       position = playback.authoritativePosition;
-      playback.onSeekFinished();
+      playback.onSeekFinished(playing: isPlaying);
       if (!isPlaying) {
         await playerService.resume();
       }
@@ -901,8 +1289,10 @@ class DetailPlayer {
     } catch (e) {
       debugPrint('discontinuity recovery seek failed: $e');
       DebugLog.log('Playhead', 'recover seek 失败: $e', flush: true);
+      // 换集导致的失败不算「旧媒体纠偏失败」，别把失败计数带给新集。
+      if (playback.openGeneration != generation) return;
       _registerDiscontinuityRecoveryFailure('seek 异常 $e');
-      playback.onSeekFinished();
+      playback.onSeekFinished(playing: isPlaying);
     } finally {
       _discontinuityRecoveryInFlight = false;
     }
@@ -915,7 +1305,7 @@ class DetailPlayer {
     DebugLog.log(
       'Playhead',
       '纠偏失败 ${_discontinuityRecovery.failures}/'
-      '$kMaxDiscontinuityRecoveryAttempts: $reason',
+          '$kMaxDiscontinuityRecoveryAttempts: $reason',
       flush: true,
     );
     if (!giveUp) return;
@@ -926,7 +1316,7 @@ class DetailPlayer {
     DebugLog.log(
       'Playhead',
       '纠偏连续失败达上限，停止纠偏并对齐实际位置'
-      '(adopted=$adopted 实际=${playback.lastPlayerReport.inSeconds}s)',
+          '(adopted=$adopted 实际=${playback.lastPlayerReport.inSeconds}s)',
       flush: true,
     );
   }
@@ -1026,8 +1416,18 @@ class DetailPlayer {
     await playerService.play(url);
   }
 
-  /// 暂停播放
+  /// 暂停播放。
+  ///
+  /// 若用户刚点了进度条、mpv 还在向未缓冲位置 seek，直接 pause 会让播放停在
+  /// 一个还没有解码帧的位置 → 全屏黑底透出。这里先等落位（最多 2.5s）再暂停，
+  /// 同时立刻把 UI 的播放态翻成暂停，用户不会觉得按键没反应。
   Future<void> pause() async {
+    final seq = ++_playPauseRequestSeq;
+    _lastUserPauseAt = DateTime.now();
+    isPlaying = false;
+    _notifyUiImmediate();
+    await _awaitSeekLanding();
+    if (seq != _playPauseRequestSeq || _disposing) return;
     await playerService.pause();
   }
 
@@ -1037,6 +1437,9 @@ class DetailPlayer {
   /// 单纯 `player.play()` 唤不醒——必须按当前进度重新 open 媒体流。
   /// 否则用户表现为「网络恢复后怎么点播放都没反应」。
   Future<void> resume() async {
+    final seq = ++_playPauseRequestSeq;
+    await _awaitSeekLanding();
+    if (seq != _playPauseRequestSeq || _disposing) return;
     if (shouldReloadInsteadOfResume(
       stalled: isStalledExhausted,
       lifecycle: playback.lifecycle,
@@ -1051,13 +1454,22 @@ class DetailPlayer {
   ///
   /// 与「用户主动暂停」的区别：暂停时通常还有未播完的缓存（差值远大于 1.5s）；
   /// 停滞时缓存已用尽且 mpv 不再拉流（`playing=false`、位置不动）。
-  bool get isStalledExhausted => isBufferExhaustedStall(
-        duration: duration,
-        position: playback.lastPlayerReport,
-        bufferedPosition: bufferedPosition,
-        isPlaying: isPlaying,
-        isBuffering: isBuffering,
-      );
+  /// 🔴 但「seek 到未缓冲点后用户主动暂停」缓存本来就贴合，旧判据会误判，
+  /// 因此额外豁免：在途 seek、以及用户刚主动暂停的保护窗口内都不算停滞。
+  bool get isStalledExhausted {
+    if (_pendingSeekTarget != null) return false;
+    return isBufferExhaustedStall(
+      duration: duration,
+      position: playback.lastPlayerReport,
+      bufferedPosition: bufferedPosition,
+      isPlaying: isPlaying,
+      isBuffering: isBuffering,
+      // 看门狗每 30s 采样一次位置：`_stalledHeartbeats > 0` 表示上一次采样
+      // 位置没有推进（mpv 会把 playing 一直报成 true 却定格不动）。
+      advancing: _stalledHeartbeats == 0,
+      userPaused: _isUserPausedRecently(),
+    );
+  }
 
   /// 停滞软重载：按当前权威进度重新拉流（不跳片头、不丢进度）。
   Future<void> reloadStalled() async {
@@ -1066,9 +1478,16 @@ class DetailPlayer {
       await playerService.resume();
       return;
     }
+    // 刚被用户拖过进度条时，mpv 的 lastPlayerReport 很可能还停在 seek 之前，
+    // 不能按「偏差>30s 以实际上报为准」把它当成真相：那会把软重载起点设成
+    // 用户拖动之前的位置（2026-11-07「恢复画面但位置完全不对」）。
+    final lastSeek = _lastExplicitSeekAt;
+    final recentlySought = lastSeek != null &&
+        DateTime.now().difference(lastSeek) < kAdoptGuardAfterExplicitSeek;
     final at = resolveReloadStartAt(
       authoritative: playback.authoritativePosition,
       reported: playback.lastPlayerReport,
+      preferAuthoritative: recentlySought,
     );
     final plan = playback.prepareOpen(
       isNewEpisode: false,
@@ -1091,7 +1510,58 @@ class DetailPlayer {
     }
   }
 
-  /// 跳转到指定位置
+  /// 清掉在途 seek 的等待状态（换集 / 释放 / 新一次 seek 前）。
+  /// 只清自己的状态，不改 lifecycle —— 换集时 lifecycle 由 prepareOpen 管。
+  void _clearSeekLanding() {
+    _pendingSeekTarget = null;
+    _seekLandingTimer?.cancel();
+    _seekLandingTimer = null;
+    final completer = _seekLandingCompleter;
+    _seekLandingCompleter = null;
+    if (completer != null && !completer.isCompleted) completer.complete();
+  }
+
+  /// 结束在途 seek：落位 / 超时 / 底层异常都走这里，保证 lifecycle 不会
+  /// 永久卡在 seeking（旧实现没有 try/finally，`seek()` 抛异常就再也没人调
+  /// onSeekFinished，此后所有 position 上报被整页忽略，进度条彻底冻结）。
+  void _finishSeekLanding() {
+    final target = _pendingSeekTarget;
+    if (target == null) return;
+    _clearSeekLanding();
+    playback.onSeekFinished(playing: isPlaying);
+    if (!_disposing) {
+      DebugLog.log(
+        'Playhead',
+        'seek 落位结束 target=${target.inSeconds}s '
+        '实际=${playback.lastPlayerReport.inSeconds}s',
+      );
+      onSeekLandedUi?.call();
+    }
+  }
+
+  /// 暂停 / 恢复前等在途 seek 落位，避免「向未缓冲位置 seek 途中暂停」导致
+  /// mpv 没有解码出任何新帧、外层黑底直接透出来（2026-11-07 用户反馈）。
+  Future<void> _awaitSeekLanding() async {
+    final completer = _seekLandingCompleter;
+    if (completer != null && !completer.isCompleted) {
+      await completer.future;
+    }
+  }
+
+  bool _isUserPausedRecently() {
+    final at = _lastUserPauseAt;
+    if (at == null) return false;
+    // 只要还停在暂停态就不该判停滞；恢复播放后再留 10s，覆盖「seek 刚落位、
+    // 缓冲前沿还没铺开」的那一瞬间。打开新媒体时由 cancelPendingRecovery 清掉。
+    if (!isPlaying) return true;
+    return DateTime.now().difference(at) < kUserPauseStallGuard;
+  }
+
+  /// 跳转到指定位置。
+  ///
+  /// mpv 的 `seek` 命令是**异步**的：命令返回 ≠ 已落位。这里保持 seeking
+  /// 直到收到落在目标附近的第一条 position 上报（或兜底超时），期间旧上报
+  /// 全丢；这样用户「点进度条 → 立刻点暂停」也不会把进度权威值搞乱。
   Future<void> seek(Duration position) async {
     // 用户主动 seek（进度条拖动 / 滑动手势 / 续播自身）：先取消「续播点待确认」
     // 纠偏。否则 900ms 后的 _confirmResumeStart 会把用户的移动误判成「续播未
@@ -1099,11 +1569,24 @@ class DetailPlayer {
     // （2026-10-18《爱情公寓》S1E1 27→36 分用户反馈）。
     _cancelPendingResumeConfirm();
     _lastExplicitSeekAt = DateTime.now();
+    // 上一次 seek 还没落位就又拖了一次：先放行旧的等待者，避免挂死。
+    _clearSeekLanding();
+    _pendingSeekTarget = position;
+    _seekLandingCompleter = Completer<void>();
     playback.onSeekStarted();
     playback.confirmExplicitPosition(position, duration: duration);
     this.position = playback.authoritativePosition;
-    await playerService.seek(position);
-    playback.onSeekFinished();
+    _seekLandingTimer = Timer(kSeekLandingTimeout, _finishSeekLanding);
+    try {
+      await playerService.seek(position);
+    } catch (e) {
+      DebugLog.log('Playhead', '用户 seek 失败 target=${position.inSeconds}s: $e');
+      _finishSeekLanding();
+      return;
+    }
+    // 等落位（或超时）；pause()/resume() 会等同一个 completer。
+    final completer = _seekLandingCompleter;
+    if (completer != null) await completer.future;
   }
 
   /// 取消续播点的延迟确认/纠偏（用户已主动 seek 时调用）。
@@ -1112,25 +1595,63 @@ class DetailPlayer {
     _resumeSeekTarget = null;
   }
 
-  /// 调整音量
+  /// 调整音量（写入系统音量；mpv 保持 100% 直通，实际响度由系统决定）
   Future<void> setVolume(double volume) async {
-    this.volume = volume.clamp(0.0, maxVolumeUi);
-    await playerService.setVolume(this.volume);
+    final v = volume.clamp(0.0, maxVolumeUi);
+    this.volume = v;
+    await SystemVolume.instance.setVolume(v);
   }
 
-  /// 切换静音
+  /// 切换静音（仅播放器增益 0/100，不动系统音量）
   Future<void> toggleMute() async {
     isMuted = !isMuted;
-    if (isMuted) {
-      muteVolume = volume;
-      await playerService.setVolume(0);
-    } else {
-      await playerService.setVolume(muteVolume);
-    }
+    await playerService.setVolume(isMuted ? 0 : 100);
+  }
+
+  /// 把系统音量同步进 UI（只读取，不写入）。
+  ///
+  /// [force] 为 true 时即使正在竖滑也回写 —— 只在手势起始处使用：此时累计位移
+  /// 已清零，用系统值当起点，避免「App 内 volume 陈旧（如 0）而系统是 10」时
+  /// 一滑动音量先跳到 0 的跳变。
+  Future<void> syncSystemVolume({bool force = false}) async {
+    final v = await SystemVolume.instance.getVolume();
+    if (verticalGestureActive && !force) return;
+    volume = v.clamp(0.0, maxVolumeUi);
+    onUiChanged?.call();
+  }
+
+  /// 订阅系统音量变化，保持 App 内 volume 与系统一致。
+  ///
+  /// 🔴 之前只定义了 [SystemVolume.onVolumeChanged] 却没有任何订阅：EventChannel
+  /// 的 onListen 不触发 → Kotlin 侧 registerReceiver 从不执行 → 系统音量变化永远
+  /// 到不了 Dart。实测系统音量 10 时 App 内 volume 仍停在 0，一滑动音量先跳到 0。
+  void _listenSystemVolume() {
+    if (_systemVolumeSub != null) return;
+    _systemVolumeSub = SystemVolume.instance.onVolumeChanged.listen(
+      _applySystemVolume,
+      onError: (Object e) => debugPrint('[Volume] 系统音量流异常: $e'),
+    );
+  }
+
+  /// 应用系统回报的归一化音量（手势进行中不覆盖，避免打断用户拖动）。
+  void _applySystemVolume(double v) {
+    if (_disposing || verticalGestureActive) return;
+    final next = v.clamp(0.0, maxVolumeUi);
+    if ((next - volume).abs() < 0.001) return;
+    volume = next;
+    onUiChanged?.call();
   }
 
   /// 调整播放速度
   Future<void> setPlaybackSpeed(double speed) async {
+    // 先落日志再改：setRate 在播放器重建瞬间可能作用到旧实例（甚至抛异常），
+    // 先记下「谁把速率设成多少」，事后可与 mpv speed 探针比对是否真的生效。
+    DebugLog.log(
+      'Speed',
+      'setPlaybackSpeed ${playbackSpeed.toStringAsFixed(2)} -> '
+          '${speed.toStringAsFixed(2)}',
+      flush: true,
+    );
     playbackSpeed = speed;
     await playerService.setRate(speed);
   }
@@ -1199,6 +1720,8 @@ class DetailPlayer {
     duration = Duration.zero;
     playback.resetSession();
     isBuffering = false;
+    _clearSeekLanding();
+    _lastUserPauseAt = null;
     cacheSpeed = 0;
     _throughputEstimator.reset();
     audioBitrateBps = null;
@@ -1217,6 +1740,8 @@ class DetailPlayer {
     magnetSourcePreparing = false;
     magnetWaitingFirstFrame = false;
     magnetNoFrameFailure = false;
+    _magnetErrorProgress = Duration.zero;
+    _lastMagnetErrorTick = null;
     lastMagnetUri = '';
   }
 
@@ -1254,7 +1779,11 @@ class DetailPlayer {
     onBufferingChangedUi = null;
     onPlaybackProgress = null;
     onVideoDimensionsChanged = null;
+    onPlaybackActiveChanged = null;
+    onSeekLandedUi = null;
 
+    _seekLandingTimer?.cancel();
+    _clearSeekLanding();
     hideTimer?.cancel();
     seekBubbleTimer?.cancel();
     gestureBarTimer?.cancel();
@@ -1262,7 +1791,10 @@ class DetailPlayer {
     progressPersistTimer?.cancel();
     lockChromeHideTimer?.cancel();
     _discontinuityRecoveryTimer?.cancel();
+    _prematureFallbackTimer?.cancel();
     _heartbeatTimer?.cancel();
+    _systemVolumeSub?.cancel();
+    _systemVolumeSub = null;
 
     // 必须摘掉 lifecycleNotifier 的监听：监听闭包捕获了本对象，
     // 不摘会让整个详情页对象图（含 coordinator / authority）被 ValueNotifier 持有，
@@ -1273,6 +1805,7 @@ class DetailPlayer {
     _clearPlayerServiceCallbacks();
 
     // 释放 notifier 本身（UI 侧通过 ValueListenableBuilder 绑定过）。
+    positionListenable.dispose();
     playerLifecycleNotifier.dispose();
     openElapsedSeconds.dispose();
     playback.dispose();

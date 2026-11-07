@@ -1,10 +1,153 @@
 # 罐子 版本变更记录
 
-> 版本号规则（2026-10-22 用户定）：**打包一次升一次**。每次打包交付都升版本号，
-> 同步位置：pubspec `version` + `constants.appVersion` + 应用内更新日志
+> 版本号规则（2026-10-22 用户定，**当日再次纠正**）：
+> **只有「Android + Windows + Web 三端一次性全部打包交付给用户」时才升版本号。**
+> 代码改动、跑 analyze / 单测、单端构建都**不升**；代码可以先落地，版本号随交付动作推进。
+> 升时同步四处：pubspec `version` + `constants.appVersion` + 应用内更新日志
 > （`lib/config/changelog.dart`）+ 本文件。默认升「第二位数」（如 1.0.50 → 1.0.51）；
 > 升「第一位数」（如 1.0 → 1.1）需用户特别指示。
-> 不是每改一次代码 / 跑一次 analyze / 跑一次单端构建就升。
+> ⚠️ 早期本文件写的「打包一次升一次」是错的，指的是「全部打包给我」的交付动作，
+> 不是任意一次打包。
+
+## 1.1.7 (2026-11-06)
+
+> 本次为 Android + Windows + Web 三端一次性交付，版本 `1.1.7+67`。
+> 相对 1.1.6 的全部改动如下；字幕 / 刷新率 / 插帧方案仍在评估，**本版未包含**。
+
+### 播放稳定性
+
+- **后台播放**：`Video(pauseUponEnteringBackgroundMode: false)` + Android 前台服务
+  （`FOREGROUND_SERVICE_MEDIA_PLAYBACK` / `PARTIAL_WAKE_LOCK` / 低优先级通知），
+  返回桌面或切到其他 App 仍继续播放；只有真正暂停才释放前台服务。
+- **自动缓冲挡位**：按物理内存定天花板（≤3.5G→128MB / ≤4.5G→192 / ≤6.5G→256 /
+  ≤8.5G→384 / 其余 512MB），安装即识别并显示「自动（xxx MB）」与当前可用内存；播放中
+  每 10 分钟按可用内存重新评估，升档 ×1.25 / 降档 ×0.8 防抖，探测失败保持原值。
+  也可手动选挡位。**字节与秒数同步降低**（`secsForBytes`：128→300s / 192→600 /
+  256→900 / 384→1200 / 512→1800），删掉旧 2700s 策略 —— 只降 `demuxer-max-bytes`
+  而保持 `readahead-secs: 1800` 会让低码率流无限往后读，白耗流量/带宽/电量。
+- **片尾卡死**：源站 EXTINF 虚标导致 mpv 提前 EOF；新增 `completion_policy.dart`
+  （可播末端直接结束、否则最多恢复一次）+ 12 秒兜底 + 心跳看门狗
+  （`isPlaying` 但位置 90s 不动即重载，最多 2 次）。
+- **停滞检测盲区**：`isBufferExhaustedStall` 去掉 `if (isPlaying) return false`，
+  引入 `advancing` 参数，播放中但位置不动也算停滞。
+- **换集竞态**：`cancelPendingRecovery()` 清在途恢复定时器，
+  `openGeneration` 防止旧集的 await 返回后污染新集状态。
+- **播放进度权威**：前跳不再 >800ms 无条件接受，改按墙钟经过时间与速率预期判定，
+  避免「切后台挂起后回前台补报 +5 分钟」被误判成跳变并 seek 回去倒带重播。
+- **跳剧情诊断**：`[Jump]` 日志加 `expected = wall × rate` / `deviation = delta - expected`，
+  `|deviation| ≥ 2000ms` 才落盘；`appSeek` 3 秒窗口排除 App 主动 seek；
+  紧随的 mpv 快照比对 `time-pos` / `playback-time` 区分分片 pts 错乱与真 seek。
+- **codec 打开失败**：非致命 codec / seek 错误只记日志，不再卡死播放生命周期。
+
+### 「我的」与设置
+
+- 删除「默认播放速度」设置项（字段 / setter / UI / 备份字段全链路）；播放器内临时倍速菜单保留。
+- **观影统计改真实数据**：`WatchHistory.watchedMs` 按位置增量累计，单次增量 >30s
+  视为拖动进度条不计，按归一化片名去重；删掉 `watchCount × 1.5` 的编造时长，
+  老记录没有累计数据时显示占位而不是猜一个数字。
+- **默认清晰度真正生效**：从「按线路名模糊加分」改为解析 HLS master playlist 的
+  `RESOLUTION` / `BANDWIDTH` 变体（`hls_variant_selector.dart` 纯函数），
+  自动档保持选最高码率，缺分辨率时按码率估算。
+- **缓存不设上限**：`maxCacheSize = 0`，`ensureSpaceForDownload()` 直接放行，
+  不再 LRU 删除用户已下载剧集；缓存页显示「已用 x，不设上限」。
+- 硬件解码总开关合并进档位，旧 `hardwareDecode=false` 幂等迁移到 `disabled`。
+- 播放偏好三档删除，保留「拖动精度」；「预加载下一集」与「播放预缓冲」合并为一个开关。
+- 磁力内置死源（YTS / 1337x / BT4G / Nyaa 等）从 UI 收敛并默认关闭，给一次自动关闭提示。
+- 数据导出 / 导入改走文件（系统下载目录 + `file_picker`）；WebDAV 抽公共弹窗，
+  「我的」页可直达、设置页支持 anchor 定位。
+  - 补修跨平台回归：`guanzi/logExport` 通道只有 Android 实现，旧版 `DataExport`
+    与 `LogExport` 无条件调用 → Windows / Linux 点导出必抛
+    `MissingPluginException`（导出数据降级剪贴板、导出日志直接失败）。新增
+    `download_export.dart` 按平台分流：Android→MediaStore 通道，桌面→直接写
+    `getDownloadsDirectory()`（取不到退应用文档目录），Web→剪贴板；路由抽成
+    纯函数、写文件抽成可直测 helper，7 条单测覆盖真实落盘、二进制 zip、
+    同名覆盖与 `write()` 端到端。Windows AOT 里 `guanzi/logExport` 被
+    tree-shake 掉，编译期即确认桌面不会走 Android 通道。
+- 「我的」页重排：头像压一行、统计卡只留「继续观看」、删快捷任务组、
+  「数据同步」改「云备份」、关于与播放源去重；账号体系按用户要求保留。
+- 历史集名归一化（`第01集` → `第1集`），首页与关注页统一。
+- **修复英文系统下界面中英文混排**：根因不是词条漏翻，而是 `MaterialApp` 跟随系统
+  `locale` 在 en-US 设备加载了英文分支，而界面另有大量中文硬编码，于是设置页出现
+  `Downloads / Storage` 与「已用 0 B · 不设上限」同屏。新增
+  `config/app_locale_policy.dart`（固定 `Locale('zh')` + 纯函数 `resolveAppLocale`），
+  两个 `MaterialApp` 与初始化页都显式指定 locale，英文 arb 保留但不启用，
+  待完整英文化 + 应用内语言开关再开放。新增 4 条单测（含「摘修复即红」断言）。
+
+### 验证与交付状态
+
+- `flutter analyze` 0 error（129 条 warning/info）；**97 个测试文件分 9 批全量实跑，
+  793 通过 / 2 skipped / 0 失败**（含新增 7 条导出用例，声明总数 795 与实跑对齐）；
+  Android release 三 ABI 构建成功（arm64 34.5MB，`libmpv.so` /
+  `libtorrent_flutter.so` / `libapp.so` 抽检齐全）。
+- 分批脚本 `D:\workbuddy_tmp\run_full_tests_1106.py`：清代理 + `TEMP/TMP/TMPDIR` 指
+  `D:\flutter_test_tmp` + `--concurrency=2` + 每批 12 文件串行，日志落 D 盘。
+  ⚠️ 跑完会吃掉 C 盘约 8G（`sessions/*/modify_backup/*.dill`）与 D 盘约 10G，
+  收尾要清 C 盘这些 `.dill` 并清空 C/D 回收站，详见用户级 MEMORY.md。
+- 导出修复追加验证：`download_export_test.dart` **7 条全过**（含真实落盘、
+  二进制 zip、同名覆盖、`write()` 端到端）；`test/services/` **484 条全过**；
+  对导出相关 5 个文件 `dart analyze` 为 `No issues found`。
+- **真机实机验证通过**（HONOR 70 / FNE-AN00 / Android 14 / arm64）：装 arm64 release 包后
+  首页 / 设置 / 缓存 / 我的 / 观影统计全中文、无溢出；A1 后台播放
+  `PlaybackForegroundService isForeground=true foregroundId=1001 types=00000002`、
+  通知「正在后台播放」、`ForegroundServiceStartNotAllowedException` 0 条；
+  A2 自动缓冲按真机 7.3GB 内存识别为「自动（384 MB）」（1.9GB 模拟器为 128 MB）；
+  回前台续播 1:38/47:29、3.42 MB/s 画面正常；导出数据 3282B、诊断日志 24389B 落
+  `/sdcard/Download/`；全程 FATAL / ANR = 0。此前 adb 认不到真机的根因是 Windows
+  重新枚举后 ADB Interface 的 `DeviceInterfaceGUID` 变成荣耀私有值，改成标准
+  `{F72FE0D4-…}` 即恢复（脚本 `D:\workbuddy_tmp\fix_adb_guid.bat`，带备份）。
+- 语言策略追加验证：`flutter analyze` 全项目 0 error（131 条 info/warning，与基线一致），
+  新增 4 条单测 + 相关 42 条回归全过；en-US 模拟器与 en-US 真机各装机实测均为全中文。
+- 本版三端 release 全量重建（Android 三 ABI / Windows / Web），并用
+  `tool/package_deliverables.py --strict` 做产物新鲜度校验，避免新 Android + 旧
+  Windows/Web 混装。Windows 新鲜度代表产物取 `data/app.so` 而非 C++ runner
+  `movie_app.exe`（后者不随 Dart 代码重编，时间戳会停在几个月前）。
+- ⚠️ **Web 构建必须非沙箱执行**：沙箱会拦 `build/web/main.dart.js` 的读写，表现为
+  `Target web_release_bundle failed: Flutter failed to create file at ...`，
+  Dart 编译其实已成功，与代码无关。打包脚本的 Web 解压目录同步同样会被安全中心拦，
+  并留下「新 html + 旧 js」混合态 —— **Web 只交 zip**。
+- 仍未验：真实声音（投屏 `--no-audio`）、默认清晰度真实 HLS 变体切换、A2「字节与秒数
+  一起降低」的运行时参数（release 包 debugPrint 不进 logcat，目前只有单测与体感）；
+  Web 端诊断日志入口缺 `kIsWeb` 守卫、C 长按 2x 复位、D4 首页续播点按约定未改。
+- 跳剧情实机复测待用户执行，操作卡见 `D:\workbuddy_tmp\jump_selftest_kit.html`。
+
+## 1.1.6 (2026-11-04)
+
+- **磁力搜索重做：能快就快，慢也稳定出结果**
+  - 多源并行 + 先到先上屏：每个源独立超时，谁先回来就先显示，不再被最慢的源拖住整页加载。
+  - 新增 Knaben 聚合源：支持中文原名直查（实测《我不是药神》直接出结果），与 Torrentio 形成独立生态冗余。
+  - 结果缓存（10 分钟，stale-while-revalidate）：重复搜索立即返回旧结果并后台刷新；空结果不缓存，避免「抖动一次就缓存空」。
+  - 单源超时退避重试一次：个别源抖动不再导致整次搜索失败、需要再点一次。
+  - 中文查询跳过 Torrentio（只认 IMDb id，中文文本必空还拖 14s），Knaben 请求体积 100→40；中文首包从 ~16s 降到 2s 级。
+  - 修复 Knaben 标题显示成 `Uploader: xxx`：按 `<br>` 切行跳过上传者行，兜底 `title` / magnet `dn`。
+
+## 1.1.5 (2026-11-03)
+
+- **搜索「加载中」改为首屏出来即结束**
+  - 现象：聚合搜索首屏结果早已落地，整页和影视资源标题行却仍长时间转圈，要等所有源把最多 10 页补齐页全部跑完才消失。
+  - 根因：「加载中」的结束条件跟搜索流关闭绑定，而流关闭要求所有源阶段1 + 全部后台补齐页完成（`finished >= total && backgroundPending == 0`）。
+  - 修复：`search_page` 在首次镜像到非空结果时立即翻转本地加载标志；后台补齐页仍由 provider 流式投递、静默追加，不再维持任何阻塞式 loading。
+
+## 1.1.4 (2026-11-03)
+
+- **修复换集后进度条比例画错**
+  - 现象：切换到新一集后，进度条仍按上一集的时长比例定位，停留时间 / 进度看起来没变或比例不对。
+  - 根因：普通换集分支只把播放位置归零，没清 `duration` / `buffered`，首帧到来时新位置配旧时长，按比例画错。
+  - 修复：`_playEpisodeAsync` 在 `prepareOpen` 之后补零 `position` / `duration` / `bufferedPosition`（换集且不带续播点时生效），点选集、下一集、播完自动下一集统一覆盖。
+
+- **修复磁力加载进度条「假推进」**
+  - 现象：磁力解析卡在"第 5/6 步"附近，进度条定格在某个百分比不动，像卡死。
+  - 根因：旧逻辑把"第 N/6 步"线性映射到固定百分比，等首帧这种长时间阶段无真实进度可显示却硬给一个值。
+  - 修复：新增 `MagnetPrepProgressPolicy`，长时间等待（同阶段停留 ≥12s、等首帧等）切换为不确定态（进度条来回扫动）；只有拿到真实 `bufferPct` 时才用真实数据，避免误导。
+
+- **修复总时长未知时时间显示错乱**
+  - 现象：磁力刚起播、时长尚未取到时，时间显示 `0:01 / 0:00`（时长倒挂）。
+  - 修复：`formatPlaybackClock` 在 `duration<=0` 时右侧显示 `--:--`。
+
+- **性能与稳定性优化（#231 / #232 / #233）**
+  - 详情页拆分、接口层（`api_service`）拆分与性能优化，首页与详情加载更顺、内存占用更稳。
+
+- **深色主题与安全区审计（#239）**
+  - 统一深色主题下次要文字颜色规范（不再写死 black54/black45）；修正若干 `SafeArea` 被遮挡的布局问题。
 
 ## 1.1.3 (2026-10-29)
 

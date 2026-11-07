@@ -6,13 +6,16 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../../utils/web_http_stub.dart'
     if (dart.library.html) '../../utils/web_http.dart' as web_http;
 import '../../config/routes.dart';
-import '../../config/constants.dart';
+import '../../services/episode_name_normalizer.dart';
+import '../../widgets/webdav_config_sheet.dart';
+import '../../providers/settings_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../providers/favorite_provider.dart';
 import '../../providers/history_provider.dart';
 import '../../providers/cache_provider.dart';
 import '../../providers/playlist_provider.dart';
 import '../../widgets/empty_widget.dart';
+import 'dart:async' show unawaited;
 
 /// 个人中心页面
 ///
@@ -58,33 +61,108 @@ class ProfilePage extends StatelessWidget {
       body: ListView(
         padding: EdgeInsets.zero,
         children: [
-          // ===== 用户信息头部 =====
+          // ===== 账号头部：压到一行，功能入口不再被推到第二屏 =====
           _buildUserHeader(context, theme, userProvider, cardColor: cardColor),
+          const SizedBox(height: 12),
 
-          // ===== 快捷任务区（高频操作前置）=====
-          _buildQuickActionSection(
+          // ===== 继续观看（原来 4 张统计卡只留这一张）=====
+          _buildContinueWatching(
             context,
-            textColor: textColor,
-            cardColor: cardColor,
-            dividerColor: dividerColor,
-          ),
-
-          // ===== 数据统计（4个卡片） =====
-          _buildBiliStatsSection(
-            context,
-            theme,
-            favoriteProvider,
             historyProvider,
-            cacheProvider,
-            playlistProvider,
             cardColor: cardColor,
             textColor: textColor,
             subTextColor: subTextColor,
           ),
+          const SizedBox(height: 12),
+
+          // ===== 常用 =====
+          _buildBiliSectionHeader(textColor: textColor, title: '常用'),
+          _buildBiliSectionCard(
+            cardColor: cardColor,
+            children: [
+              _buildBiliMenuItem(
+                context,
+                icon: Icons.favorite_border,
+                iconBgColor: const Color(0xFFF48FB1),
+                title: '我的收藏',
+                value: '${favoriteProvider.count} 部',
+                textColor: textColor,
+                subTextColor: subTextColor,
+                onTap: () => _showFavorites(context),
+              ),
+              _buildBiliCardDivider(dividerColor),
+              _buildBiliMenuItem(
+                context,
+                icon: Icons.download_outlined,
+                iconBgColor: const Color(0xFFA5D6A7),
+                title: '我的缓存',
+                value: cacheProvider.formattedTotalSize,
+                textColor: textColor,
+                subTextColor: subTextColor,
+                onTap: () => AppRoutes.toCacheManager(context),
+              ),
+              _buildBiliCardDivider(dividerColor),
+              _buildBiliMenuItem(
+                context,
+                icon: Icons.playlist_play,
+                iconBgColor: const Color(0xFFCE93D8),
+                title: '播放列表',
+                value: '${playlistProvider.count} 个列表',
+                textColor: textColor,
+                subTextColor: subTextColor,
+                onTap: () => AppRoutes.toPlaylist(context),
+              ),
+              _buildBiliCardDivider(dividerColor),
+              _buildBiliMenuItem(
+                context,
+                icon: Icons.bar_chart,
+                iconBgColor: const Color(0xFF4FC3F7),
+                title: '观影统计',
+                value: '查看真实观影数据',
+                textColor: textColor,
+                subTextColor: subTextColor,
+                onTap: () => AppRoutes.toStats(context),
+              ),
+            ],
+          ),
 
           const SizedBox(height: 12),
 
-          // ===== 账号管理区域 =====
+          // ===== 云备份（原「数据同步」：两个假同步入口已删）=====
+          _buildBiliSectionHeader(textColor: textColor, title: '云备份'),
+          _buildBiliSectionCard(
+            cardColor: cardColor,
+            children: [
+              _buildBiliMenuItem(
+                context,
+                icon: Icons.cloud_outlined,
+                iconBgColor: const Color(0xFF90CAF9),
+                title: 'WebDAV 设置',
+                value: context.select<SettingsProvider, bool>(
+                        (s) => s.webdavConnected)
+                    ? '已连接'
+                    : '未配置',
+                textColor: textColor,
+                subTextColor: subTextColor,
+                onTap: () => unawaited(showWebDavConfigSheet(context)),
+              ),
+              _buildBiliCardDivider(dividerColor),
+              _buildBiliMenuItem(
+                context,
+                icon: Icons.sync_alt_outlined,
+                iconBgColor: const Color(0xFFCE93D8),
+                title: '更多同步选项',
+                value: '上传 / 下载 / 双向同步',
+                textColor: textColor,
+                subTextColor: subTextColor,
+                onTap: () => AppRoutes.toSettings(context, anchor: 'webdav'),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 12),
+
+          // ===== 账号管理（整套账号体系保留，后续接服务端）=====
           _buildBiliSectionHeader(textColor: textColor, title: '账号管理'),
           _buildBiliSectionCard(
             cardColor: cardColor,
@@ -101,8 +179,8 @@ class ProfilePage extends StatelessWidget {
                 subTextColor: subTextColor,
                 onTap: () => AppRoutes.toLogin(context),
               ),
-              _buildBiliCardDivider(dividerColor),
               if (!userProvider.isGuestMode) ...[
+                _buildBiliCardDivider(dividerColor),
                 _buildBiliMenuItem(
                   context,
                   icon: Icons.swap_horiz,
@@ -130,97 +208,11 @@ class ProfilePage extends StatelessWidget {
 
           const SizedBox(height: 12),
 
-          // ===== 数据同步区域 =====
-          _buildBiliSectionHeader(textColor: textColor, title: '数据同步'),
+          // ===== 设置（关于 / 播放源管理只在设置里保留一份）=====
+          _buildBiliSectionHeader(textColor: textColor, title: '设置'),
           _buildBiliSectionCard(
             cardColor: cardColor,
             children: [
-              _buildBiliMenuItem(
-                context,
-                icon: Icons.cloud_outlined,
-                iconBgColor: const Color(0xFF90CAF9),
-                title: 'WebDAV 设置',
-                value: '配置云端同步服务',
-                textColor: textColor,
-                subTextColor: subTextColor,
-                onTap: () => AppRoutes.toSettings(context),
-              ),
-              _buildBiliCardDivider(dividerColor),
-              _buildBiliMenuItem(
-                context,
-                icon: Icons.history_outlined,
-                iconBgColor: const Color(0xFFFFB74D),
-                title: '同步历史记录',
-                value: '${historyProvider.count} 条记录',
-                textColor: textColor,
-                subTextColor: subTextColor,
-                onTap: () => _showHistory(context),
-              ),
-              _buildBiliCardDivider(dividerColor),
-              _buildBiliMenuItem(
-                context,
-                icon: Icons.favorite_border,
-                iconBgColor: const Color(0xFFF48FB1),
-                title: '同步收藏列表',
-                value: '${favoriteProvider.count} 部影片',
-                textColor: textColor,
-                subTextColor: subTextColor,
-                onTap: () => _showFavorites(context),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 12),
-
-          // ===== 其他功能 =====
-          _buildBiliSectionHeader(textColor: textColor, title: '其他'),
-          _buildBiliSectionCard(
-            cardColor: cardColor,
-            children: [
-              _buildBiliMenuItem(
-                context,
-                icon: Icons.playlist_play,
-                iconBgColor: const Color(0xFFCE93D8),
-                title: '播放列表',
-                value: '${playlistProvider.count} 个列表',
-                textColor: textColor,
-                subTextColor: subTextColor,
-                onTap: () => AppRoutes.toPlaylist(context),
-              ),
-              _buildBiliCardDivider(dividerColor),
-              _buildBiliMenuItem(
-                context,
-                icon: Icons.bar_chart,
-                iconBgColor: const Color(0xFF4FC3F7),
-                title: '观影统计',
-                value: '查看你的观影数据分析',
-                textColor: textColor,
-                subTextColor: subTextColor,
-                onTap: () => AppRoutes.toStats(context),
-              ),
-              _buildBiliCardDivider(dividerColor),
-              _buildBiliMenuItem(
-                context,
-                icon: Icons.source_outlined,
-                iconBgColor: const Color(0xFF81C784),
-                title: '播放源管理',
-                value: '管理影视数据源',
-                textColor: textColor,
-                subTextColor: subTextColor,
-                onTap: () => AppRoutes.toSourceManager(context),
-              ),
-              _buildBiliCardDivider(dividerColor),
-              _buildBiliMenuItem(
-                context,
-                icon: Icons.download_outlined,
-                iconBgColor: const Color(0xFFA5D6A7),
-                title: '我的缓存',
-                value: cacheProvider.formattedTotalSize,
-                textColor: textColor,
-                subTextColor: subTextColor,
-                onTap: () => AppRoutes.toCacheManager(context),
-              ),
-              _buildBiliCardDivider(dividerColor),
               _buildBiliMenuItem(
                 context,
                 icon: Icons.settings_outlined,
@@ -231,24 +223,6 @@ class ProfilePage extends StatelessWidget {
                 subTextColor: subTextColor,
                 onTap: () => AppRoutes.toSettings(context),
               ),
-              _buildBiliCardDivider(dividerColor),
-              _buildBiliMenuItem(
-                context,
-                icon: Icons.info_outline,
-                iconBgColor: const Color(0xFF90CAF9),
-                title: '关于',
-                value: 'v${AppConstants.appVersion}',
-                textColor: textColor,
-                subTextColor: subTextColor,
-                onTap: () {
-                  showAboutDialog(
-                    context: context,
-                    applicationName: AppConstants.appName,
-                    applicationVersion: AppConstants.appVersion,
-                    applicationLegalese: '纯客户端、零服务器、无广告\n覆盖Android、PC、Web三端',
-                  );
-                },
-              ),
             ],
           ),
 
@@ -258,47 +232,8 @@ class ProfilePage extends StatelessWidget {
     );
   }
 
-  Widget _buildQuickActionSection(
-    BuildContext context, {
-    required Color textColor,
-    required Color cardColor,
-    required Color dividerColor,
-  }) {
-    return Column(
-      children: [
-        _buildBiliSectionHeader(textColor: textColor, title: '快捷任务'),
-        _buildBiliSectionCard(
-          cardColor: cardColor,
-          children: [
-            _buildBiliMenuItem(
-              context,
-              icon: Icons.download_outlined,
-              iconBgColor: const Color(0xFF81C784),
-              title: '离线缓存',
-              value: '管理下载与缓存任务',
-              textColor: textColor,
-              subTextColor: const Color(0xFF999999),
-              onTap: () => AppRoutes.toCacheManager(context),
-            ),
-            _buildBiliCardDivider(dividerColor),
-            _buildBiliMenuItem(
-              context,
-              icon: Icons.tune,
-              iconBgColor: const Color(0xFFFFB74D),
-              title: '播放偏好',
-              value: '调整流畅/均衡/画质策略',
-              textColor: textColor,
-              subTextColor: const Color(0xFF999999),
-              onTap: () => AppRoutes.toSettings(context),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-      ],
-    );
-  }
-
   /// 构建用户信息头部
+  /// 账号头部：一行搞定头像 + 昵称 + 状态，不再占掉首屏大半。
   Widget _buildUserHeader(
     BuildContext context,
     ThemeData theme,
@@ -307,180 +242,75 @@ class ProfilePage extends StatelessWidget {
   }) {
     final userInfo = userProvider.userInfo;
     final isGuest = userProvider.isGuestMode;
+    final subTitle = isGuest
+        ? '登录后头像与昵称仅保存在本机'
+        : '${userProvider.loginTypeDisplayName} · ID ${userProvider.displayUid}';
 
-    return Container(
-      padding: const EdgeInsets.only(
-        top: 20,
-        left: 20,
-        right: 20,
-        bottom: 28,
-      ),
-      decoration: BoxDecoration(
+    return InkWell(
+      onTap: () => AppRoutes.toLogin(context),
+      child: Container(
         color: cardColor,
-      ),
-      child: Column(
-        children: [
-          // 头像
-          GestureDetector(
-            onTap: () => AppRoutes.toLogin(context),
-            child: Container(
-              width: 80,
-              height: 80,
+        padding: const EdgeInsets.fromLTRB(16, 18, 16, 20),
+        child: Row(
+          children: [
+            Container(
+              width: 56,
+              height: 56,
               decoration: BoxDecoration(
                 color: theme.colorScheme.primary.withValues(alpha: 0.1),
                 shape: BoxShape.circle,
                 border: Border.all(
                   color: theme.colorScheme.primary.withValues(alpha: 0.3),
-                  width: 3,
+                  width: 2,
                 ),
               ),
+              clipBehavior: Clip.antiAlias,
               child: userInfo.avatar.isNotEmpty
-                  ? ClipOval(
-                      child: CachedNetworkImage(
-                        imageUrl: web_http.webProxiedImageUrl(
-                          userInfo.avatar,
-                        ),
-                        fit: BoxFit.cover,
-                        errorWidget: (_, __, ___) =>
-                            _buildDefaultAvatar(theme, isGuest),
-                      ),
+                  ? CachedNetworkImage(
+                      imageUrl: web_http.webProxiedImageUrl(userInfo.avatar),
+                      fit: BoxFit.cover,
+                      errorWidget: (_, __, ___) =>
+                          _buildDefaultAvatar(theme, isGuest),
                     )
                   : _buildDefaultAvatar(theme, isGuest),
             ),
-          ),
-          const SizedBox(height: 14),
-
-          // 昵称
-          Text(
-            userInfo.nickname.isNotEmpty ? userInfo.nickname : '游客用户',
-            style: TextStyle(
-              color: theme.colorScheme.onSurface,
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-
-          const SizedBox(height: 8),
-
-          // 用户ID（脱敏显示）
-          if (!isGuest)
-            Text(
-              'ID: ${userProvider.displayUid}',
-              style: TextStyle(
-                color: theme.hintColor,
-                fontSize: 12,
-              ),
-            ),
-
-          const SizedBox(height: 10),
-
-          // 登录状态标签
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // 登录方式标签
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 5,
-                ),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primary.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      isGuest
-                          ? Icons.person_outline
-                          : userInfo.isWeChat
-                              ? Icons.wechat_outlined
-                              : Icons.chat_bubble_outline,
-                      color: theme.colorScheme.primary,
-                      size: 14,
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    userInfo.nickname.isNotEmpty
+                        ? userInfo.nickname
+                        : '游客用户',
+                    style: TextStyle(
+                      color: theme.colorScheme.onSurface,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
                     ),
-                    const SizedBox(width: 4),
-                    Text(
-                      userProvider.loginTypeDisplayName,
-                      style: TextStyle(
-                        color: theme.colorScheme.primary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              // 登录时间标签
-              if (!isGuest)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 5,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest
-                        .withValues(alpha: 0.5),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Text(
-                    userProvider.formattedLoginTime,
+                  const SizedBox(height: 5),
+                  Text(
+                    subTitle,
                     style: TextStyle(
                       color: theme.hintColor,
-                      fontSize: 11,
+                      fontSize: 12,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
-            ],
-          ),
-
-          // 游客提示
-          if (isGuest) ...[
-            const SizedBox(height: 14),
-            GestureDetector(
-              onTap: () => AppRoutes.toLogin(context),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 7,
-                ),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primary.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: theme.colorScheme.primary.withValues(alpha: 0.2),
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.login,
-                      color: theme.colorScheme.primary,
-                      size: 14,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '登录账号以同步数据',
-                      style: TextStyle(
-                        color: theme.colorScheme.primary,
-                        fontSize: 12,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Icon(
-                      Icons.chevron_right,
-                      color: theme.colorScheme.primary.withValues(alpha: 0.6),
-                      size: 14,
-                    ),
-                  ],
-                ),
+                ],
               ),
             ),
+            Icon(
+              Icons.chevron_right,
+              size: 18,
+              color: theme.hintColor,
+            ),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -494,131 +324,100 @@ class ProfilePage extends StatelessWidget {
     );
   }
 
-  /// B站风格数据统计区域（4个卡片）
-  Widget _buildBiliStatsSection(
+  /// 继续观看：唯一保留的统计入口。没有历史时用一行文字，不再摆空卡片。
+  Widget _buildContinueWatching(
     BuildContext context,
-    ThemeData theme,
-    FavoriteProvider favoriteProvider,
-    HistoryProvider historyProvider,
-    CacheProvider cacheProvider,
-    PlaylistProvider playlistProvider, {
+    HistoryProvider historyProvider, {
     required Color cardColor,
     required Color textColor,
     required Color subTextColor,
   }) {
+    final histories = historyProvider.histories;
+    if (histories.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Text(
+          '还没有观看记录',
+          style: TextStyle(color: subTextColor, fontSize: 13),
+        ),
+      );
+    }
+    final latest = histories.reduce(
+      (a, b) => a.lastWatchTime.isAfter(b.lastWatchTime) ? a : b,
+    );
+    final episode = normalizeEpisodeName(latest.episodeName);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
-        children: [
-          Expanded(
-            child: _buildBiliStatCard(
-              context,
-              count: favoriteProvider.count,
-              label: '收藏',
-              icon: Icons.favorite,
-              iconColor: const Color(0xFFF48FB1),
-              cardColor: cardColor,
-              textColor: textColor,
-              subTextColor: subTextColor,
-              onTap: () => _showFavorites(context),
-            ),
+      child: InkWell(
+        onTap: () => _showHistory(context),
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: cardColor,
+            borderRadius: BorderRadius.circular(12),
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _buildBiliStatCard(
-              context,
-              count: historyProvider.count,
-              label: '历史',
-              icon: Icons.history,
-              iconColor: const Color(0xFFFFB74D),
-              cardColor: cardColor,
-              textColor: textColor,
-              subTextColor: subTextColor,
-              onTap: () => _showHistory(context),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _buildBiliStatCard(
-              context,
-              count: cacheProvider.completedCount,
-              label: '缓存',
-              icon: Icons.download_done,
-              iconColor: const Color(0xFF81C784),
-              cardColor: cardColor,
-              textColor: textColor,
-              subTextColor: subTextColor,
-              onTap: () => AppRoutes.toCacheManager(context),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _buildBiliStatCard(
-              context,
-              count: playlistProvider.count,
-              label: '列表',
-              icon: Icons.playlist_add_check,
-              iconColor: const Color(0xFF4FC3F7),
-              cardColor: cardColor,
-              textColor: textColor,
-              subTextColor: subTextColor,
-              onTap: () => AppRoutes.toPlaylist(context),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// B站风格统计卡片
-  Widget _buildBiliStatCard(
-    BuildContext context, {
-    required int count,
-    required String label,
-    required IconData icon,
-    required Color iconColor,
-    required Color cardColor,
-    required Color textColor,
-    required Color subTextColor,
-    VoidCallback? onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-        decoration: BoxDecoration(
-          color: cardColor,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: iconColor.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(10),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 60,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: latest.movieCover.isNotEmpty
+                    ? CachedNetworkImage(
+                        imageUrl: web_http.webProxiedImageUrl(
+                          latest.movieCover,
+                        ),
+                        fit: BoxFit.cover,
+                        errorWidget: (_, __, ___) => const Icon(
+                          Icons.movie_outlined,
+                          color: Colors.grey,
+                        ),
+                      )
+                    : const Icon(Icons.movie_outlined, color: Colors.grey),
               ),
-              child: Icon(icon, color: iconColor, size: 20),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              count.toString(),
-              style: TextStyle(
-                color: textColor,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '继续观看',
+                      style: TextStyle(color: subTextColor, fontSize: 12),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      latest.movieName,
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${episode.isEmpty ? '第${latest.episodeIndex + 1}集' : episode}'
+                      ' · 已看 ${latest.progressPercent.toStringAsFixed(0)}%',
+                      style: TextStyle(color: subTextColor, fontSize: 12),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: TextStyle(
-                color: subTextColor,
-                fontSize: 12,
+              Icon(
+                Icons.play_circle_fill,
+                size: 34,
+                color: Theme.of(context).colorScheme.primary,
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -942,7 +741,7 @@ class ProfilePage extends StatelessWidget {
                             ),
                             title: Text(history.movieName),
                             subtitle: Text(
-                              '${history.episodeName} | ${history.progressPercent.toStringAsFixed(0)}%',
+                              '${normalizeEpisodeName(history.episodeName)} | ${history.progressPercent.toStringAsFixed(0)}%',
                               style: Theme.of(context)
                                   .textTheme
                                   .bodySmall

@@ -19,6 +19,7 @@ class DetailCacheEpisodePicker extends StatefulWidget {
     required this.playingEpisodeIndex,
     required this.selectedIndices,
     required this.onSelectionChanged,
+    this.maxListHeight,
   });
 
   final List<Episode> episodes;
@@ -27,6 +28,11 @@ class DetailCacheEpisodePicker extends StatefulWidget {
   final int playingEpisodeIndex;
   final Set<int> selectedIndices;
   final ValueChanged<Set<int>> onSelectionChanged;
+
+  /// 列表区高度上限（dp）。列表自身可滚动，若不限制，它会把外层面板的
+  /// 滚动手势全部吃掉，导致下方「缓存当前集 / 下载所选」永远滚不出来
+  /// （横屏全屏只有 ~360dp 高时必现）。
+  final double? maxListHeight;
 
   @override
   State<DetailCacheEpisodePicker> createState() =>
@@ -121,7 +127,8 @@ class _DetailCacheEpisodePickerState extends State<DetailCacheEpisodePicker> {
             ),
             const SizedBox(height: 4),
             SizedBox(
-              height: _useListLayout ? _listHeight : 196,
+              height: widget.maxListHeight ??
+                  (_useListLayout ? _listHeight : 196),
               child: _useListLayout
                   ? _buildList(cache, cs)
                   : _buildGrid(cache, cs),

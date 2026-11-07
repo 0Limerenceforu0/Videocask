@@ -11,7 +11,12 @@ import '../../services/search_service.dart';
 import '../../services/search_intent_service.dart';
 import '../../services/search_type_word.dart';
 import '../../services/api_service.dart'
-    show ApiService, SearchRelevance, TitleQuery;
+    show
+        ApiService,
+        SearchRelevance,
+        TitleQuery,
+        SearchApiExt,
+        CategoryApiExt;
 import '../../services/cms_category_resolver.dart';
 import '../../services/imdb_lookup_service.dart';
 import '../../services/magnet_chinese_name_service.dart';
@@ -25,6 +30,7 @@ import '../home/movie_card.dart';
 import 'search_channel_gate.dart';
 import '../../config/routes.dart';
 import '../../widgets/empty_widget.dart';
+import '../../widgets/magnet_action_widgets.dart';
 import '../../widgets/loading_widget.dart';
 import '../../l10n/app_localizations.dart';
 import '../../theme/hifi_design_tokens.dart';
@@ -532,6 +538,17 @@ class _SearchPageState extends State<SearchPage> {
               displayTitle: term,
               year: ImdbLookupService.yearFromUserQuery(term),
               strictMatchForDetailPage: false,
+              // 先到先交付：首批结果一回来就上屏并停转圈（P1-4）。
+              onBatch: (partial) {
+                if (!mounted) return;
+                if (generation != _searchGeneration) return;
+                if (partial.isEmpty) return;
+                setState(() {
+                  _magnetResults = partial;
+                  _isMagnetSearching = false;
+                  _magnetSearchError = '';
+                });
+              },
             )
             // 与详情页磁力搜索对齐的 45s 兜底：前置的片名→IMDb 解析
             // （豆瓣/TMDB/IMDb 联想）叠加各源超时后可能超过 45s，
@@ -1122,6 +1139,16 @@ class _SearchPageState extends State<SearchPage> {
     }
     _lastMirroredResults = results;
     _searchResults = visible;
+    // 2026-11-03：首屏出来即结束「加载中」。
+    // 旧逻辑要等所有源的阶段 1 + 全部后台补页都跑完（Stream 关闭）才关
+    // loading：热门词 = N 个源 × 最多 10 页 = 几十个请求，整页/标题行的
+    // 转圈会持续十几到几十秒，而列表其实第一批结果早就落地了。
+    // 现在首屏（第一批非空结果）一镜像进来就关掉转圈；后续补页仍由
+    // provider 流式投递、静默追加到列表（见 [_performSearch] 里那个不阻塞
+    // UI 的 `await movieProvider.multiSourceSearch`），不再维持阻塞式 loading。
+    if (_isMultiSourceSearching && visible.isNotEmpty) {
+      _isMultiSourceSearching = false;
+    }
     _multiSearchStatusText = movieProvider.searchStatusText;
   }
 
@@ -1700,34 +1727,65 @@ class _SearchPageState extends State<SearchPage> {
                     Icons.movie_outlined,
                     'IMDb ${t.imdbId}',
                   ),
+                MagnetSubtitleBadge(title: t.name, compact: true),
               ],
             ),
             const SizedBox(height: 10),
+            // 三按钮同行：播放 / 详情 / 下载，窄屏也不换行。
             Row(
               children: [
-                FilledButton.icon(
-                  onPressed: () => AppRoutes.toMagnetTorrentDetail(
-                    context,
-                    t,
-                    displayTitleHint: _magnetDisplayTitleHint(),
-                  ),
-                  icon: const Icon(Icons.play_arrow, size: 22),
-                  label: Text(l10n.searchPlay),
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 10,
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () => AppRoutes.toMagnetTorrentDetail(
+                      context,
+                      t,
+                      displayTitleHint: _magnetDisplayTitleHint(),
+                    ),
+                    icon: const Icon(Icons.play_arrow, size: 18),
+                    label: Flexible(
+                      child: Text(
+                        l10n.searchPlay,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 8,
+                      ),
+                      minimumSize: const Size(0, 36),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                   ),
                 ),
-                const SizedBox(width: 10),
-                TextButton(
-                  onPressed: () => AppRoutes.toMagnetTorrentDetail(
-                    context,
-                    t,
-                    displayTitleHint: _magnetDisplayTitleHint(),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: TextButton(
+                    onPressed: () => AppRoutes.toMagnetTorrentDetail(
+                      context,
+                      t,
+                      displayTitleHint: _magnetDisplayTitleHint(),
+                    ),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      minimumSize: const Size(0, 36),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Text(
+                      l10n.searchOpenDetail,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                  child: Text(l10n.searchOpenDetail),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: MagnetDownloadButton(
+                    magnetUri: t.magnetUri,
+                    name: t.name,
+                    compact: true,
+                  ),
                 ),
               ],
             ),
@@ -1895,22 +1953,24 @@ class _SearchPageState extends State<SearchPage> {
   Widget _buildSearchProgress(ThemeData theme) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
-      child: Center(
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // 搜索中显示加载动画
-            if (_isMultiSourceSearching)
-              const SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            if (_isMultiSourceSearching) const SizedBox(width: 8),
-            // 搜索状态文本
-            // ⚠️ 必须限行：多源聚合状态（如「已搜索 6/6 个源，共 12 条结果（6 条在多个源有资源，已合并）」）
-            // 在 360dp 宽下不换行会撑破 Row 右溢出（曾触发 RenderFlex overflow）。
-            Text(
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          // 搜索中显示加载动画
+          if (_isMultiSourceSearching) ...[
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 8),
+          ],
+          // 搜索状态文本
+          // ⚠️ 必须包 Flexible：多源聚合状态（如「已搜索 6/6 个源，共 12 条结果（6 条在多个源有资源，已合并）」）
+          // 在 360dp 宽下不换行会撑破 Row 右溢出（曾触发 RenderFlex overflow）。
+          // maxLines 只限行数、不限宽度，必须靠 Flexible 约束可用宽度，长文案才会省略而不再溢出。
+          Flexible(
+            child: Text(
               _multiSearchStatusText,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
@@ -1920,8 +1980,8 @@ class _SearchPageState extends State<SearchPage> {
                 fontSize: 13,
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

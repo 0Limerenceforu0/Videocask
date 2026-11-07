@@ -161,8 +161,10 @@ class CacheService {
   /// 最大并发下载数
   static const int maxConcurrentDownloads = 3;
 
-  /// 最大缓存容量（字节）
-  static int get maxCacheBytes => AppConstants.maxCacheSize * 1024 * 1024;
+  /// 最大缓存容量（字节）；0 = 不设上限。
+  static int get maxCacheBytes => AppConstants.maxCacheSize <= 0
+      ? 0
+      : AppConstants.maxCacheSize * 1024 * 1024;
 
   /// 初始化
   Future<void> init() async {
@@ -374,10 +376,14 @@ class CacheService {
   }
 
   /// 下载前确保未超过 [maxCacheBytes]；必要时 LRU 清理已完成项。
+  ///
+  /// [maxCacheBytes] == 0 表示不设上限：直接返回，绝不因为容量自动删除
+  /// 用户已经下载好的剧集。
   Future<void> ensureSpaceForDownload({
     int estimatedBytes = 512 * 1024 * 1024,
   }) async {
     if (kIsWeb) return;
+    if (maxCacheBytes <= 0) return;
     var total = await getTotalCacheSize();
     if (total + estimatedBytes <= maxCacheBytes) return;
 

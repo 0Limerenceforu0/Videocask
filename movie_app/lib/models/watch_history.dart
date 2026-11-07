@@ -36,6 +36,13 @@ class WatchHistory {
   /// 观看次数
   final int watchCount;
 
+  /// 累计实际观看时长（毫秒）。
+  ///
+  /// 由 [HistoryProvider.saveOrUpdateHistory] 按「播放位置增量」累加，只统计
+  /// 正常推进的部分：拖动进度条跨越的区间不计入，所以这个值不会因 seek 虚增。
+  /// 老存档没有该字段 → 0（解析时兜底）。
+  final int watchedMs;
+
   /// 磁力详情专用：完整 magnet 链接，用于从历史恢复播放与列表展示
   final String magnetUri;
 
@@ -52,6 +59,7 @@ class WatchHistory {
     this.routeIndex = 0,
     DateTime? lastWatchTime,
     this.watchCount = 1,
+    this.watchedMs = 0,
     this.magnetUri = '',
   }) : lastWatchTime = lastWatchTime ?? DateTime.now();
 
@@ -73,6 +81,7 @@ class WatchHistory {
               DateTime.now()
           : DateTime.now(),
       watchCount: json['watchCount'] as int? ?? 1,
+      watchedMs: json['watchedMs'] as int? ?? 0,
       magnetUri: json['magnetUri']?.toString() ?? '',
     );
   }
@@ -92,6 +101,7 @@ class WatchHistory {
       'routeIndex': routeIndex,
       'lastWatchTime': lastWatchTime.toIso8601String(),
       'watchCount': watchCount,
+      'watchedMs': watchedMs,
       'magnetUri': magnetUri,
     };
   }
@@ -110,6 +120,7 @@ class WatchHistory {
     int? routeIndex,
     DateTime? lastWatchTime,
     int? watchCount,
+    int? watchedMs,
     String? magnetUri,
   }) {
     return WatchHistory(
@@ -125,6 +136,7 @@ class WatchHistory {
       routeIndex: routeIndex ?? this.routeIndex,
       lastWatchTime: lastWatchTime ?? this.lastWatchTime,
       watchCount: watchCount ?? this.watchCount,
+      watchedMs: watchedMs ?? this.watchedMs,
       magnetUri: magnetUri ?? this.magnetUri,
     );
   }

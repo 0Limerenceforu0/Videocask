@@ -64,8 +64,12 @@ class DetailPlaybackSession {
   }
 
   void markPlaying() {
+    // error 也要能回来：`Could not open codec.` 这类提示出现后 mpv 往往
+    // 已经回退到可用解码器继续播，画面与位置都在走。若把 error 视作终态，
+    // markPlaying 永远不生效 → 心跳/看门狗/续播记录全部失明（实测整段 0 条心跳）。
     if (lifecycle == PlaybackLifecycle.opening ||
-        lifecycle == PlaybackLifecycle.seeking) {
+        lifecycle == PlaybackLifecycle.seeking ||
+        lifecycle == PlaybackLifecycle.error) {
       lifecycle = PlaybackLifecycle.playing;
     }
   }

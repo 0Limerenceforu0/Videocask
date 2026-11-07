@@ -158,6 +158,11 @@ class TorrentPlayerService with ChangeNotifier {
   List<TorrentFileItem> get files => _files;
 
   int? _currentTorrentId;
+
+  /// 当前播放种子的 id（只读）。
+  /// 旁路任务（如 S3 种子内字幕）用它判断引擎是否把同 hash 合并回播放
+  /// handle，避免 `removeTorrent` 误删正在播的种子。
+  int? get currentTorrentId => _currentTorrentId;
   int? _currentStreamId;
 
   String _torrentName = '';

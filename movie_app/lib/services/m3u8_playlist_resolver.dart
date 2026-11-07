@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../config/app_env.dart';
 import 'debug_log.dart';
 import 'hls_ad_filter.dart';
+import 'hls_variant_selector.dart';
 import 'media_fetch_headers.dart';
 
 /// HLS AES-128 密钥信息（常见 CMS 片源）。
@@ -79,6 +80,16 @@ class M3u8PlaylistResolver {
 
   /// 用户可维护广告规则（assets/ad_block_rules.json），懒加载并缓存。
   static AdBlockRules? _cachedRules;
+
+  /// 用户设置的默认清晰度（'自动' / '标清' / '高清' / '1080P' / '4K'）。
+  ///
+  /// 只作用于 **HLS master playlist 的多档变体**：设成固定档位时，先解析出
+  /// 目标码率的 media playlist 再播放，而不是把选择权交给 mpv（mpv 默认挑
+  /// 码率最高的一档，低端机/流量场景会明显吃亏）。'自动' 保持原行为。
+  ///
+  /// 静态变量：播放器直连、本地代理（[LocalMediaHttpServer]）、缓存下载
+  /// （[CacheService]）走的是不同实例，设置必须对三者同时生效。
+  static String preferredQuality = '自动';
 
   /// 读取广告规则；文件缺失 / 解析失败一律回退 [AdBlockRules.empty]，不影响播放。
   static Future<AdBlockRules> get rules async {
@@ -175,7 +186,7 @@ class M3u8PlaylistResolver {
       if (!_isMasterPlaylist(content)) {
         return current;
       }
-      final variant = _pickBestVariantUrl(content, current);
+      final variant = _pickVariantUrl(content, current);
       if (variant == null || variant == current) {
         return current;
       }
@@ -184,39 +195,70 @@ class M3u8PlaylistResolver {
     return current;
   }
 
+  /// 按用户设置挑出 master playlist 的变体地址。
+  ///
+  /// 返回 null 表示不用改地址：设置为「自动」、URL 不是 master playlist、
+  /// 或请求失败 —— 调用方应保持原地址不变（失败即回退直连）。
+  Future<String?> resolvePreferredVariant(
+    String url, {
+    String? referer,
+  }) async {
+    if (HlsVariantSelector.targetHeightOf(preferredQuality) == null) {
+      return null;
+    }
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return null;
+    final lower = trimmed.toLowerCase();
+    if (!lower.startsWith('http://') && !lower.startsWith('https://')) {
+      return null;
+    }
+    try {
+      final dio = await _client();
+      // Web 端 User-Agent / Referer / Origin 是浏览器禁止 JS 自定义的
+      // forbidden headers，Dio 的浏览器 adapter 设置它们会直接抛异常，
+      // 导致选档静默失败并回退原始地址。原生端仍需要这些头防盗链。
+      final headers = kIsWeb
+          ? const <String, String>{}
+          : MediaFetchHeaders.forUrl(
+              trimmed,
+              referer: referer ?? trimmed,
+            );
+      final response = await dio.get<String>(
+        trimmed,
+        options: Options(headers: headers),
+      );
+      final content = response.data?.toString() ?? '';
+      if (!_isMasterPlaylist(content)) return null;
+      final picked = _pickVariantUrl(content, trimmed);
+      if (!AppEnv.isTestMode && picked != null) {
+        DebugLog.log(
+          'Quality',
+          '按「$preferredQuality」选中变体 $picked（master=$trimmed）',
+        );
+      }
+      return picked;
+    } catch (e) {
+      // 失败必须可见：否则用户在 Web 上改了默认清晰度却毫无提示地回退。
+      if (!AppEnv.isTestMode) {
+        DebugLog.log('Quality', '选档失败，回退原始地址: $e');
+      }
+      debugPrint('清晰度选档失败，回退原始地址: $e');
+      return null;
+    }
+  }
+
   static bool _isMasterPlaylist(String content) {
     final upper = content.toUpperCase();
     return upper.contains('#EXT-X-STREAM-INF');
   }
 
-  static String? _pickBestVariantUrl(String content, String baseUrl) {
-    final lines = content.split('\n');
-    String? bestUrl;
-    var bestBandwidth = -1;
-    for (var i = 0; i < lines.length; i++) {
-      final line = lines[i].trim();
-      if (!line.startsWith('#EXT-X-STREAM-INF')) continue;
-      final bwMatch = RegExp(r'BANDWIDTH=(\d+)').firstMatch(line);
-      final bandwidth =
-          bwMatch != null ? int.tryParse(bwMatch.group(1)!) : null;
-      var j = i + 1;
-      while (j < lines.length) {
-        final next = lines[j].trim();
-        if (next.isEmpty || next.startsWith('#')) {
-          j++;
-          continue;
-        }
-        final resolved = _resolveUrl(baseUrl, next);
-        final bw = bandwidth ?? 0;
-        if (bw >= bestBandwidth) {
-          bestBandwidth = bw;
-          bestUrl = resolved;
-        }
-        break;
-      }
-    }
-    return bestUrl;
-  }
+  /// 选变体：交给 [HlsVariantSelector]（纯函数，便于单测）。
+  static String? _pickVariantUrl(String content, String baseUrl) =>
+      HlsVariantSelector.pick(
+        content: content,
+        baseUrl: baseUrl,
+        quality: preferredQuality,
+      );
 
   /// 解析 `#EXT-X-KEY`（AES-128）。纯函数，供单测。
   ///

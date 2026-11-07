@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../services/episode_name_normalizer.dart';
 import 'package:provider/provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
@@ -363,7 +364,7 @@ class _FollowPageState extends State<FollowPage>
                         ),
                         child: Text(
                           history.episodeName.isNotEmpty
-                              ? '看到${history.episodeName}'
+                              ? '看到${normalizeEpisodeName(history.episodeName)}'
                               : '看到第${history.episodeIndex + 1}集',
                           style: TextStyle(
                             color: theme.colorScheme.primary,
@@ -491,7 +492,9 @@ class _FollowPageState extends State<FollowPage>
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        '${history.episodeName.isNotEmpty ? history.episodeName : '第${history.episodeIndex + 1}集'} | ${history.progressPercent.toStringAsFixed(0)}%',
+                        '${history.episodeName.isNotEmpty
+                            ? normalizeEpisodeName(history.episodeName)
+                            : '第${history.episodeIndex + 1}集'} | ${history.progressPercent.toStringAsFixed(0)}%',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.hintColor,
                           fontSize: 12,

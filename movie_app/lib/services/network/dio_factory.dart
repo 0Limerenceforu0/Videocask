@@ -102,7 +102,7 @@ class DioFactory {
     return dio;
   }
 
-  /// 响应为 JSON（OpenSubtitles 等 REST）
+  /// 响应为 JSON（通用 REST 接口）
   static Future<Dio> json({
     Duration? connectTimeout,
     Duration? receiveTimeout,

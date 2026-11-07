@@ -58,3 +58,27 @@ android {
 flutter {
     source = "../.."
 }
+
+// ── 编译前剔除 integration_test 的插件注册 ──────────────────────────────
+//
+// `integration_test` 在 dev_dependencies 里，Flutter 每次构建都会把它写进自动
+// 生成的 GeneratedPluginRegistrant.java；但 release 变体里没有该包的 Java 类，
+// `compileReleaseJavaWithJavac` 会直接报：
+//   程序包 dev.flutter.plugins.integration_test 不存在
+// 这个文件是纯生成物（已被 android/.gitignore 忽略），在 Java 编译前删掉相关行即可；
+// debug / 集成测试仍保留注册，不受影响。
+// 之前靠「构建前手工删文件」，但 Flutter 在构建过程中会重新生成，删了没用。
+val generatedRegistrant = layout.projectDirectory
+    .file("src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java")
+    .asFile
+
+tasks.matching { it.name.startsWith("compile") && it.name.endsWith("JavaWithJavac") }
+    .configureEach {
+        doFirst {
+            if (generatedRegistrant.exists()) {
+                val kept = generatedRegistrant.readLines()
+                    .filterNot { it.contains("integration_test") }
+                generatedRegistrant.writeText(kept.joinToString("\n"))
+            }
+        }
+    }

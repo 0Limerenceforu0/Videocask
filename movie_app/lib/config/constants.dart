@@ -7,7 +7,7 @@ class AppConstants {
   static const String appName = '罐子';
 
   /// 应用版本
-  static const String appVersion = '1.1.3';
+  static const String appVersion = '1.1.7';
 
   /// 默认API超时时间（毫秒）—— 10秒，减少用户等待
   static const int apiTimeout = 30000;
@@ -15,8 +15,12 @@ class AppConstants {
   /// 每页加载数量
   static const int pageSize = 20;
 
-  /// 最大缓存大小（MB）
-  static const int maxCacheSize = 2048;
+  /// 最大缓存大小（MB）。0 = 不设上限。
+  ///
+  /// 缓存是用户主动下载到本地的剧集，用容量上限去 LRU 删掉「已完成」的
+  /// 下载反而会误删用户想留着离线看的内容。改为不设上限，由用户在
+  /// 「我的缓存」里自行删除；磁盘空间交给系统/用户判断。
+  static const int maxCacheSize = 0;
 
   /// 搜索历史最大条数
   static const int maxSearchHistory = 20;
@@ -72,6 +76,8 @@ class AppConstants {
   static const String keyWebdavConfig = 'webdav_config';
   static const String keyLastSyncTime = 'last_sync_time';
   static const String keySearchHistory = 'search_history';
+  /// 拖动精度（mpv hr-seek）：'' = 跟随默认 / 'yes' = 精确 / 'no' = 快速。
+  static const String keyHrSeekMode = 'hr_seek_mode';
   static const String keyPlaybackStrategy = 'playback_strategy';
   static const String keyPreloadNextEpisode = 'preload_next_episode';
   static const String keyPlaybackPrefetch = 'playback_prefetch';
@@ -79,11 +85,17 @@ class AppConstants {
   /// HLS 去广告总开关（默认开；个别片源误删时用户可关）
   static const String keyHlsAdFilter = 'hls_ad_filter';
 
+  /// 后台播放：返回桌面/切到其它应用时继续出声音（默认开）
+  static const String keyBackgroundPlayback = 'background_playback';
+
+  /// 播放器画面比例模式：false=原始比例（contain，留对称黑边）/ true=铺满（cover，裁切边缘）
+  static const String keyPlayerFitCover = 'player_fit_cover';
+
+  /// demuxer 缓冲挡位：auto / 128 / 192 / 256 / 384 / 512（MB）
+  static const String keyBufferTier = 'buffer_tier';
+
   /// 旧键名，仅用于读取迁移
   static const String keyWifiPlaybackPrefetch = 'wifi_playback_prefetch';
-
-  /// OpenSubtitles.com REST API Key（在线搜索字幕）
-  static const String keyOpensubtitlesApiKey = 'opensubtitles_api_key';
 
   /// TMDB API Key（中文片名 → IMDb / 英文片名，磁力搜索）
   static const String keyTmdbApiKey = 'tmdb_api_key';

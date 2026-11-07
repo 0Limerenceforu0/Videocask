@@ -1,4 +1,5 @@
 import 'dart:async' show unawaited;
+import '../../services/episode_name_normalizer.dart';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -1262,7 +1263,7 @@ class _HomePageState extends State<HomePage>
                       ),
                       child: Text(
                         history.episodeName.isNotEmpty
-                            ? history.episodeName
+                            ? normalizeEpisodeName(history.episodeName)
                             : '第${history.episodeIndex + 1}集',
                         style: const TextStyle(
                           color: Colors.white,

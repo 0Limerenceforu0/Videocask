@@ -12,6 +12,7 @@ import '../../l10n/app_localizations.dart';
 import '../../models/movie.dart';
 import '../../providers/movie_provider.dart';
 import '../../providers/source_provider.dart';
+import '../../services/api_service.dart';
 import '../../services/cms_category_resolver.dart';
 import '../../theme/hifi_design_tokens.dart';
 import '../../widgets/category_genre_region_filter_band.dart';

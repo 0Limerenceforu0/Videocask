@@ -3,8 +3,10 @@ part of 'detail_page.dart';
 // 由 detail_page.dart 拆分而来：方法体逐字搬运，
 // 通过 extension on _DetailPageState 直接访问原类的私有成员。
 
-extension _DetailPagePlaybackExt on _DetailPageState {
-  Movie? _displayMovie(MovieProvider mp) {
+/// 挖孔区绘制通道（仅 Android 侧实现，见 `MainActivity.applyCutoutMode`）。
+const MethodChannel _displayChannel = MethodChannel('guanzi/display');
+
+extension _DetailPagePlaybackExt on _DetailPageState {  Movie? _displayMovie(MovieProvider mp) {
     final cm = mp.currentMovie;
     // 只认领「本页本次加载会话」产生的 currentMovie，杜绝跨页/跨源串片；
     // 同时允许自动换源后身份（id/sourceId）变化仍被本页正常认领
@@ -132,7 +134,14 @@ extension _DetailPagePlaybackExt on _DetailPageState {
     final settings = context.read<SettingsProvider>();
     final hw = settings.effectiveHwDecodeMode;
     final vo = settings.effectiveVideoOutputMode;
-    if (hw == _appliedHwDecodeMode && vo == _appliedVideoOutputMode) return;
+    // 缓冲挡位不重建播放器：applyPlaybackStrategy 只在 vo 变化时 recycle，
+    // 其它情况走 _applyMpvTuning 热设 mpv 属性，改完立刻生效。
+    final buffer = settings.effectiveBufferBytes;
+    if (hw == _appliedHwDecodeMode &&
+        vo == _appliedVideoOutputMode &&
+        buffer == _appliedBufferBytes) {
+      return;
+    }
     unawaited(_applyPlayerPlaybackTuning());
   }
 
@@ -143,8 +152,13 @@ extension _DetailPagePlaybackExt on _DetailPageState {
     final vo = settings.effectiveVideoOutputMode;
     _appliedHwDecodeMode = hw;
     _appliedVideoOutputMode = vo;
+    _appliedBufferBytes = settings.effectiveBufferBytes;
     await _playerModule.playerService.applyPlaybackStrategy(
-      PlaybackStrategyConfig.fromKey(settings.playbackStrategy),
+      PlaybackStrategyConfig.fromKey(
+        settings.playbackStrategy,
+        bufferBytes: settings.effectiveBufferBytes,
+        hrSeek: settings.hrSeekMode,
+      ),
       hwDecodeMode: hw,
       videoOutputMode: vo,
     );
@@ -220,12 +234,21 @@ extension _DetailPagePlaybackExt on _DetailPageState {
   }
 
   Widget _buildPlayerPersistentBackButton() {
+    final l10n = AppLocalizations.of(context)!;
+    final isFullScreen = _playerModule.isFullScreen;
+    final topInset = isFullScreen ? MediaQuery.paddingOf(context).top : 0.0;
+    // 与顶栏返回按钮同位置同尺寸：控制栏显隐切换时按钮不会跳动，
+    // 且非全屏槽内画面上沿黑边只有 ~30dp，38dp 大圆钮会压到画面。
     return Positioned(
       top: 0,
       left: 0,
       child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: GestureDetector(
+        padding: EdgeInsets.fromLTRB(12, topInset + 8, 0, 0),
+        child: PlayerOverlayIconButton(
+          icon: Icons.arrow_back,
+          iconSize: isFullScreen ? 24 : 18,
+          padding: isFullScreen ? 10 : 6,
+          tooltip: l10n.detailPlayerTooltipBack,
           onTap: () {
             if (_playerModule.isFullScreen) {
               unawaited(_toggleFullScreen());
@@ -233,18 +256,6 @@ extension _DetailPagePlaybackExt on _DetailPageState {
               unawaited(_leaveDetailPage());
             }
           },
-          child: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.black38,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: const Icon(
-              Icons.arrow_back,
-              color: Colors.white,
-              size: 20,
-            ),
-          ),
         ),
       ),
     );
@@ -320,6 +331,8 @@ extension _DetailPagePlaybackExt on _DetailPageState {
   }
 
   void _onPlayerBufferingChanged(bool buffering) {
+    // 缓冲结束 → 画面回来了，重新进入「3 秒后隐藏控制栏」的倒计时。
+    if (!buffering && mounted) _startHideTimer();
     _routeFallbackTimer?.cancel();
     if (!buffering) return;
     if (!_playerModule.playback.shouldAllowRouteFallback(
@@ -541,13 +554,35 @@ extension _DetailPagePlaybackExt on _DetailPageState {
           SystemUiMode.immersiveSticky,
         );
         await _applyMobileFullscreenOrientations();
+        await _applyCutoutFullscreen(true);
       } else {
+        // 先恢复挖孔区绘制模式，再恢复系统 UI，避免退出后顶部/侧边被挖孔遮挡。
+        await _applyCutoutFullscreen(false);
         await _restoreSystemUiAfterFullScreen();
       }
       if (!mounted) return;
     } else if (_isDesktopPlatform) {
       await windowManager.setFullScreen(enter);
       if (!mounted) return;
+    }
+  }
+
+  /// 全屏播放时允许画面绘制到挖孔区。
+  ///
+  /// 默认模式下系统把挖孔所在边划成安全区：实测荣耀 70 横屏屏幕 2400x1080，
+  /// 但 `mAppBounds` 只有 2310x1080，右侧 90px 画不进去 —— 视频看起来就是
+  /// 「右边一条黑边」。全屏切成 ALWAYS 后画面真正铺满整屏，代价是挖孔本身
+  /// 会压在画面右侧（90x58px）。退出全屏必须恢复默认，否则其它页面会被遮挡。
+  /// 仅 Android 实现了该通道，其它平台静默跳过。
+  Future<void> _applyCutoutFullscreen(bool allow) async {
+    if (kIsWeb || !Platform.isAndroid) return;
+    try {
+      await _displayChannel.invokeMethod<void>(
+        'setCutoutMode',
+        <String, dynamic>{'allow': allow},
+      );
+    } catch (e) {
+      debugPrint('全屏挖孔区设置失败: $e');
     }
   }
 
@@ -566,16 +601,9 @@ extension _DetailPagePlaybackExt on _DetailPageState {
   }
 
   void _toggleMute() {
-    _setState(() {
-      _playerModule.isMuted = !_playerModule.isMuted;
-      if (_playerModule.isMuted) {
-        _playerModule.muteVolume = _playerModule.volume;
-        _playerModule.playerService.setVolume(0);
-      } else {
-        _playerModule.playerService.setVolume(_playerModule.muteVolume);
-        _playerModule.volume = _playerModule.muteVolume;
-      }
-    });
+    // 静音只切播放器自身增益（0/100），不动系统音量；交给 DetailPlayer.toggleMute。
+    unawaited(_playerModule.toggleMute());
+    _setState(() {});
   }
 
   void _seekRelative(int seconds) {
@@ -631,6 +659,11 @@ extension _DetailPagePlaybackExt on _DetailPageState {
     }
     idx = (idx + direction) % _DetailPageState._kSpeedSteps.length;
     final sp = _DetailPageState._kSpeedSteps[idx];
+    DebugLog.log(
+      'Speed',
+      '倍速按钮切到 ${sp.toStringAsFixed(2)}',
+      flush: true,
+    );
     unawaited(_playerModule.setPlaybackSpeed(sp));
     _setState(() => _playerModule.playbackSpeed = sp);
     _startHideTimer();
@@ -646,14 +679,38 @@ extension _DetailPagePlaybackExt on _DetailPageState {
   }
 
   void _onLongPressStart() {
-    if (_playerModule.currentPlayUrl == null) return;
+    if (_playerModule.currentPlayUrl == null) {
+      DebugLog.log('Speed', '长按2x忽略：currentPlayUrl 为空');
+      return;
+    }
     _playerModule.normalSpeed = _playerModule.playbackSpeed;
+    DebugLog.log(
+      'Speed',
+      '长按2x开始：normalSpeed=${_playerModule.normalSpeed.toStringAsFixed(2)}',
+      flush: true,
+    );
     unawaited(_playerModule.setPlaybackSpeed(2.0));
     _setState(() => _playerModule.showSpeedHint = true);
   }
 
   void _onLongPressEnd() {
-    if (_playerModule.currentPlayUrl == null) return;
+    if (_playerModule.currentPlayUrl == null) {
+      // 高危分支：这里直接 return 就不会复位。若日志出现本行且随后心跳里
+      // rate 一直是 2.00，即确认「长按 2x 卡住」。
+      DebugLog.log(
+        'Speed',
+        '长按2x结束但跳过恢复：currentPlayUrl 为空，速率可能卡在 '
+            '${_playerModule.playbackSpeed.toStringAsFixed(2)}',
+        flush: true,
+      );
+      return;
+    }
+    DebugLog.log(
+      'Speed',
+      '长按2x结束：恢复 normalSpeed='
+          '${_playerModule.normalSpeed.toStringAsFixed(2)}',
+      flush: true,
+    );
     unawaited(_playerModule.setPlaybackSpeed(_playerModule.normalSpeed));
     _setState(() => _playerModule.showSpeedHint = false);
   }
@@ -672,11 +729,29 @@ extension _DetailPagePlaybackExt on _DetailPageState {
 
   void _startHideTimer() {
     _playerModule.hideTimer?.cancel();
-    if (!_playerModule.showControls || _playerModule.showShortcutHelp) return;
+    // 缓冲 / 起播 / 磁力准备 / seek 未落位期间没有画面，控制栏（含进度条）
+    // 必须常驻；状态结束时由 onBufferingChangedUi / onSeekLandedUi 重新调这里。
+    if (!shouldStartControlsHideTimer(
+      controlsVisible: _playerModule.showControls,
+      helpVisible: _playerModule.showShortcutHelp,
+      buffering: _playerModule.isBuffering,
+      openingMedia: _playerModule.isOpeningMedia,
+      magnetPreparing: _playerModule.magnetSourcePreparing,
+      seekLandingPending: _playerModule.hasSeekLandingPending,
+    )) {
+      return;
+    }
     _playerModule.hideTimer = Timer(const Duration(seconds: 3), () {
+      // 3 秒内可能又进入缓冲 / 发起新 seek，落刀前再核一次。
       if (mounted &&
-          _playerModule.showControls &&
-          !_playerModule.showShortcutHelp) {
+          shouldStartControlsHideTimer(
+            controlsVisible: _playerModule.showControls,
+            helpVisible: _playerModule.showShortcutHelp,
+            buffering: _playerModule.isBuffering,
+            openingMedia: _playerModule.isOpeningMedia,
+            magnetPreparing: _playerModule.magnetSourcePreparing,
+            seekLandingPending: _playerModule.hasSeekLandingPending,
+          )) {
         _setState(() {
           _playerModule.showControls = false;
           _playerModule.showVolumePopover = false;

@@ -1,31 +1,38 @@
-import 'dart:io' show File;
+import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../config/constants.dart';
 import '../config/magnet_source_catalog.dart';
 import '../models/magnet_source_config.dart';
 import '../services/storage_service.dart';
+import '../services/buffer_tier.dart';
+import '../services/device_memory_probe.dart';
 import '../services/video_output_policy.dart';
 import '../services/cache_service.dart';
 import '../services/m3u8_playlist_resolver.dart';
-import '../services/subtitle_service.dart';
 import '../services/sync_service.dart';
 import '../services/webdav_service.dart';
 import '../services/hw_decode_policy.dart';
+import '../services/hw_decode_migration.dart';
 import '../services/hw_decode_platform.dart';
 import '../services/debug_log.dart';
+
+/// 实测长期不可达的内置磁力源 id。
+///
+/// 常量与配置数据都保留（以后源恢复了改这里即可），只是不再出现在 UI、
+/// 也不再参与聚合搜索。2026-10-27 真机 5G + 本机直连双重实测：
+/// 这四个源全部 connection timeout，留着只会让每次搜索白等一轮。
+const Set<String> kUnreachableBuiltinMagnetSources = {
+  'yts_mx',
+  '1337x',
+  'bt4g',
+  'nyaa',
+};
 
 /// 设置状态管理
 class SettingsProvider extends ChangeNotifier {
   final StorageService _storage = StorageService();
   final SyncService _syncService = SyncService();
-
-  /// 默认播放速度
-  double _defaultSpeed = 1.0;
-
-  /// 默认播放速度
-  double get defaultSpeed => _defaultSpeed;
 
   /// 默认清晰度
   String _defaultQuality = '自动';
@@ -48,9 +55,9 @@ class SettingsProvider extends ChangeNotifier {
 
   /// 实际生效的硬件解码档位。
   ///
-  /// 综合总开关与档位设置得出；总开关关闭时恒为 [HwDecodeMode.disabled]。
+  /// 只认「档位键」这一个真相。旧的布尔总开关已在 [init] 里迁移成
+  /// `disabled` 档位后清理，避免两个控件互相打架。
   HwDecodeMode get effectiveHwDecodeMode {
-    if (!_hardwareDecode) return HwDecodeMode.disabled;
     final platform = detectHwDecodePlatform();
     return _hwDecodeModeKey.isEmpty
         ? defaultHwDecodeMode(platform)
@@ -96,16 +103,25 @@ class SettingsProvider extends ChangeNotifier {
 
   bool get autoPlayOnDetailEnter => _autoPlayOnDetailEnter;
 
-  /// 播放策略：smooth / balanced / quality
+  /// 播放策略：内部仍保留 smooth/balanced/quality（影响换线超时、预拉字节数），
+  /// 但不再给用户三档旋钮——三档的缓冲参数已被自动挡位统一覆盖，留着只会误导。
   String _playbackStrategy = 'balanced';
 
-  /// 播放策略
   String get playbackStrategy => _playbackStrategy;
 
-  /// 播放到 80% 时预解析下一集
+  /// 拖动精度（mpv hr-seek）：'' = 跟随默认 / 'yes' = 精确 / 'no' = 快速。
+  String _hrSeekMode = '';
+
+  String get hrSeekMode => _hrSeekMode;
+
+  /// 播放到 80% 时提前解析 + 预拉下一集。
+  ///
+  /// 旧版拆成「预加载下一集」和「播放预缓冲」两个开关，但预加载会先解析
+  /// URL 再看第二个开关，关掉后者照样预热。现在合并为一个开关，两个旧键
+  /// 都继续读写（旧备份/云同步不会丢设置），语义取「两者都为真」。
   bool _preloadNextEpisode = true;
 
-  bool get preloadNextEpisode => _preloadNextEpisode;
+  bool get preloadNextEpisode => _preloadNextEpisode && _playbackPrefetch;
 
   /// 预拉下一集前几 MB（全网络，可关）
   bool _playbackPrefetch = true;
@@ -118,6 +134,139 @@ class SettingsProvider extends ChangeNotifier {
   bool _hlsAdFilter = true;
 
   bool get hlsAdFilter => _hlsAdFilter;
+
+  /// 后台播放：返回桌面/切到其它应用时继续保持播放（默认开）。
+  ///
+  /// 关闭后：进入后台即自动暂停，回到前台自动恢复。
+  bool _backgroundPlayback = true;
+
+  bool get backgroundPlayback => _backgroundPlayback;
+
+  /// demuxer 缓冲挡位。
+  ///
+  /// `auto` = 按设备物理内存自动选（见 [BufferTier]）；
+  /// 其余为固定 MB：128 / 192 / 256 / 384 / 512。
+  String _bufferTier = BufferTier.autoKey;
+
+  String get bufferTier => _bufferTier;
+
+  /// 自动挡**当前**实际生效的字节数（按物理内存定天花板，再按可用内存升降档）。
+  ///
+  /// 0 = 还没算过，回落到按物理内存推算的固定值。
+  int _autoBufferBytes = 0;
+
+  int get autoBufferBytes => _autoBufferBytes > 0
+      ? _autoBufferBytes
+      : BufferTier.autoBytesFor(_deviceTotalMemoryBytes);
+
+  /// 最近一次探测到的系统可用内存（字节）；0 = 未知。
+  int _availableMemoryBytes = 0;
+
+  int get availableMemoryBytes => _availableMemoryBytes;
+
+  /// 自动挡动态评估定时器（只在播放期间存在）。
+  Timer? _bufferAutoTuneTimer;
+
+  bool _bufferAutoTuneProbing = false;
+
+  /// 实际生效的缓冲字节数。
+  ///
+  /// 手动挡位直接用；auto 用 [_autoBufferBytes]（随可用内存动态变）。
+  /// **字节与秒数必须同步**：调用方一律拿这个值交给
+  /// `PlaybackStrategyConfig.fromKey(bufferBytes:)`，由 [BufferTier] 之外的那层
+  /// 再按 [secsForBytes] 换算出 readahead-secs，不要只改字节上限。
+  int get effectiveBufferBytes => _bufferTier == BufferTier.autoKey
+      ? autoBufferBytes
+      : BufferTier.resolveBytes(
+          tier: _bufferTier,
+          totalMemoryBytes: _deviceTotalMemoryBytes,
+        );
+
+  /// 设备物理内存（字节）；未探测到时为 0。
+  int _deviceTotalMemoryBytes = 0;
+
+  int get deviceTotalMemoryBytes => _deviceTotalMemoryBytes;
+
+  /// 写入设备内存探测结果（由 [DeviceMemoryProbe] 在启动后调用）。
+  void applyDeviceTotalMemory(int bytes) {
+    if (bytes <= 0 || bytes == _deviceTotalMemoryBytes) return;
+    _deviceTotalMemoryBytes = bytes;
+    _autoBufferBytes = BufferTier.autoBytesFor(bytes);
+    notifyListeners();
+  }
+
+  // ========== 自动缓冲挡位（动态） ==========
+
+  /// 开始自动挡动态评估（**播放开始时**调用）。
+  ///
+  /// 立即先评估一次，之后每 [BufferTier.autoTuneInterval]（10 分钟）一次。
+  /// 手动挡位也照样挂定时器（回调里直接早退），这样用户播放中切回「自动」
+  /// 不需要重新进出播放页。
+  Future<void> startBufferAutoTune() async {
+    _bufferAutoTuneTimer ??= Timer.periodic(
+      BufferTier.autoTuneInterval,
+      (_) => unawaited(evaluateBufferAutoTier()),
+    );
+    await evaluateBufferAutoTier();
+  }
+
+  /// 停止评估（离开播放页 / 播放结束时调用）。
+  void stopBufferAutoTune() {
+    _bufferAutoTuneTimer?.cancel();
+    _bufferAutoTuneTimer = null;
+  }
+
+  /// 探测一次可用内存，必要时升/降档。
+  ///
+  /// 只用「可用内存」调整自动挡，**不改用户手动选的挡位**。
+  Future<void> evaluateBufferAutoTier() async {
+    if (_bufferTier != BufferTier.autoKey) return;
+    if (_bufferAutoTuneProbing) return;
+    _bufferAutoTuneProbing = true;
+    try {
+      final avail = await DeviceMemoryProbe.readAvailableMemoryBytes();
+      // 探测是 async 的：期间 provider 可能已被 dispose（退出应用），
+      // 之后再 notifyListeners 会命中 ChangeNotifier 的 disposed 断言。
+      if (_disposed) return;
+      // 探测失败（桌面/Web/通道异常）→ 保持现状，绝不因为一次失败降档。
+      if (avail <= 0) return;
+      _availableMemoryBytes = avail;
+
+      final current = autoBufferBytes;
+      final next = BufferTier.adaptiveBytesFor(
+        totalMemoryBytes: _deviceTotalMemoryBytes,
+        availableMemoryBytes: avail,
+        currentBytes: current,
+      );
+      if (next == current) {
+        // 数值没变也要通知：设置页要显示最新的「当前可用」。
+        notifyListeners();
+        return;
+      }
+      const mb = 1024 * 1024;
+      _autoBufferBytes = next;
+      DebugLog.log(
+        'Play',
+        '自动缓冲挡位 ${current ~/ mb}MB → ${next ~/ mb}MB'
+            '（可用 ${avail ~/ mb}MB）',
+        flush: true,
+      );
+      notifyListeners();
+    } finally {
+      _bufferAutoTuneProbing = false;
+    }
+  }
+
+  /// 是否已 dispose（async 回调用它挡掉 dispose 之后的 notifyListeners）。
+  bool _disposed = false;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _bufferAutoTuneTimer?.cancel();
+    _bufferAutoTuneTimer = null;
+    super.dispose();
+  }
 
   /// 仅WiFi缓存
   bool _onlyWifiCache = false;
@@ -155,14 +304,6 @@ class SettingsProvider extends ChangeNotifier {
   /// 冲突解决策略
   String get conflictStrategy => _conflictStrategy;
 
-  /// OpenSubtitles API Key（存于 Hive settings）
-  String _opensubtitlesApiKey = '';
-
-  String get opensubtitlesApiKey => _opensubtitlesApiKey;
-
-  bool get opensubtitlesApiKeyConfigured =>
-      _opensubtitlesApiKey.trim().isNotEmpty;
-
   /// TMDB API Key（中文片名解析为 IMDb / 英文名，提升磁力命中率）
   String _tmdbApiKey = '';
 
@@ -176,8 +317,47 @@ class SettingsProvider extends ChangeNotifier {
   List<MagnetSourceConfig> get magnetSources =>
       List.unmodifiable(_magnetSources);
 
+  /// 设置页「磁力搜索源」实际渲染/可操作的内置+自定义源。
+  /// 实测死源不删数据，只是不出现在列表里。
+  List<MagnetSourceConfig> get visibleMagnetSources => List.unmodifiable(
+        _magnetSources
+            .where(
+              (c) =>
+                  !c.isBuiltin ||
+                  !kUnreachableBuiltinMagnetSources.contains(c.id),
+            )
+            .toList(),
+      );
+
   int get enabledMagnetSourceCount =>
-      _magnetSources.where((c) => c.enabled).length;
+      visibleMagnetSources.where((c) => c.enabled).length;
+
+  /// 本次启动自动关掉了几个曾经启用的死源（>0 时 UI 给一次提示）。
+  int _deadSourcesAutoDisabled = 0;
+
+  int get deadSourcesAutoDisabled => _deadSourcesAutoDisabled;
+
+  void acknowledgeDeadSourcesNotice() {
+    if (_deadSourcesAutoDisabled == 0) return;
+    _deadSourcesAutoDisabled = 0;
+    notifyListeners();
+  }
+
+  /// 老版本用户可能手动开过死源：升级后自动关掉，避免每次聚合搜索白等超时。
+  Future<void> _migrateUnreachableMagnetSources() async {
+    var changed = false;
+    for (var i = 0; i < _magnetSources.length; i++) {
+      final c = _magnetSources[i];
+      if (c.isBuiltin &&
+          kUnreachableBuiltinMagnetSources.contains(c.id) &&
+          c.enabled) {
+        _magnetSources[i] = c.copyWith(enabled: false);
+        _deadSourcesAutoDisabled++;
+        changed = true;
+      }
+    }
+    if (changed) await _persistMagnetSources();
+  }
 
   void _loadMagnetSources() {
     final raw = _storage.getSetting(AppConstants.keyMagnetSources);
@@ -227,20 +407,58 @@ class SettingsProvider extends ChangeNotifier {
 
   /// 初始化
   Future<void> init() async {
-    _defaultSpeed = _storage.getDoubleSetting(
-      AppConstants.keyDefaultSpeed,
-      defaultValue: 1.0,
-    );
+    // 物理内存决定「自动」缓冲挡位的天花板（安装后首次启动就能定档），
+    // 可用内存用来在播放中每 10 分钟做一次升降档评估。
+    // 通道调用很快，但桌面/Web 没有实现，加超时兜底，
+    // 探测失败按 BufferTier.fallbackBytes 处理。
+    try {
+      final mem = await DeviceMemoryProbe.readTotalMemoryBytes()
+          .timeout(const Duration(milliseconds: 800), onTimeout: () => 0);
+      if (mem > 0) {
+        _deviceTotalMemoryBytes = mem;
+        _autoBufferBytes = BufferTier.autoBytesFor(mem);
+      }
+      final avail = await DeviceMemoryProbe.readAvailableMemoryBytes()
+          .timeout(const Duration(milliseconds: 800), onTimeout: () => 0);
+      if (avail > 0) _availableMemoryBytes = avail;
+      if (mem > 0 || avail > 0) {
+        const mb = 1024 * 1024;
+        DebugLog.log(
+          'Play',
+          '设备内存 total=${mem ~/ mb}MB 可用=${avail ~/ mb}MB → '
+              '自动缓冲天花板 ${BufferTier.autoBytesFor(mem) ~/ mb}MB',
+          flush: true,
+        );
+      }
+    } catch (_) {
+      // 忽略：自动挡位会退回保守值
+    }
     _defaultQuality =
         _storage.getSetting(AppConstants.keyDefaultQuality) ?? '自动';
-    _hardwareDecode = _storage.getBoolSetting(
-      AppConstants.keyHardwareDecode,
-      // 默认开启硬件解码：硬解省电且流畅。个别机型硬解会卡死/闪退，
-      // 届时请在下方手动选档（App 不做运行时探测，也不自动降档）。
-      defaultValue: true,
+    // HLS master playlist 的变体选择读的是静态值，启动时就要同步。
+    M3u8PlaylistResolver.preferredQuality = _defaultQuality;
+    // 旧版有「硬件解码」布尔总开关 + 「硬解档位」两套控件，语义冲突。
+    // 启动时合并成一个档位键：旧开关=false 等价于「关闭（软件解码）」，
+    // 迁移完立刻清掉旧键，保证老用户的软解行为不变。
+    final legacyHwRaw = _storage.getSetting(AppConstants.keyHardwareDecode);
+    final legacyHw = legacyHwRaw == null
+        ? null
+        : legacyHwRaw.toLowerCase() == 'true';
+    final hwMigration = resolveHwDecodeMigration(
+      legacyHardwareDecode: legacyHw,
+      savedModeKey: _storage.getSetting(AppConstants.keyHwDecodeMode) ?? '',
     );
-    _hwDecodeModeKey =
-        _storage.getSetting(AppConstants.keyHwDecodeMode) ?? '';
+    _hardwareDecode = legacyHw ?? true;
+    _hwDecodeModeKey = hwMigration.modeKey;
+    if (hwMigration.modeKey.isNotEmpty) {
+      await _storage.saveSetting(
+        AppConstants.keyHwDecodeMode,
+        hwMigration.modeKey,
+      );
+    }
+    if (hwMigration.clearLegacyKey) {
+      await _storage.deleteSetting(AppConstants.keyHardwareDecode);
+    }
     _videoOutputModeKey =
         _storage.getSetting(AppConstants.keyVideoOutputMode) ?? '';
     _autoPlayNext = _storage.getBoolSetting(
@@ -257,6 +475,19 @@ class SettingsProvider extends ChangeNotifier {
     );
     _playbackStrategy =
         _storage.getSetting(AppConstants.keyPlaybackStrategy) ?? 'balanced';
+    // 拖动精度独立成项后，从旧三档里还原用户原本实际吃到的 hr-seek，
+    // 避免升级后突然从「快速」变「精确」（或反过来）。
+    final savedHrSeek = _storage.getSetting(AppConstants.keyHrSeekMode);
+    if (savedHrSeek != null) {
+      _hrSeekMode = savedHrSeek == 'yes' || savedHrSeek == 'no'
+          ? savedHrSeek
+          : '';
+    } else {
+      _hrSeekMode = _playbackStrategy == 'smooth'
+          ? 'no'
+          : (_playbackStrategy == 'quality' ? 'yes' : '');
+      await _storage.saveSetting(AppConstants.keyHrSeekMode, _hrSeekMode);
+    }
     _preloadNextEpisode = _storage.getBoolSetting(
       AppConstants.keyPreloadNextEpisode,
       defaultValue: true,
@@ -268,8 +499,14 @@ class SettingsProvider extends ChangeNotifier {
     );
     // 推送到解析器静态开关：本地代理与缓存下载共用同一条过滤链路。
     M3u8PlaylistResolver.adFilterEnabled = _hlsAdFilter;
-    _opensubtitlesApiKey =
-        _storage.getSetting(AppConstants.keyOpensubtitlesApiKey) ?? '';
+    _backgroundPlayback = _storage.getBoolSetting(
+      AppConstants.keyBackgroundPlayback,
+      defaultValue: true,
+    );
+    final savedTier =
+        _storage.getSetting(AppConstants.keyBufferTier) ?? BufferTier.autoKey;
+    _bufferTier =
+        BufferTier.allKeys.contains(savedTier) ? savedTier : BufferTier.autoKey;
     _tmdbApiKey = _storage.getSetting(AppConstants.keyTmdbApiKey) ?? '';
 
     // 初始化同步服务
@@ -279,47 +516,46 @@ class SettingsProvider extends ChangeNotifier {
     _lastSyncTime = _syncService.lastSyncTime;
 
     _loadMagnetSources();
+    await _migrateUnreachableMagnetSources();
 
-    notifyListeners();
-  }
-
-  /// 设置默认播放速度
-  Future<void> setDefaultSpeed(double speed) async {
-    _defaultSpeed = speed;
-    await _storage.saveDoubleSetting(AppConstants.keyDefaultSpeed, speed);
     notifyListeners();
   }
 
   /// 设置默认清晰度
   Future<void> setDefaultQuality(String quality) async {
     _defaultQuality = quality;
+    // 立即生效：下一次 open 媒体时按新档位挑变体。
+    M3u8PlaylistResolver.preferredQuality = quality;
     await _storage.saveSetting(AppConstants.keyDefaultQuality, quality);
     notifyListeners();
   }
 
-  /// 设置硬件解码
+  /// 兼容旧调用：现在只改档位，不再单独维护布尔总开关。
   Future<void> setHardwareDecode(bool value) async {
-    _hardwareDecode = value;
-    await _storage.saveBoolSetting(AppConstants.keyHardwareDecode, value);
-    notifyListeners();
+    await setHwDecodeMode(
+      value
+          ? defaultHwDecodeMode(detectHwDecodePlatform())
+          : HwDecodeMode.disabled,
+    );
   }
 
-  /// 设置硬件解码档位。
-  ///
-  /// [HwDecodeMode.disabled] 等价于关闭总开关（两处状态保持一致）。
+  /// 设置硬件解码档位（唯一的硬解真相）。
   Future<void> setHwDecodeMode(HwDecodeMode mode) async {
     _hwDecodeModeKey = encodeHwDecodeMode(mode);
-    if (mode == HwDecodeMode.disabled) {
-      _hardwareDecode = false;
-      await _storage.saveBoolSetting(AppConstants.keyHardwareDecode, false);
-    } else {
-      _hardwareDecode = true;
-      await _storage.saveBoolSetting(AppConstants.keyHardwareDecode, true);
-    }
+    _hardwareDecode = mode != HwDecodeMode.disabled;
     await _storage.saveSetting(
       AppConstants.keyHwDecodeMode,
       _hwDecodeModeKey,
     );
+    notifyListeners();
+  }
+
+  /// 设置拖动精度（mpv hr-seek）。
+  Future<void> setHrSeekMode(String mode) async {
+    final normalized = mode == 'yes' || mode == 'no' ? mode : '';
+    if (_hrSeekMode == normalized) return;
+    _hrSeekMode = normalized;
+    await _storage.saveSetting(AppConstants.keyHrSeekMode, normalized);
     notifyListeners();
   }
 
@@ -353,7 +589,10 @@ class SettingsProvider extends ChangeNotifier {
 
   Future<void> setPreloadNextEpisode(bool value) async {
     _preloadNextEpisode = value;
+    _playbackPrefetch = value;
+    // 两个旧键一起写，保证旧备份/云同步读到的语义与界面上的单一开关一致。
     await _storage.saveBoolSetting(AppConstants.keyPreloadNextEpisode, value);
+    await _storage.saveBoolSetting(AppConstants.keyPlaybackPrefetch, value);
     notifyListeners();
   }
 
@@ -374,6 +613,36 @@ class SettingsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 设置后台播放开关。
+  ///
+  /// 只影响「切到后台」的行为：开 → 继续播（需要前台服务保活）；
+  /// 关 → 进入后台立即暂停，回到前台自动恢复。
+  Future<void> setBackgroundPlayback(bool value) async {
+    if (_backgroundPlayback == value) return;
+    _backgroundPlayback = value;
+    await _storage.saveBoolSetting(AppConstants.keyBackgroundPlayback, value);
+    notifyListeners();
+  }
+
+  /// 设置缓冲挡位（[BufferTier.autoKey] 或 '128'/'192'/'256'/'384'/'512'）。
+  ///
+  /// 自动挡会按物理内存重算天花板，并立刻按当前可用内存校一次；
+  /// 播放中改挡位由详情页监听 provider 变化后热设 mpv 属性（字节+秒数一起变）。
+  Future<void> setBufferTier(String tier) async {
+    final normalized =
+        BufferTier.allKeys.contains(tier) ? tier : BufferTier.autoKey;
+    if (_bufferTier == normalized) return;
+    _bufferTier = normalized;
+    if (normalized == BufferTier.autoKey) {
+      _autoBufferBytes = BufferTier.autoBytesFor(_deviceTotalMemoryBytes);
+    }
+    await _storage.saveSetting(AppConstants.keyBufferTier, normalized);
+    notifyListeners();
+    if (normalized == BufferTier.autoKey) {
+      await evaluateBufferAutoTier();
+    }
+  }
+
   bool _loadPlaybackPrefetchSetting() {
     if (_storage.getSetting(AppConstants.keyPlaybackPrefetch) != null) {
       return _storage.getBoolSetting(
@@ -392,17 +661,6 @@ class SettingsProvider extends ChangeNotifier {
     _onlyWifiCache = value;
     await _storage.saveBoolSetting(AppConstants.keyOnlyWifiCache, value);
     await CacheService().setOnlyWifi(value);
-    notifyListeners();
-  }
-
-  /// OpenSubtitles API Key（留空则关闭在线字幕搜索）
-  Future<void> setOpensubtitlesApiKey(String value) async {
-    _opensubtitlesApiKey = value.trim();
-    await _storage.saveSetting(
-      AppConstants.keyOpensubtitlesApiKey,
-      _opensubtitlesApiKey,
-    );
-    SubtitleService().invalidateAuth();
     notifyListeners();
   }
 

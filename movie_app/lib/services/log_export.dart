@@ -1,10 +1,10 @@
 import 'dart:io';
 
 import 'package:archive/archive.dart';
-import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'debug_log.dart';
+import 'download_export.dart';
 
 /// 诊断日志导出 / 清空。
 ///
@@ -18,8 +18,6 @@ import 'debug_log.dart';
 /// - 清空：删除目录下除「当前正在写入的日志」以外的所有文件（应用对自身私有目录
 ///   有删除权，用户无权限的问题在这里绕开）。
 abstract final class LogExport {
-  static const MethodChannel _channel = MethodChannel('guanzi/logExport');
-
   static String _timeStamp() {
     final d = DateTime.now();
     String p(int n) => n < 10 ? '0$n' : '$n';
@@ -52,13 +50,13 @@ abstract final class LogExport {
     if (zipBytes.isEmpty) throw Exception('打包失败');
     final zipFile = File(zipPath)..writeAsBytesSync(zipBytes);
 
-    // 2) 交给原生写入系统下载目录，结束后删除临时 zip
+    // 2) 落到用户可见的下载目录：Android 走 MediaStore 通道，桌面端直接写文件。
     try {
-      final dest = await _channel.invokeMethod<String>('export', {
-        'path': zipPath,
-        'name': zipName,
-      });
-      return dest ?? zipName;
+      return await DownloadExport.write(
+        sourcePath: zipPath,
+        name: zipName,
+        mimeType: 'application/zip',
+      );
     } finally {
       try {
         if (zipFile.existsSync()) zipFile.deleteSync();
