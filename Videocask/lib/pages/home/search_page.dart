@@ -1315,8 +1315,13 @@ class _SearchPageState extends State<SearchPage> {
                   ),
                 if (!_isMagnetSearching && _magnetSearchError.isNotEmpty)
                   _buildMagnetErrorHint(theme),
-                ..._magnetResults
-                    .map((t) => _buildMagnetSearchTile(theme, l10n, t)),
+                for (var i = 0; i < _magnetResults.length; i++)
+                  _buildMagnetSearchTile(
+                    theme,
+                    l10n,
+                    _magnetResults[i],
+                    order: i,
+                  ),
               ],
             ],
           ),
@@ -1495,8 +1500,13 @@ class _SearchPageState extends State<SearchPage> {
                       ),
                     if (!_isMagnetSearching && _magnetSearchError.isNotEmpty)
                       _buildMagnetErrorHint(theme),
-                    ..._magnetResults
-                        .map((t) => _buildMagnetSearchTile(theme, l10n, t)),
+                    for (var i = 0; i < _magnetResults.length; i++)
+                      _buildMagnetSearchTile(
+                        theme,
+                        l10n,
+                        _magnetResults[i],
+                        order: i,
+                      ),
                   ],
                 ],
               ),
@@ -1601,8 +1611,9 @@ class _SearchPageState extends State<SearchPage> {
   Widget _buildMagnetSearchTile(
     ThemeData theme,
     AppLocalizations l10n,
-    TorrentInfo t,
-  ) {
+    TorrentInfo t, {
+    int order = 0,
+  }) {
     final lines = splitTorrentDisplayTitle(t.name);
     final hint = _magnetDisplayTitleHint();
     // 中文名（2026-10-25）：磁力源给的资源名几乎全是英文发布名，
@@ -1727,7 +1738,22 @@ class _SearchPageState extends State<SearchPage> {
                     Icons.movie_outlined,
                     'IMDb ${t.imdbId}',
                   ),
-                MagnetSubtitleBadge(title: t.name, compact: true),
+                // 音轨语言先于字幕结论：用户是先看「说的什么语言」，
+                // 再看「有没有中文字幕」来决定点不点进来。
+                MagnetAudioLanguageBadge(
+                  title: t.name,
+                  compact: true,
+                ),
+                MagnetSubtitleBadge(
+                  title: t.name,
+                  magnetUri: t.magnetUri,
+                  imdbId: t.imdbId,
+                  probeOrder: order,
+                  // 🔴 搜索结果必须自动出结论：用户看的就是这一行徽标，
+                  // 「点此检测」等于让他先做一次额外操作才知道值不值得点进来。
+                  autoProbe: true,
+                  compact: true,
+                ),
               ],
             ),
             const SizedBox(height: 10),

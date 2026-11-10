@@ -165,6 +165,24 @@ class StremioFreeSubtitleProvider implements SubtitleSearchProvider {
   }
 }
 
+/// 内容级中文校验：只看正文里的 CJK 表意文字，不信数据源的 `lang`。
+///
+/// 2026-11-08 真机《流浪地球2》：在线源把一条克罗地亚语字幕
+///（`vaš digitalni...`）标成中文返回，`classifyChineseVariant` 依据 metadata
+/// 判为简中并成功挂载，用户看到的是一行外文字。metadata 会错，正文不会。
+/// 出现 8 个汉字即认定中文，足以过滤纯拉丁/西里尔字幕，也不会误杀
+/// 样式行占比很高的 ASS。
+bool subtitleTextHasChinese(String text) {
+  var hits = 0;
+  for (final r in text.runes) {
+    if (r >= 0x3400 && r <= 0x9FFF) {
+      hits++;
+      if (hits >= 8) return true;
+    }
+  }
+  return false;
+}
+
 /// 在线字幕编排：多源聚合去重、简体优先、失败可见但不弹窗。
 class SubtitleService {
   SubtitleService._();
@@ -259,6 +277,13 @@ class SubtitleService {
 
       if (decoded.isText) {
         var text = decoded.text!;
+        // metadata 标错时正文是外语（真机实测克罗地亚语字幕被标成简中），
+        // 这里按内容兜底：非中文直接丢弃，由调用方继续试下一个候选，
+        // 绝不把外文字幕挂给用户。
+        if (!subtitleTextHasChinese(text)) {
+          _recordError('在线字幕内容不含中文，已跳过：${info.fileName}');
+          return null;
+        }
         final variant = classifyChineseVariant(
           lang: info.language,
           fileName: info.fileName,

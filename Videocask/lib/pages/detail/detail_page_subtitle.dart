@@ -30,7 +30,13 @@ extension _DetailPageSubtitleExt on _DetailPageState {
     final u = playUrl.toLowerCase();
     if (u.startsWith('magnet:')) return true;
     if (u.contains('magnet')) return true;
-    return false;
+    // 在线线路同样需要自动字幕：原先这里 `return false`，把全部非磁力片源
+    // 挡在自动匹配之外，真机实测（2026-11-08 在线线路《流浪地球》）一条
+    // `[Subtitle]` 日志都没有，用户看到的就是「在线看完全没字幕」。
+    // 放行是安全的：① 内封中文轨仍由 _applyEmbeddedChineseSubtitle 优先；
+    // ② 种子内字幕层有 `lastMagnetUri.isEmpty → false` 的 guard，不会
+    //    给在线源误建磁力任务；③ 在线源失败走静默降级，不弹窗不阻塞。
+    return true;
   }
 
   /// 组装字幕查询参数：优先用种子内视频文件名（release 名）。
@@ -43,6 +49,17 @@ extension _DetailPageSubtitleExt on _DetailPageState {
     int? episode,
   }) _subtitleQueryOf(Movie movie) {
     final release = _playerModule.currentMagnetFileName.trim();
+    // 🔴 磁力详情页偶尔把 btih 哈希塞进 Movie.name（真机 2026-11-08
+    // `原始=9a384d...` → IMDb tt0230911 → 在线源无中文字幕）。这时优先用
+    // 种子内 release 名，再退到影片别名，绝不拿哈希当片名去查。
+    final rawTitle = movie.name.trim();
+    final nameIsOpaqueId = RegExp(r'^[0-9a-fA-F]{24,}$')
+        .hasMatch(rawTitle.replaceAll(RegExp(r'[\s.\-_:/\[\]]+'), ''));
+    final title = nameIsOpaqueId
+        ? (release.isNotEmpty
+            ? release
+            : (movie.alias.trim().isNotEmpty ? movie.alias.trim() : rawTitle))
+        : rawTitle;
     final year = int.tryParse(movie.year.trim());
     // 片名/别名/简介/种子文件名里带 tt-id 时直接用；否则由调用方走免费的
     // IMDb 联想接口按片名+年份解析（2026-11-06 实测无 Key 可用）。
@@ -57,7 +74,7 @@ extension _DetailPageSubtitleExt on _DetailPageState {
       '${movie.name} ${movie.alias}',
     );
     return (
-      title: movie.name.trim(),
+      title: title,
       releaseName: release.isEmpty ? null : release,
       imdbId: imdbId,
       year: year,
@@ -66,20 +83,86 @@ extension _DetailPageSubtitleExt on _DetailPageState {
     );
   }
 
-  /// 自动匹配与手动浏览共用的 IMDb 解析：先用文本里的 tt-id，否则走
-  /// 免费的 IMDb 联想接口。失败返回 null，调用方按「未找到」处理。
+  /// 自动匹配与手动浏览共用的 IMDb 解析。
+  ///
+  /// 磁力详情页的 `Movie.name` 常是整串 release 名，例如
+  /// `[DBD-Raws][流浪地球/The.Wandering.Earth.][1080P][BDRip][简体内封][MKV]`。
+  /// 之前把它原封不动丢给 IMDb 联想，命中率为 0（真机日志
+  /// 「片名未能解析到 IMDb」）。这里先剥出干净的中英文片名，再按
+  /// 「英文直查 IMDb 联想 → 中文多源解析 → 英文多源解析 → 原始串」逐路尝试。
   Future<String?> _resolveSubtitleImdbId(Movie movie) async {
     final q = _subtitleQueryOf(movie);
     if (q.imdbId != null && q.imdbId!.isNotEmpty) return q.imdbId;
-    try {
-      return await ImdbLookupService.instance.resolveForVideoTitle(
-        q.title,
-        year: movie.year.trim().isEmpty ? null : movie.year.trim(),
-        alias: movie.alias.trim().isEmpty ? null : movie.alias.trim(),
+
+    final t = extractSubtitleTitleQuery(
+      primary: q.title,
+      releaseName: q.releaseName ?? '',
+    );
+    final fallbackYear =
+        movie.year.trim().isEmpty ? null : movie.year.trim();
+    final year = t.year ?? fallbackYear;
+    final aliasFromMovie =
+        movie.alias.trim().isEmpty ? null : movie.alias.trim();
+
+    DebugLog.log(
+      'Subtitle',
+      '自动匹配: 片名清洗 中文=${t.local} 英文=${t.english} '
+      '年份=${year ?? '-'} 原始=${q.title}',
+    );
+
+    final lookups = <Future<String?> Function()>[];
+    // ① 英文片名直查 IMDb 联想：一次请求、最快，流浪地球这类中外合拍片命中率高。
+    if (t.english.isNotEmpty) {
+      lookups.add(
+        () => ImdbLookupService.instance.resolveForVideoTitle(
+          t.english,
+          year: year,
+          alias: t.local.isNotEmpty ? t.local : aliasFromMovie,
+        ),
       );
-    } catch (_) {
-      return null;
     }
+    // ② 中文片名走多源（豆瓣英文名 / TMDB / IMDb 联想）。
+    if (t.local.isNotEmpty) {
+      lookups.add(() async {
+        final r = await VideoTitleResolveService.instance.resolve(
+          t.local,
+          year: year,
+          alias: t.english.isNotEmpty ? t.english : aliasFromMovie,
+        );
+        return r?.imdbId;
+      });
+    }
+    // ③ 英文片名走多源（豆瓣那条会跳过，但 CMS 别名兜底仍能补英文名）。
+    if (t.english.isNotEmpty) {
+      lookups.add(() async {
+        final r = await VideoTitleResolveService.instance.resolve(
+          t.english,
+          year: year,
+          alias: t.local.isNotEmpty ? t.local : aliasFromMovie,
+        );
+        return r?.imdbId;
+      });
+    }
+    // ④ 原始片名兜底，保证老路径不被破坏。
+    lookups.add(() async {
+      final r = await VideoTitleResolveService.instance.resolve(
+        q.title,
+        year: fallbackYear,
+        alias: aliasFromMovie,
+      );
+      return r?.imdbId;
+    });
+
+    for (var i = 0; i < lookups.length; i++) {
+      try {
+        final id = await lookups[i]();
+        DebugLog.log('Subtitle', '自动匹配: IMDb 第${i + 1}路 -> ${id ?? 'null'}');
+        if (id != null && id.isNotEmpty) return id;
+      } catch (e) {
+        DebugLog.log('Subtitle', '自动匹配: IMDb 第${i + 1}路异常 $e');
+      }
+    }
+    return null;
   }
 
   /// 「能直接拿到就直接用」：先读片源内封中文轨（零原生改动、简体优先），
@@ -167,94 +250,196 @@ extension _DetailPageSubtitleExt on _DetailPageState {
   }
 
   /// 读 mpv `track-list`，挑一条简体优先的中文字幕轨并选中。
-  /// 返回 false 表示没有可用中文轨，调用方继续走在线层。
+  ///
+  /// 真机结论（2026-11-08，device_debug5）：`setSubtitleTrack(auto)` 与
+  /// 一次性裸写 `sid=1` 都回读 `sid=no` / `current-tracks/sub` 空。
+  /// mpv 的 track id 是**按轨道类型各自从 1 开始编号**（track-list 里
+  /// video id=1、audio id=1 同时存在）；磁力流大 seek 后 demuxer 会重建
+  /// 轨道表，4 秒前读到的 id 可能已经失效，mpv 收到不存在的 id 就静默
+  /// 回落 `sid=no`，而 media_kit 的 `setProperty` 丢掉了错误码。
+  /// 所以这里：每轮重读 track-list 拿最新 id → 用精确 id 构造
+  /// `SubtitleTrack`（同步 media_kit 状态且不经过会回落的 `auto()`）→
+  /// 属性与命令双通道下发 → 最后一轮用 `cycle sub` 强制切轨 → 回读确认。
+  /// 4 轮都不中就返回 false，让种子内 / 在线简中降级链路接上。
   Future<bool> _applyEmbeddedChineseSubtitle() async {
     final player = _playerModule.playerService.player;
     if (player == null) return false;
-    String? raw;
+
+    // 完整轨道摘要逐条落盘（DebugLog 单条会被截断，必须拆行）。
+    Future<List<SubtitleTrackInfo>> readChineseTracks() async {
+      final raw = await getMpvProperty(player, 'track-list');
+      for (final line in describeMpvTracks(raw)) {
+        DebugLog.log('Subtitle', 'track-list: $line');
+      }
+      final tracks = parseMpvSubtitleTracks(raw);
+      final chinese = tracks.where(isChineseSubtitle).toList();
+      if (chinese.isEmpty) return <SubtitleTrackInfo>[];
+      // 优先片源内封轨，避免把之前挂过、带 zh 标签的外挂轨当成内封。
+      final embedded = chinese.where((t) => !t.isExternal).toList();
+      return sortChineseTracksSimplifiedFirst(
+        embedded.isNotEmpty ? embedded : chinese,
+      );
+    }
+
+    List<SubtitleTrackInfo> sorted;
     try {
-      raw = await getMpvProperty(player, 'track-list');
+      sorted = await readChineseTracks();
     } catch (e) {
       debugPrint('字幕自动匹配: 读取 track-list 失败: $e');
       return false;
     }
-    final tracks = parseMpvSubtitleTracks(raw);
-    final chinese = tracks.where(isChineseSubtitle).toList();
-    if (chinese.isEmpty) return false;
-
-    final sorted = sortChineseTracksSimplifiedFirst(chinese);
-    final pick = sorted.first;
+    if (sorted.isEmpty) {
+      DebugLog.log('Subtitle', '内封轨: track-list 无中文 sub 轨，转降级链路');
+      return false;
+    }
     DebugLog.log(
       'Subtitle',
       '内封轨候选: '
       '${sorted.map((t) => 'id=${t.id}/lang=${t.lang}/title=${t.title}').join(' | ')}',
     );
-    // 语言偏好先下发：即使显式 sid 因 track id 语义不同而被 mpv 拒绝，
-    // `sid=auto` 也能按 slang 顺序挑到中文轨。
+
+    // 语言偏好与可见性在加载期已由 PlayerService 设过，这里再补一次，
+    // 覆盖轨道重建后属性被重置的情况。
     try {
       await setMpvProperty(player, 'slang', 'chi,zho,zh,chs,cht,zh-Hans');
-    } catch (e) {
-      debugPrint('字幕自动匹配: 设置 slang 失败: $e');
-    }
+    } catch (_) {}
+    // 🔴 可见性必须跟着 showSubtitles 走，不能无条件写 yes。
+    // 单一渲染源改为 mpv 之后，这里的裸 yes 会把「用户关掉的字幕」重新打开；
+    // 而浮层兜底模式也需要 yes —— mpv 画不出，但要继续吐 sub-text 供浮层显示。
+    // 分支语义见 services/subtitle_render_policy.dart。
     try {
-      await setMpvProperty(player, 'sid', '${pick.id}');
-      // 属性通道在部分 libmpv 构建上对 sid 不生效（实测设 1 后读回 no），
-      // 再走命令通道 `set sid` 与 `sub-select` 兜底。
-      await runMpvCommand(player, ['set', 'sid', '${pick.id}']);
-      await runMpvCommand(player, ['sub-select', '${pick.id}']);
-    } catch (e) {
-      debugPrint('字幕自动匹配: 设置 sid 失败: $e');
-      return false;
-    }
-    // 立即回读：区分「sid 设置被 mpv 拒绝」与「设置成功后又被别处覆盖」。
-    try {
-      final applied = await getMpvProperty(player, 'sid');
-      DebugLog.log('Subtitle', '内封轨设置后立即回读: sid=$applied（期望 ${pick.id}）');
-      if (applied == null || applied == 'no') {
-        // track-list 的 id 在部分 libmpv 构建上按类型独立编号（video/audio/sub
-        // 都可能是 1），`sid=<id>` 会被拒。这里暴力探测 1..N，以
-        // `current-tracks/sub` 是否真的挂上作为判据，成功后立即生效。
-        final limit = tracks.length + 8;
-        for (var id = 1; id <= limit; id++) {
-          await setMpvProperty(player, 'sid', '$id');
-          final cur = await getMpvProperty(player, 'current-tracks/sub');
-          final ok = cur != null && cur.trim().isNotEmpty && cur.trim() != '{}';
-          DebugLog.log('Subtitle', '内封轨探测 sid=$id → ${ok ? "命中" : "空"}');
-          if (ok) break;
-        }
-        final retried = await getMpvProperty(player, 'sid');
-        DebugLog.log('Subtitle', '内封轨探测结束: sid=${retried ?? '-'}');
+      await setMpvProperty(
+        player,
+        'sub-visibility',
+        subtitleVisibilityValue(showSubtitles: _playerModule.showSubtitles),
+      );
+    } catch (_) {}
+
+    for (var attempt = 1; attempt <= 4; attempt++) {
+      if (!mounted) return false;
+      if (attempt > 1) {
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        try {
+          final refreshed = await readChineseTracks();
+          if (refreshed.isNotEmpty) sorted = refreshed;
+        } catch (_) {}
       }
-    } catch (e) {
-      DebugLog.log('Subtitle', '内封轨立即回读失败: $e');
+      final pick = sorted.first;
+      final id = '${pick.id}';
+
+      // 精确 id 构造：setSubtitleTrack 的非外挂分支写 sid 且同步
+      // Player.state.track.subtitle，不会像 auto() 那样按 slang 回落到 no。
+      try {
+        await player.setSubtitleTrack(
+          SubtitleTrack(id, pick.title, pick.lang),
+        );
+      } catch (e) {
+        DebugLog.log('Subtitle', '内封轨第$attempt 轮 setSubtitleTrack 异常 $e');
+      }
+      // 属性通道与命令通道都发：media_kit 两条路径实现不同，互为兜底。
+      try {
+        await setMpvProperty(player, 'sid', id);
+      } catch (_) {}
+      try {
+        await runMpvCommand(player, ['set', 'sid', id]);
+      } catch (_) {}
+      if (attempt == 4) {
+        // 最后一轮：从 no 强制切到下一条字幕轨，绕开 sid 数字解析。
+        try {
+          await runMpvCommand(player, ['cycle', 'sub']);
+        } catch (_) {}
+      }
+
+      await Future<void>.delayed(const Duration(milliseconds: 320));
+      String? sid;
+      String? cur;
+      try {
+        sid = await getMpvProperty(player, 'sid');
+        cur = await getMpvProperty(player, 'current-tracks/sub');
+      } catch (_) {}
+      final lang = _langOfCurrentSub(cur);
+      final currentIsChinese = lang != null &&
+          classifySubtitleLanguage(lang) == SubtitleLanguage.chinese;
+      final selected =
+          (sid != null && sid.trim() == id) || currentIsChinese;
+      DebugLog.log(
+        'Subtitle',
+        '内封轨选轨第$attempt 轮: 期望sid=$id 实际sid=${sid ?? '?'} '
+        'current-lang=${lang ?? '-'} ${selected ? '(选中)' : '(未选中)'}',
+      );
+      if (!selected) continue;
+
+      if (!mounted) return true;
+      final variant =
+          classifyChineseVariant(lang: pick.lang, title: pick.title);
+      final variantLabel =
+          variant == ChineseVariant.traditional ? '繁体' : '简体';
+      _setState(() {
+        _playerModule.showSubtitles = true;
+        _playerModule.subtitleFileName =
+            pick.title?.trim().isNotEmpty == true ? pick.title! : '内封中文字幕';
+      });
+      debugPrint(
+        '字幕自动匹配: 已挂内封中文轨 sid=${pick.id} '
+        'lang=${pick.lang ?? '-'} $variantLabel',
+      );
+      unawaited(_dumpEmbeddedSubtitleState(pick.id));
+      unawaited(
+        _inspectSubtitleTiming(label: '内封轨', subtitleName: pick.title),
+      );
+      return true;
     }
-    if (!mounted) return true;
-    final variant = classifyChineseVariant(lang: pick.lang, title: pick.title);
-    final variantLabel =
-        variant == ChineseVariant.traditional ? '繁体' : '简体';
-    _setState(() {
-      _playerModule.showSubtitles = true;
-      _playerModule.subtitleFileName =
-          pick.title?.trim().isNotEmpty == true ? pick.title! : '内封中文字幕';
-    });
-    debugPrint(
-      '字幕自动匹配: 已挂内封中文轨 sid=${pick.id} '
-      'lang=${pick.lang ?? '-'} $variantLabel',
-    );
-    // 诊断：回读 mpv 真实生效的字幕状态。用于区分「轨没选中」与
-    // 「选中了但没渲染（libass/hwdec/可见性）」——后者画面无字幕但状态正常。
-    unawaited(_dumpEmbeddedSubtitleState(pick.id));
-    // 内封轨没有独立文件，只做帧率归一与可选的 sub-speed 纠偏。
-    unawaited(
-      _inspectSubtitleTiming(
-        label: '内封轨',
-        subtitleName: pick.title,
-      ),
-    );
-    return true;
+
+    DebugLog.log('Subtitle', '内封轨: 4 轮均未选中，转降级链路');
+    return false;
+  }
+
+  /// 从 mpv `current-tracks/sub` 的 JSON 里取出语言码，取不到返回 null。
+  /// 这里不依赖 dart:convert（本 part 未引入），用轻量正则解析。
+  String? _langOfCurrentSub(String? raw) {
+    if (raw == null || raw.trim().isEmpty || raw.trim() == '{}') return null;
+    final m = RegExp(r'"lang"\s*:\s*"([^"]*)"').firstMatch(raw);
+    return m?.group(1);
   }
 
   /// 免费在线源：片名/文本里的 IMDb 优先，否则用免费的 IMDb 联想接口解析。
+  /// 在线字幕挂载后的状态回读。
+  ///
+  /// `setExternalSubtitleFromFile` 走 media_kit 的 `sub-add <file> select`，
+  /// 它丢掉了 mpv 返回码，「没抛异常」不等于「字幕真的解析出文本」。
+  /// 这里按 2s / 7s / 12s / 17s / 22s / 27s 采样 `sub-text`，覆盖用户
+  /// 在挂载后拖进度条到有字幕 cue 的位置的场景，是字幕是否出画的硬证据。
+  Future<void> _dumpOnlineSubtitleState() async {
+    final player = _playerModule.playerService.player;
+    if (player == null) return;
+    for (var i = 0; i < 6; i++) {
+      await Future<void>.delayed(
+        Duration(seconds: i == 0 ? 2 : 5),
+      );
+      if (!mounted) return;
+      try {
+        final sid = await getMpvProperty(player, 'sid');
+        final subText = await getMpvProperty(player, 'sub-text') ?? '';
+        final visibility = await getMpvProperty(player, 'sub-visibility');
+        final subAss = await getMpvProperty(player, 'sub-ass');
+        final subs = describeMpvTracks(
+          await getMpvProperty(player, 'track-list'),
+        ).where((l) => l.contains('type=sub')).toList();
+        final head = subText.length > 80
+            ? '${subText.substring(0, 80)}…'
+            : subText;
+        DebugLog.log(
+          'Subtitle',
+          '在线字幕回读#${i + 1}: sid=${sid ?? '?'} '
+          'visibility=${visibility ?? '?'} sub-ass=${subAss ?? '?'} '
+          'sub-text=[$head] sub轨=${subs.join(' | ')}',
+        );
+      } catch (e) {
+        DebugLog.log('Subtitle', '在线字幕回读#${i + 1}失败: $e');
+      }
+    }
+  }
+
   Future<void> _applyFreeOnlineChineseSubtitle(Movie movie) async {
     final q = _subtitleQueryOf(movie);
     final imdbId = await _resolveSubtitleImdbId(movie);
@@ -276,20 +461,35 @@ extension _DetailPageSubtitleExt on _DetailPageState {
       );
       return;
     }
-    final path = await svc.downloadFreeSubtitle(list.first);
-    if (!mounted || path == null) return;
+    // 逐个试候选：lang 标错 / 正文是外语的会被 downloadFreeSubtitle 丢弃，
+    // 继续找下一条真正含中文的，而不是只试 list.first 就放弃。
+    String? path;
+    var pickedIndex = -1;
+    for (var i = 0; i < list.length && i < 6; i++) {
+      path = await svc.downloadFreeSubtitle(list[i]);
+      if (path != null) {
+        pickedIndex = i;
+        break;
+      }
+    }
+    if (!mounted || path == null || pickedIndex < 0) {
+      DebugLog.log('Subtitle', '自动匹配: 候选均非中文内容，未挂载字幕');
+      return;
+    }
+    final picked = list[pickedIndex];
     await _playerModule.playerService.setExternalSubtitleFromFile(path);
     if (!mounted) return;
     _setState(() {
       _playerModule.showSubtitles = true;
-      _playerModule.subtitleFileName = list.first.fileName;
+      _playerModule.subtitleFileName = picked.fileName;
     });
-    debugPrint('字幕自动匹配: 已挂在线简中字幕 ${list.first.fileName}');
+    debugPrint('字幕自动匹配: 已挂在线简中字幕 ${picked.fileName}');
+    unawaited(_dumpOnlineSubtitleState());
     unawaited(
       _inspectSubtitleTiming(
         label: '在线简中',
         subtitlePath: path,
-        subtitleName: '${list.first.fileName} ${list.first.releaseName}',
+        subtitleName: '${picked.fileName} ${picked.releaseName}',
       ),
     );
   }

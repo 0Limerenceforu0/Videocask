@@ -64,19 +64,39 @@ abstract final class MagnetFirstFramePolicy {
   /// 次也一样。给 1 次重试机会，第二次就明说「建议换资源」。
   static const int maxNoFrameStrikes = 2;
 
+  /// 交接给播放器前至少要预缓冲到这个比例（相对流首部窗口）。
+  ///
+  /// 真机 2026-11-08：buffer=6% 就交接，实际只下到 117KB，HEVC-10bit
+  /// 只够播 3s；之后 `pos=3s buffered=3s estimated-vf-fps=` 永久定格。
+  /// 低于此比例直接判本次起流失败，交给上层自动重试（重新打洞 / 重新申请
+  /// 头尾 piece），而不是把「假播放」丢给用户。
+  static const int minHandoverBufferPct = 12;
+
+  /// 交接是否过薄：只看字节比例，不看「有数据」这个布尔。
+  static bool handoverTooThin({required int bufferPct}) {
+    return bufferPct < minHandoverBufferPct;
+  }
+
   /// 交接后是否已经确认出画。
   ///
   /// * [beforePosition] / [beforeDuration]：交出流之前的位置与时长
   ///   （上一部片可能还残留着非零时长，直接判 `duration > 0` 会误判成功）；
-  /// * 位置推进过阈值，或者时长从「旧值/零」变成了新的非零值，都算出画。
+  /// * 位置推进过阈值是唯一硬证据；
+  /// * 时长就绪**不算**出画：mpv 只要读到了容器头就会把 duration 填好
+  ///   （真机 `dur=7507s` 但 `estimated-vf-fps=` 空 = 一帧都没解出来）。
+  ///   旧实现把它当成功，于是「缓冲 3s、位置钉死、零解码」的空流被判
+  ///   `arrived`，首帧看门狗放行、UI 进入 playing，随后永久卡死。
+  ///   现在只有时长就绪**且**确实在出帧才提前放行，避免误杀慢种子。
   static bool frameArrived({
     required Duration beforePosition,
     required Duration beforeDuration,
     required Duration position,
     required Duration duration,
+    bool decodingFrames = false,
   }) {
     if (position - beforePosition >= advanceThreshold) return true;
-    return duration > Duration.zero && duration != beforeDuration;
+    final durationReady = duration > Duration.zero && duration != beforeDuration;
+    return durationReady && decodingFrames;
   }
 
   /// 放弃等待的原因，顺带就是「卡在哪」的归因；不需要放弃时返回 null。

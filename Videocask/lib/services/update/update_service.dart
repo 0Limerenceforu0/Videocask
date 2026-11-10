@@ -77,7 +77,7 @@ class UpdateService {
 
   // ==================== 平台通道 ====================
 
-  static const MethodChannel _channel = MethodChannel('guanzi/update');
+  static const MethodChannel _channel = MethodChannel('videocask/update');
 
   /// 当前运行平台。
   UpdatePlatform get platform {
@@ -114,7 +114,7 @@ class UpdateService {
           headers: const {
             'Accept': 'application/vnd.github+json',
             'X-GitHub-Api-Version': '2022-11-28',
-            'User-Agent': 'guanzi-updater',
+            'User-Agent': 'videocask-updater',
           },
         ),
       );

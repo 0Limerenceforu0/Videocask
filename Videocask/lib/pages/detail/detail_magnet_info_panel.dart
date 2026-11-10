@@ -352,11 +352,30 @@ class _TorrentResourceCard extends StatelessWidget {
           Row(
             children: [
               Flexible(
-                child: MagnetSubtitleBadge(
-                  title: torrent?.name ?? resourceTitle ?? '',
-                  compact: true,
-                  muted: colors.muted,
-                  accent: colors.accent,
+                // 用 Wrap 而不是 Row：字幕徽标可能再挂一个「本片可下中字」，
+                // 加上语言徽标后窄屏必须能换行，不能把下载按钮挤出屏幕。
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    MagnetSubtitleBadge(
+                      title: torrent?.name ?? resourceTitle ?? '',
+                      magnetUri: torrent?.magnetUri,
+                      imdbId: torrent?.imdbId,
+                      // 详情页只有当前这一条资源，进页面就自动探测。
+                      autoProbe: true,
+                      compact: true,
+                      muted: colors.muted,
+                      accent: colors.accent,
+                    ),
+                    MagnetAudioLanguageBadge(
+                      title: torrent?.name ?? resourceTitle ?? '',
+                      compact: true,
+                      muted: colors.muted,
+                      accent: colors.accent,
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(width: 8),

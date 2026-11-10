@@ -197,7 +197,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
       final dir = await UpdateInstaller.downloadDirectory();
       final ext = platform == UpdatePlatform.android ? '.apk' : '.zip';
       final savePath =
-          '${dir.path}${Platform.pathSeparator}guanzi-update-${_info.version.label}$ext';
+          '${dir.path}${Platform.pathSeparator}videocask-update-${_info.version.label}$ext';
       final token = CancelToken();
       _cancelToken = token;
 

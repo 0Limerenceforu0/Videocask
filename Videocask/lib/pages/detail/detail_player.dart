@@ -7,11 +7,12 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/player_service.dart';
+import '../../services/subtitle_render_policy.dart';
 import '../../services/torrent_player_service.dart';
 import '../../models/movie.dart';
 import '../../providers/history_provider.dart';
 import '../../utils/playback_throughput.dart';
-import '../../utils/magnet_episode_parser.dart';
+import 'playback/magnet_stream_policy.dart';
 import '../../services/debug_log.dart';
 import 'dart:io';
 import 'package:flutter/services.dart';
@@ -364,8 +365,27 @@ class DetailPlayer {
   /// 解析后的字幕列表 [{start: ms, end: ms, text: 内容}]
   List<Map<String, String>> subtitles = [];
 
-  /// 是否显示字幕
-  bool showSubtitles = false;
+  /// 是否显示字幕。
+  ///
+  /// 🔴 收口点。单一渲染源是 mpv（见 `services/subtitle_render_policy.dart`），
+  /// 所以开关必须真的写到 mpv 的 `sub-visibility`。历史上这里只是普通字段，
+  /// 快捷键和「关闭字幕」弹窗只改了 Flutter 浮层的显示条件 —— mpv 画在视频帧
+  /// 里的那一份永远关不掉，也会和浮层叠成两份字幕。
+  bool get showSubtitles => _showSubtitles;
+
+  set showSubtitles(bool value) {
+    if (_showSubtitles == value) return;
+    _showSubtitles = value;
+    // 属性写入是异步的，UI 不必等；写失败只影响可见性，不致命。
+    unawaited(playerService.syncSubtitleVisibility(value));
+  }
+
+  bool _showSubtitles = false;
+
+  /// 字幕由谁渲染：mpv（常态）/ Flutter 浮层（mediacodec_embed、Web 兜底）。
+  SubtitleRenderer get subtitleRenderer => resolveSubtitleRenderer(
+        mpvCanRenderSubtitle: playerService.mpvCanRenderSubtitle,
+      );
 
   /// 当前字幕文本
   String currentSubtitleText = '';
@@ -491,6 +511,17 @@ class DetailPlayer {
   /// 当前/最近一次播放的磁力链接（写入观看历史）
   String lastMagnetUri = '';
 
+  /// 当前是否处于磁力本地流会话。
+  ///
+  /// 不再只看 `currentPlayUrl`：4078 真机里它会被覆写成 streamUrl，导致
+  /// 90s 看门狗把磁力当成普通 URL 重新 open。纯函数判定见
+  /// [isMagnetStreamSession]，三重信号避免漏判 / 误判。
+  bool get isMagnetStreamSessionActive => isMagnetStreamSession(
+        currentPlayUrl: currentPlayUrl,
+        activeStreamUrl: activeStreamUrl,
+        hasMagnetSession: lastMagnetUri.isNotEmpty,
+      );
+
   // ========== 位置更新节流时间戳 ==========
 
   int lastPositionUpdateMs = 0;
@@ -576,6 +607,11 @@ class DetailPlayer {
   bool _stallGiveUpLogged = false;
   Duration? _lastWatchdogPosition;
 
+  /// 磁力流「就地重开 mpv」的次数 / 锚点（不删种子，见 [_reopenMagnetStream]）。
+  int _magnetStreamReopens = 0;
+  static const int _maxMagnetStreamReopens = 3;
+  Duration? _magnetReopenAnchor;
+
   /// 初始化播放器（并发安全，多次调用只会执行一次）
   Future<void> ensureInitialized() {
     return _initializeFuture ??= _setupPlayerCallbacks();
@@ -618,9 +654,29 @@ class DetailPlayer {
 
     // 心跳：稳态播放不打日志，崩在无 [Crash] 的原生崩溃时无法判断「活了多久」。
     // 每 30s 记一次位置/时长/缓冲，下次崩溃日志末尾的时间戳即可定位存活时长与崩溃点。
+    ensureHeartbeat();
+  }
+
+  /// 确保心跳定时器在跑（幂等）。
+  ///
+  /// 2026-11-08 真机现场：磁力起播后整段日志**一条 heartbeat 都没有**，
+  /// 连带「卡死看门狗」也一起失效（它挂在心跳里），画面定格十几分钟无人
+  /// 兜底。心跳装载点原本只有 [_setupPlayerCallbacks] 一处，一旦该路径被
+  /// 走过一次后页面对象被复用/定时器被取消，就再也不会回来。
+  /// 现在起播前显式再装一次，保证「只要在播放，就有心跳 + 有看门狗」。
+  void ensureHeartbeat() {
+    if (_disposing) {
+      DebugLog.log('Play', '心跳装载被跳过: _disposing=true', flush: true);
+      return;
+    }
+    if (_heartbeatTimer?.isActive ?? false) {
+      DebugLog.log('Play', '心跳已在运行，无需重装', flush: true);
+      return;
+    }
     _heartbeatTimer?.cancel();
     _heartbeatTimer =
         Timer.periodic(const Duration(seconds: 30), (_) => _heartbeat());
+    DebugLog.log('Play', '心跳/看门狗定时器已装载', flush: true);
   }
 
   void _handlePositionChanged(Duration pos) {
@@ -660,6 +716,14 @@ class DetailPlayer {
     if (anchor != null && position > anchor + const Duration(seconds: 5)) {
       _prematureAnchor = null;
       _prematureRecoveryAttempts = 0;
+    }
+    // 磁力就地重开之后，位置真的往前走了 30s 以上才认为「救回来了」，
+    // 计数归零；否则连续断流会很快耗尽重开额度。
+    final reopenAnchor = _magnetReopenAnchor;
+    if (reopenAnchor != null &&
+        position > reopenAnchor + const Duration(seconds: 30)) {
+      _magnetReopenAnchor = null;
+      _magnetStreamReopens = 0;
     }
     final total = duration;
     if (total > Duration.zero) {
@@ -794,7 +858,11 @@ class DetailPlayer {
   void _handleSubtitleChanged(List<String> lines) {
     currentSubtitleText =
         lines.map((s) => s.trim()).where((s) => s.isNotEmpty).join('\n');
-    if (showSubtitles) {
+    // 字幕已由 mpv/libass 画进视频帧（单一渲染源），浮层不显示时这段文本
+    // 没有任何 UI 消费它 —— 再触发重绘就是每 220ms 一次的空转。
+    // 只有浮层兜底模式（mediacodec_embed / Web）才需要刷新。
+    if (showSubtitles &&
+        subtitleRenderer == SubtitleRenderer.flutterOverlay) {
       _notifyUiThrottled();
     }
   }
@@ -842,8 +910,7 @@ class DetailPlayer {
     // 磁力流（currentPlayUrl 是 `magnet-file://<index>`）中途断源时，
     // mpv 只会抛一句底层错误。归类成 magnetFailed，UI 才会给
     // 「自动重试结论 + 建议换源」的磁力卡片，而不是静默黑屏/直接断开。
-    final magnetStream = currentPlayUrl != null &&
-        MagnetEpisodeParser.isMagnetFileUrl(currentPlayUrl!);
+    final magnetStream = isMagnetStreamSessionActive;
     playbackErrorType = magnetStream
         ? PlaybackErrorType.magnetFailed
         : PlaybackErrorType.networkOrPlayer;
@@ -855,6 +922,31 @@ class DetailPlayer {
   }
 
   void _handleCompleted(int _) {
+    // 🔴 4078 真机：磁力本地流等 piece 时 mpv 会误报 completed（pos≈7s /
+    // dur=7507s）。旧链路直接 _finishPlayback → lifecycle=ended、心跳被吞、
+    // 权威进度被设成片长，随后纠偏把片长当目标 seek 到片尾，播放彻底死掉。
+    if (shouldIgnoreMagnetPrematureComplete(
+      isMagnet: isMagnetStreamSessionActive,
+      position: playback.lastPlayerReport,
+      duration: duration,
+    )) {
+      DebugLog.log(
+        'Play',
+        '磁力流误报完成: pos=${playback.lastPlayerReport.inSeconds}s '
+        'dur=${duration.inSeconds}s buffered=${bufferedPosition.inSeconds}s '
+        '→ 不进 ended，保持等待供数',
+        flush: true,
+      );
+      // 关键补充（2026-11-08）：EOF 之后 mpv **不会**自己续读，必须换一个
+      // 解复用器。这里就地重开（不删种子），从断点接着播。
+      if (_canReopenMagnetStream) {
+        unawaited(_reopenMagnetStream('EOFMisreport'));
+        return;
+      }
+      isBuffering = true;
+      _notifyUiImmediate();
+      return;
+    }
     if (playback.isPrematureComplete(duration)) {
       final action = resolvePrematureCompletion(
         recoveryAttempts: _prematureRecoveryAttempts,
@@ -935,9 +1027,13 @@ class DetailPlayer {
     if (lc == PlaybackLifecycle.idle || lc == PlaybackLifecycle.ended) return;
     DebugLog.log(
       'Play',
-      'heartbeat pos=${position.inSeconds}s dur=${duration.inSeconds}s '
+      // 毫秒级位置：磁力「每 5 分钟才走 40ms」这种极慢爬行，用整秒看不出
+      // 是否真的在动，会被误判成「完全冻结」。
+      'heartbeat pos=${position.inMilliseconds}ms '
+          'dur=${duration.inSeconds}s '
           'buffered=${bufferedPosition.inSeconds}s playing=$isPlaying '
           'rate=${playbackSpeed.toStringAsFixed(2)} lc=${lc.name}',
+      flush: true,
     );
     // 内存诊断：记录进程 RSS 与系统可用内存，崩溃日志可据此判断是否被系统低内存(LMK)杀死。
     _logMemory();
@@ -968,6 +1064,14 @@ class DetailPlayer {
   /// 注意不能只信 `lifecycle == playing` —— 2026-11-05 的事故里 lifecycle
   /// 从 open 之后就没进过 playing，靠它判断会漏掉整整 34 分钟。
   void _checkStallWatchdog(PlaybackLifecycle lc) {
+    // 已经判结束/还没开始：再反复软重载只会把状态越推越坏（4078 真机
+    // ended 之后每 90s 一次「软重载」，位置永远停在片长）。看门狗只服务
+    // opening/playing/seeking/error 这些「本该在播」的状态。
+    if (lc == PlaybackLifecycle.ended || lc == PlaybackLifecycle.idle) {
+      _stalledHeartbeats = 0;
+      _lastWatchdogPosition = null;
+      return;
+    }
     if (!isPlaying || lc == PlaybackLifecycle.seeking) {
       _stalledHeartbeats = 0;
       _lastWatchdogPosition = null;
@@ -1007,7 +1111,7 @@ class DetailPlayer {
     unawaited(reloadStalled());
   }
 
-  static const MethodChannel _crashChannel = MethodChannel('guanzi/crash');
+  static const MethodChannel _crashChannel = MethodChannel('videocask/crash');
   bool _crashHandlerReasserted = false;
 
   /// 播放器后端（media_kit/libmpv）初始化后重新断言原生崩溃处理器，抢回注册权。
@@ -1138,6 +1242,16 @@ class DetailPlayer {
   void _scheduleDiscontinuityRecovery() {
     _syncDiscontinuityRecoveryGeneration();
     if (_discontinuityRecovery.disabled) return;
+    // 磁力本地流不支持可靠的随机 seek：补发精确 seek 会打断顺序预取，
+    // 而且目标 piece 没下下来时 seek 落空，只会把僵死变成更深的僵死。
+    if (isMagnetStreamSessionActive) {
+      DebugLog.log(
+        'Playhead',
+        'discontinuity 跳过(磁力本地流不补发 seek)',
+        flush: true,
+      );
+      return;
+    }
     if (isApplyingResume || isOpeningMedia) {
       DebugLog.log(
         'Playhead',
@@ -1160,7 +1274,15 @@ class DetailPlayer {
       return;
     }
     final target = playback.authoritativePosition;
-    if (target <= const Duration(seconds: 20)) return;
+    if (!isValidRecoverySeekTarget(target: target, duration: duration)) {
+      DebugLog.log(
+        'Playhead',
+        'discontinuity 跳过(目标非法): target=${target.inSeconds}s '
+            'dur=${duration.inSeconds}s',
+        flush: true,
+      );
+      return;
+    }
 
     final now = DateTime.now();
     final last = _lastDiscontinuityRecoveryAt;
@@ -1201,7 +1323,9 @@ class DetailPlayer {
         'discontinuity 触发恢复 seek -> target=${target.inSeconds}s',
         flush: true,
       );
-      unawaited(_recoverFromDiscontinuity(playback.authoritativePosition));
+      // 用排程时捕获的 target：700ms 后 authoritativePosition 可能已被
+      // completed 推到片长，拿实时值 seek 会直接跳到片尾（4078 真机）。
+      unawaited(_recoverFromDiscontinuity(target));
     });
   }
 
@@ -1231,7 +1355,16 @@ class DetailPlayer {
     _syncDiscontinuityRecoveryGeneration();
     if (_discontinuityRecovery.disabled) return;
     if (_discontinuityRecoveryInFlight || _disposing) return;
-    if (target <= const Duration(seconds: 20)) return;
+    if (isMagnetStreamSessionActive) return;
+    if (!isValidRecoverySeekTarget(target: target, duration: duration)) {
+      DebugLog.log(
+        'Playhead',
+        'recover seek 拒绝(目标非法): target=${target.inSeconds}s '
+            'dur=${duration.inSeconds}s',
+        flush: true,
+      );
+      return;
+    }
     // 防抖：任何触发路径（discontinuity tick / premature complete）都受此约束，
     // 避免解码报错等引发「报错→纠偏 seek→再报错」死循环（实测 1 秒内反复 12 次，
     // 拖垮播放器原生层导致闪退）。根因修复见 hls_ad_filter 的 DISCONTINUITY 重建。
@@ -1347,6 +1480,25 @@ class DetailPlayer {
     final pending = pendingResumePosition;
     if (pending == null || total <= Duration.zero) return;
     if (pending >= total - const Duration(seconds: 2)) {
+      _clearResumeState();
+      _pendingResumeConsumed = true;
+      return;
+    }
+    // 🔴 2026-11-08 真机定案：磁力流起播后 seek 会打断顺序预取，目标位置
+    // 一个 piece 都没有 → buffered=3s 永久定格（00:37:52 `Jump 0ms ->
+    // 3345954ms`）。只挡 >30s 的远端续播不够：4078 真机 3s 的小续播同样
+    // 让 mpv 对本地 HTTP 流发起 Range 请求，位置推进到 7s 后定格。
+    // 磁力流续播一律暂缓、从头播；用户想跳历史位置自己拖进度条即可，
+    // 那时目标 piece 会按需拉取。
+    final magnetStream = isMagnetStreamSessionActive;
+    if (shouldSkipResumeSeek(isMagnet: magnetStream, pending: pending)) {
+      DebugLog.log(
+        'Play',
+        '磁力续播暂缓: target=${pending.inSeconds}s '
+        'buffered=${bufferedPosition.inSeconds}s'
+        '（任何起播 seek 都会打断顺序预取，改从头播）',
+        flush: true,
+      );
       _clearResumeState();
       _pendingResumeConsumed = true;
       return;
@@ -1471,8 +1623,88 @@ class DetailPlayer {
     );
   }
 
+  /// 磁力流「就地重开」：丢掉当前 mpv 解复用器，从断点重新拉同一条本地流。
+  ///
+  /// 为什么必须重开而不能只「等供数」：
+  /// mpv 的 demuxer 一旦读到 EOF 就永久停在 EOF 态（`eof-reached=yes`），
+  /// 即使本地流服务器随后又有数据，它也不会自己续读 —— 2026-11-08 真机现场
+  /// 就是「停在 11s 十几分钟不动」。重开一次 open 会触发**新的 Range 请求**，
+  /// 本地流服务器顺势从断点重新供数，并把 `seek_generation` 推进一代、叫醒
+  /// 卡在旧位置上的 `serve_range` 线程（见 torrent_bridge.cpp）。
+  ///
+  /// 关键：**只重开 mpv，不碰 torrentService**（种子/缓冲全部保留），
+  /// 这与 [DetailMagnetPlayback] 里首帧阶段的「就地重开」是同一策略。
+  bool get _canReopenMagnetStream =>
+      isMagnetStreamSessionActive &&
+      (activeStreamUrl?.isNotEmpty ?? false) &&
+      _magnetStreamReopens < _maxMagnetStreamReopens;
+
+  Future<void> _reopenMagnetStream(String reason) async {
+    final url = activeStreamUrl;
+    if (url == null || url.isEmpty) return;
+    _magnetStreamReopens++;
+    // 起点取「已缓冲到的位置」往前退 2s：mpv 从断点重开时第一帧正好接上，
+    // 不会出现「回到 0s 再花几十秒缓冲」的观感倒退。
+    final anchor = bufferedPosition > position ? bufferedPosition : position;
+    final resumeAt = anchor > const Duration(seconds: 3)
+        ? anchor - const Duration(seconds: 2)
+        : Duration.zero;
+    _magnetReopenAnchor = anchor;
+    DebugLog.log(
+      'Play',
+      '磁力流就地重开($reason) 第 $_magnetStreamReopens/$_maxMagnetStreamReopens 次: '
+          'pos=${position.inSeconds}s buffered=${bufferedPosition.inSeconds}s '
+          'resumeAt=${resumeAt.inSeconds}s url=$url（不删种子）',
+      flush: true,
+    );
+    isBuffering = true;
+    _notifyUiImmediate();
+    try {
+      await playerService.play(url, startAt: resumeAt);
+    } catch (e) {
+      DebugLog.log('Play', '磁力流就地重开失败: $e', flush: true);
+    }
+    if (!_disposing) _notifyUiImmediate();
+  }
+
   /// 停滞软重载：按当前权威进度重新拉流（不跳片头、不丢进度）。
   Future<void> reloadStalled() async {
+    // 🔴 2026-11-08 真机定案：磁力流是 TorrentPlayerService 手里的本地 HTTP
+    // 流，piece 调度由引擎管。重新 play(旧 url) 会打断顺序预取；而且
+    // `currentOpenUrl` 对磁力只是 `magnet-file://<index>` 伪地址（或上一部片
+    // 的残留 URL），拿它去 open 必然 `Failed to recognize file format` →
+    // lifecycle=error，之后位置永远定格、无人恢复。
+    // 磁力停滞时不重开播放器：退回 buffering 等引擎继续供数，让 mpv 自己
+    // 接着读；只有在线/普通 URL 才走下面的「按进度重新 open」。
+    final magnetStream = isMagnetStreamSessionActive;
+    DebugLog.log(
+      'Play',
+      '软重载入口: magnet=$magnetStream currentPlayUrl=$currentPlayUrl '
+          'activeStreamUrl=$activeStreamUrl '
+          'lc=${playback.lifecycle.name} pos=${position.inSeconds}s '
+          'buffered=${bufferedPosition.inSeconds}s',
+      flush: true,
+    );
+    if (magnetStream) {
+      // 2026-11-08 修正：旧实现在这里**只等不救**，理由是 `currentOpenUrl`
+      // 对磁力是 `magnet-file://<index>` 伪地址。但现在有了真正的本地流地址
+      // `activeStreamUrl`（http://127.0.0.1:PORT/...），可以从断点重开。
+      // 90s 位置不推进 = mpv 侧已经僵死，光等是等不回来的。
+      if (_canReopenMagnetStream) {
+        await _reopenMagnetStream('看门狗定格');
+        return;
+      }
+      DebugLog.log(
+        'Play',
+        '磁力缓冲停滞 → 保持流句柄等待供数（pos=${position.inSeconds}s '
+        'buffered=${bufferedPosition.inSeconds}s '
+        'speed=${torrentService.downloadSpeed}B/s），不重开播放器',
+        flush: true,
+      );
+      isBuffering = true;
+      _notifyUiImmediate();
+      return;
+    }
     final url = currentOpenUrl ?? activeStreamUrl;
     if (url == null || url.isEmpty) {
       await playerService.resume();

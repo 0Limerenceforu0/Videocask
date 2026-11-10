@@ -11,7 +11,7 @@ import 'package:flutter/services.dart';
 class BackgroundPlaybackService {
   BackgroundPlaybackService._();
 
-  static const MethodChannel _channel = MethodChannel('guanzi/playbackService');
+  static const MethodChannel _channel = MethodChannel('videocask/playbackService');
 
   static bool _running = false;
 

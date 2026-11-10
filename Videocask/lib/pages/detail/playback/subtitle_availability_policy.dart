@@ -25,6 +25,12 @@ enum MagnetSubtitleAvailability {
   /// 烧进画面的硬字幕或「国语中字」，没有可挂载的文本轨。
   hardcoded,
 
+  /// 标题用 `Zho` / `Chi` 这类 ISO 语言码写了「有中文字幕」，但没指明简繁。
+  ///
+  /// Torrentio/Knaben 的发布名常见 `Sub Rus Zho Eng` 这种写法。
+  /// 只写语言码不写简繁时，只能说「有中文字幕」，不能说「简中」。
+  chineseUnspecified,
+
   /// 标题里没有任何字幕线索。
   notMarked,
 }
@@ -64,6 +70,13 @@ bool _containsAny(String lower, Set<String> tokens) {
   return false;
 }
 
+/// `zho` / `chi` 必须独立成词才算中文标记。
+///
+/// 直接 `contains` 会误命中：`chill`、`zhone` 这类无关词在发布名里并不罕见。
+bool _hasChineseLanguageCode(String lower) {
+  return RegExp(r'(^|[^a-z])(zho|chi)([^a-z]|$)').hasMatch(lower);
+}
+
 /// 从种子标题判定字幕形态。大小写不敏感，空标题返回 [notMarked]。
 ///
 /// 判定顺序刻意把「简体」放在「繁体」前面：像 `[简繁英双语外挂]` 同时含
@@ -99,6 +112,11 @@ MagnetSubtitleAvailability detectMagnetSubtitle(String? title) {
   if (bilingual) return MagnetSubtitleAvailability.bilingual;
   if (embedded || external) return MagnetSubtitleAvailability.bilingual;
 
+  // 只写了 `Zho`/`Chi` 语言码：确实是中文字幕，但简繁未知。
+  if (_hasChineseLanguageCode(lower)) {
+    return MagnetSubtitleAvailability.chineseUnspecified;
+  }
+
   return MagnetSubtitleAvailability.notMarked;
 }
 
@@ -117,6 +135,8 @@ String subtitleAvailabilityLabel(MagnetSubtitleAvailability value) {
       return '自带双语字幕';
     case MagnetSubtitleAvailability.hardcoded:
       return '中字硬字幕';
+    case MagnetSubtitleAvailability.chineseUnspecified:
+      return '有中文字幕';
     case MagnetSubtitleAvailability.notMarked:
       return '未标注字幕';
   }

@@ -7,7 +7,7 @@ import 'download_export.dart';
 
 /// 把文本数据写到系统「下载」目录。
 ///
-/// Android 复用诊断日志那条原生通道（`guanzi/logExport`）的 MediaStore 写入实现：
+/// Android 复用诊断日志那条原生通道（`videocask/logExport`）的 MediaStore 写入实现：
 /// 免存储权限、任意文件管理器都能取到；桌面端没有该通道，由 [DownloadExport]
 /// 直接写下载目录。Web 端抛 [UnsupportedError]，由调用方降级到剪贴板。
 abstract final class DataExport {
@@ -17,7 +17,7 @@ abstract final class DataExport {
     return '${d.year}${p(d.month)}${p(d.day)}_${p(d.hour)}${p(d.minute)}${p(d.second)}';
   }
 
-  static String backupFileName() => 'guanzi_backup_${_timeStamp()}.json';
+  static String backupFileName() => 'videocask_backup_${_timeStamp()}.json';
 
   /// 返回用户可见的目标路径描述。Web 端没有文件系统，抛
   /// [UnsupportedError]，由调用方降级到剪贴板。

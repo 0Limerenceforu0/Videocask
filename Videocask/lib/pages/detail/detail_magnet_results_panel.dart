@@ -242,6 +242,7 @@ class _DetailMagnetResultsPanelState extends State<DetailMagnetResultsPanel> {
                 torrent: pageItems[i],
                 colors: colors,
                 dense: widget.dense,
+                order: i,
               );
             },
           ),
@@ -423,12 +424,14 @@ class _MagnetResultTile extends StatelessWidget {
     required this.torrent,
     required this.colors,
     required this.dense,
+    this.order = 0,
   });
 
   final Movie movie;
   final TorrentInfo torrent;
   final DetailPageColors colors;
   final bool dense;
+  final int order;
 
   @override
   Widget build(BuildContext context) {
@@ -520,8 +523,19 @@ class _MagnetResultTile extends StatelessWidget {
                 ),
                 if (torrent.imdbId != null && torrent.imdbId!.isNotEmpty)
                   _meta(Icons.movie_outlined, torrent.imdbId!, colors),
+                MagnetAudioLanguageBadge(
+                  title: torrent.name,
+                  compact: true,
+                  muted: colors.muted,
+                  accent: colors.accent,
+                ),
                 MagnetSubtitleBadge(
                   title: torrent.name,
+                  magnetUri: torrent.magnetUri,
+                  imdbId: torrent.imdbId,
+                  probeOrder: order,
+                  // 列表里每条都要给结论，用户是看徽标决定点哪一条的。
+                  autoProbe: true,
                   compact: true,
                   muted: colors.muted,
                   accent: colors.accent,

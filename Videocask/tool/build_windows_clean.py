@@ -7,21 +7,30 @@ MSBuild/.NET 的启动。本脚本用最小化的标准 Windows 环境变量启�
 所有子进程（cmake/msbuild/clang-cl）都继承这份干净环境。
 """
 
+import os
 import subprocess
 import sys
 
-PROJECT = r"D:\flutter-dome\movie_app\movie_app"
+# 工程根 = 本脚本所在 tool/ 的上一级，仓库搬迁后自动生效；
+# 换机或目录结构不同时可用环境变量 VIDEOCASK_PROJECT 覆盖。
+PROJECT = os.environ.get(
+    "VIDEOCASK_PROJECT",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+)
+WORKSPACE = os.path.dirname(os.path.dirname(PROJECT))
+TMP_DIR = os.path.join(WORKSPACE, "_build", "tmp")
+os.makedirs(TMP_DIR, exist_ok=True)
 FLUTTER_BAT = r"E:\FultterProject\flutter\bin\flutter.bat"
 
 env = {
     "SYSTEMROOT": r"C:\Windows",
     "SystemDrive": "C:",
     "ComSpec": r"C:\Windows\System32\cmd.exe",
-    "TEMP": r"C:\Users\Wang\AppData\Local\Temp",
-    "TMP": r"C:\Users\Wang\AppData\Local\Temp",
+    "TEMP": TMP_DIR,
+    "TMP": TMP_DIR,
     "PATH": ";".join(
         [
-            r"D:\flutter-dome\movie_app\movie_app\tool",
+            os.path.join(PROJECT, "tool"),
             r"E:\FultterProject\flutter\bin",
             r"C:\Program Files\Git\cmd",
             r"C:\Windows\System32",

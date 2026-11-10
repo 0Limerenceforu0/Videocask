@@ -5,10 +5,10 @@
   更新包由 path_provider 的 getTemporaryDirectory() 下载，在 Android 上
   就是 context.getCacheDir()，所以主路径是 <cache-path>。
   另外两条是兜底：部分机型 path_provider 会回落到 external-cache。
-  只暴露 guanzi_updates 子目录，不要把整个 cache 交出去。
+  只暴露 videocask_updates 子目录，不要把整个 cache 交出去。
 -->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <cache-path name="guanzi_updates" path="guanzi_updates/" />
-    <external-cache-path name="guanzi_updates_external" path="guanzi_updates/" />
-    <external-files-path name="guanzi_files" path="." />
+    <cache-path name="videocask_updates" path="videocask_updates/" />
+    <external-cache-path name="videocask_updates_external" path="videocask_updates/" />
+    <external-files-path name="videocask_files" path="." />
 </paths>

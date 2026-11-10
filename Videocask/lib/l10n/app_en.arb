@@ -1,6 +1,6 @@
 {
   "@@locale": "en",
-  "appTitle": "Guanzi",
+  "appTitle": "Videocask",
   "appInitLoading": "Initializing…",
   "appInitRetry": "Retry",
   "appInitErrorTitle": "Startup failed",

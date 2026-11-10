@@ -1,6 +1,6 @@
-# movie_app
+# 罐子 · Videocask
 
-跨端影视播放应用（Android / iOS / Web / 桌面）。
+基于 Flutter 的跨端影视播放器（Android / Windows / Web）。
 
 > 当前版本 `1.1.7+67`（2026-11-06，Android / Windows / Web 三端一次性交付）。
 > 本版变更见 [CHANGELOG.md](CHANGELOG.md) 的 1.1.7 段，技术细节见

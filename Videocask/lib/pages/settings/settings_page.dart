@@ -1403,7 +1403,7 @@ class SettingsPage extends StatelessWidget {
     }
   }
 
-  /// 导出诊断日志：打包 guanzi_logs 到系统下载目录。
+  /// 导出诊断日志：打包 videocask_logs 到系统下载目录。
   Future<void> _exportLogs(BuildContext context) async {
     // 兜底：即便 UI 入口被误开，Web 也不能走原生通道。
     if (kIsWeb) {

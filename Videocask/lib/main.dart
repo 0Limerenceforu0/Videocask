@@ -11,6 +11,7 @@ import 'config/pending_deep_link.dart';
 import 'services/app_lifecycle_logger.dart';
 import 'services/debug_log.dart';
 import 'services/error_handler.dart';
+import 'services/playback_experiment.dart';
 import 'services/subtitle_ai_service.dart';
 import 'utils/web_splash_stub.dart'
     if (dart.library.js_interop) 'utils/web_splash_web.dart' as web_splash;
@@ -22,6 +23,10 @@ void main() async {
 
   // 诊断日志：先于 runApp 初始化，保证启动期异常也能被记录。
   await DebugLog.init();
+
+  // 真机 A/B 实验台：仅当外部私有目录存在 experiment.json 时启用。
+  await PlaybackExperiment.load();
+  PlaybackExperiment.logStart();
 
   // media_kit 在 Web 上同样必须初始化（Web 后端映射到 HTML <video> + hls.js）。
   MediaKit.ensureInitialized();

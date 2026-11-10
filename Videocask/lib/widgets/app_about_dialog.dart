@@ -23,7 +23,7 @@ void showAppAboutDialog(BuildContext context) {
       const SizedBox(height: 6),
       Text(
         '遇到跳剧情 / 闪退 / 卡顿等问题时：先正常使用该功能复现一次，'
-        '再到「设置 → 诊断 → 导出诊断日志」把整个 guanzi_logs'
+        '再到「设置 → 诊断 → 导出诊断日志」把整个 videocask_logs'
         '（含 crash_*.txt 崩溃栈）打包发我即可——无需电脑、无需文件管理器权限。',
         style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: Theme.of(context).colorScheme.onSurfaceVariant,

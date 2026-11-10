@@ -44,13 +44,29 @@ void main() {
       );
     });
 
-    test('时长从 0 变成非零 → 出画', () {
+    test('时长从 0 变成非零、但一帧没解 → 不算出画（2026-11-08 真机）', () {
+      // mpv 读完容器头就把 duration 填好，此时 estimated-vf-fps 仍可能为空。
+      // 真机现场：dur=7507s / pos=3s / buffered=3s / 帧率空 = 永久定格。
+      // 旧实现在这里返回 true，把「假播放」交给了 UI。
       expect(
         MagnetFirstFramePolicy.frameArrived(
           beforePosition: Duration.zero,
           beforeDuration: Duration.zero,
           position: Duration.zero,
           duration: const Duration(hours: 2, minutes: 57),
+        ),
+        isFalse,
+      );
+    });
+
+    test('时长就绪且确实在出帧 → 出画（慢种子不误杀）', () {
+      expect(
+        MagnetFirstFramePolicy.frameArrived(
+          beforePosition: Duration.zero,
+          beforeDuration: Duration.zero,
+          position: Duration.zero,
+          duration: const Duration(hours: 2, minutes: 57),
+          decodingFrames: true,
         ),
         isTrue,
       );
@@ -68,13 +84,26 @@ void main() {
       );
     });
 
-    test('时长从旧值换成新值 → 出画', () {
+    test('时长从旧值换成新值、但没有解码证据 → 仍不算出画', () {
       expect(
         MagnetFirstFramePolicy.frameArrived(
           beforePosition: Duration.zero,
           beforeDuration: const Duration(minutes: 90),
           position: Duration.zero,
           duration: const Duration(hours: 2, minutes: 57),
+        ),
+        isFalse,
+      );
+    });
+
+    test('时长换新值且有解码证据 → 出画', () {
+      expect(
+        MagnetFirstFramePolicy.frameArrived(
+          beforePosition: Duration.zero,
+          beforeDuration: const Duration(minutes: 90),
+          position: Duration.zero,
+          duration: const Duration(hours: 2, minutes: 57),
+          decodingFrames: true,
         ),
         isTrue,
       );
@@ -87,6 +116,28 @@ void main() {
           beforeDuration: Duration.zero,
           position: Duration.zero,
           duration: Duration.zero,
+        ),
+        isFalse,
+      );
+    });
+  });
+
+  group('handoverTooThin', () {
+    test('真机现场 buffer=6% → 过薄，必须重试而不是交给 mpv', () {
+      expect(
+        MagnetFirstFramePolicy.handoverTooThin(bufferPct: 6),
+        isTrue,
+      );
+    });
+
+    test('零缓冲同样过薄', () {
+      expect(MagnetFirstFramePolicy.handoverTooThin(bufferPct: 0), isTrue);
+    });
+
+    test('达到下限 → 允许交接', () {
+      expect(
+        MagnetFirstFramePolicy.handoverTooThin(
+          bufferPct: MagnetFirstFramePolicy.minHandoverBufferPct,
         ),
         isFalse,
       );

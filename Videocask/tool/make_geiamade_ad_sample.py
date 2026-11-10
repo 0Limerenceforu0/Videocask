@@ -10,8 +10,13 @@ import subprocess
 import sys
 
 FFMPEG = r"D:\Trae CN\resources\app\bin\ffmpeg.exe"
-WORK = r"C:/Users/Wang/AppData/Local/Temp/hls_debug"
-OUT_DIR = r"D:/flutter-dome/movie_app/movie_app/deliverables/ad_samples"
+# 工程根 = 本脚本所在 tool/ 的上一级；中间文件与输出都落在 F 盘工作区，不写 C 盘。
+PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WORKSPACE = os.path.dirname(os.path.dirname(PROJECT))
+WORK = os.path.join(WORKSPACE, "_build", "tmp", "hls_debug")
+OUT_DIR = os.path.join(PROJECT, "deliverables", "ad_samples")
+os.makedirs(WORK, exist_ok=True)
+os.makedirs(OUT_DIR, exist_ok=True)
 
 
 def main():

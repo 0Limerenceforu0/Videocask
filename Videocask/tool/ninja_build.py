@@ -11,7 +11,15 @@ import sys
 import shutil
 import os
 
-PROJECT = r"D:\flutter-dome\movie_app\movie_app"
+# 工程根 = 本脚本所在 tool/ 的上一级，仓库搬迁后自动生效；
+# 可用环境变量 VIDEOCASK_PROJECT 覆盖。
+PROJECT = os.environ.get(
+    "VIDEOCASK_PROJECT",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+)
+WORKSPACE = os.path.dirname(os.path.dirname(PROJECT))
+TMP_DIR = os.path.join(WORKSPACE, "_build", "tmp")
+os.makedirs(TMP_DIR, exist_ok=True)
 CMAKE = (
     r"D:\VS Studio\Community\Common7\IDE\CommonExtensions\Microsoft\CMake"
     r"\CMake\bin\cmake.exe"
@@ -27,8 +35,8 @@ OUT_DIR = BUILD_DIR + r"\bundle"
 
 env = {
     "SYSTEMROOT": r"C:\Windows",
-    "TEMP": r"D:\flutter_test_tmp",
-    "TMP": r"D:\flutter_test_tmp",
+    "TEMP": TMP_DIR,
+    "TMP": TMP_DIR,
     "PATH": ";".join([
         MSVC + r"\bin\Hostx64\x64",
         SDK + r"\bin\\" + SDKVER + r"\x64",   # rc.exe / mt.exe / midlrt

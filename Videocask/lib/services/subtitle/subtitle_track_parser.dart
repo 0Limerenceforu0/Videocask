@@ -42,3 +42,33 @@ List<SubtitleTrackInfo> parseMpvSubtitleTracks(String? raw) {
   }
   return out;
 }
+
+/// 把 mpv `track-list` 压成「每条轨一行」的短摘要。
+///
+/// DebugLog 单条会被截断到约 1000 字符，而完整 track-list 动辄 3~6KB：
+/// 之前只打 `tracks=...substring(0, 900)`，字幕轨永远落在被截掉的部分，
+/// 导致「候选里有中文轨、但 sid 设不上」这个矛盾查不下去。
+/// 这里逐条输出关键字段，保证内封 / 外挂字幕轨一定可见。
+List<String> describeMpvTracks(String? raw) {
+  if (raw == null || raw.trim().isEmpty) return const <String>['<empty>'];
+  dynamic decoded;
+  try {
+    decoded = jsonDecode(raw);
+  } catch (_) {
+    return <String>['<非 JSON>'];
+  }
+  if (decoded is! List) return <String>['<非数组>'];
+  if (decoded.isEmpty) return const <String>['<无轨道>'];
+
+  final out = <String>[];
+  for (final item in decoded) {
+    if (item is! Map) continue;
+    out.add(
+      'id=${item['id']} type=${item['type']} '
+      'lang=${item['lang'] ?? '-'} src=${item['src-id'] ?? '-'} '
+      'sel=${item['selected'] ?? '-'} ext=${item['external'] ?? '-'} '
+      'codec=${item['codec'] ?? '-'} title=${item['title'] ?? '-'}',
+    );
+  }
+  return out;
+}

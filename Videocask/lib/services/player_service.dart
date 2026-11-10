@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert' show utf8;
 import 'dart:io';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:media_kit/media_kit.dart';
@@ -11,7 +12,9 @@ import 'player_mpv.dart';
 import 'debug_log.dart';
 import 'hw_decode_policy.dart';
 import 'video_output_policy.dart';
+import 'subtitle_render_policy.dart';
 import 'player_listeners.dart';
+import 'playback_experiment.dart';
 import 'resource_scope.dart';
 import 'storage_service.dart';
 
@@ -52,6 +55,29 @@ VideoControllerConfiguration androidVideoControllerConfig({
 class PlayerService {
   /// demuxer 读缓存（默认 32MB 偏小，网络流首帧/拖动后恢复偏慢）
   static const int defaultDemuxerBufferBytes = 96 * 1024 * 1024;
+
+  /// 实验台专用：周期缓存探针 + 配置热切（仅 experiment.json 存在时启动）。
+  Timer? _experimentTimer;
+
+  // ── 门 0 观测通道修复（2026-11-09）──
+  // PlayerService 不是单例：每个 DetailPlayer 会 new 一个。旧代码给每个实例
+  // 都起一个 Timer.periodic，且 dispose() 不 cancel。页面退出后旧实例仍每 5s
+  // 调 probeCacheState()，此时 _player 已置 null → 8 个 mpv 属性全读不到 →
+  // 写一行「缓存: ...= = =」空值。真机 6671 行探针里只有 1189 行带数值，
+  // 空值率 74~93% 就是这么来的；历史只能靠 [Jump] mpv 快照 补值，存在
+  // 「有 Jump 才有读数」的选择偏差。
+  // 现在全局只允许一个活跃探针，且绑定当前持有播放器实例的 service。
+  static Timer? _activeExperimentTimer;
+  static PlayerService? _activeProbeOwner;
+  static int _nextInstanceId = 0;
+
+  int _instanceId = 0;
+  bool _probeBusy = false;
+
+  int get _probeId {
+    if (_instanceId == 0) _instanceId = ++_nextInstanceId;
+    return _instanceId;
+  }
 
   PlaybackStrategyConfig _strategyConfig =
       PlaybackStrategyConfig.fromKey('balanced');
@@ -283,6 +309,9 @@ class PlayerService {
       configuration: _videoControllerConfig(),
     );
 
+    // media_kit 建 Player 时把 sub-visibility / secondary-sub-visibility 全写
+    // yes；这里立刻压回「用户上次的选择 + 次字幕恒关」，避免字幕自己冒出来。
+    await _pushSubtitleVisibility();
     _wireStreams();
   }
 
@@ -481,12 +510,24 @@ class PlayerService {
       await _seekForOpenStart(resume);
       if (_disposed) return;
       await _player!.play();
+      // open 会把 sub-visibility 重置成 yes，必须按用户选择重压一次。
+      await _pushSubtitleVisibility();
       return;
     }
     await _player!.open(media, play: true);
+    await _pushSubtitleVisibility();
   }
 
   /// open 后 seek 到续播点；失败则抛 [PlaybackStartSeekException]（禁止静默从 0 播）。
+  ///
+  /// 2026-11-08 真机修复：`_player.state.duration/position` 在磁力流
+  /// `open(play:false)` 阶段会长期停在 0，而 mpv 原生 `duration` 已是 7507s、
+  /// `track-list` 完整、`[Jump]` 也确实跳到了续播点。于是下面三次 350ms 判定
+  /// 必然误判「seek 失败」→ 抛异常 → 上层重开流 → 磁力数据不足报
+  /// `Failed to recognize file format` → 失败卡片压住画面。
+  /// 稳定复现两次（00:39 / 01:15，target 均 3345s）。
+  /// 因此判失败后先用 mpv 原生属性二次确认：流已识别就**不重开**，
+  /// 让已生效的 seek 在缓冲到位后继续播，续播纠偏链路继续兜底。
   Future<void> _seekForOpenStart(Duration target) async {
     const tolerance = Duration(seconds: 8);
     await seekPrecise(target);
@@ -501,6 +542,32 @@ class PlayerService {
     await Future<void>.delayed(const Duration(milliseconds: 350));
     actual = _player?.state.position ?? Duration.zero;
     if (_seekCloseEnough(actual, target, tolerance)) return;
+
+    // Dart 侧状态滞后 ≠ 流坏了：读 mpv 原生属性确认。只要 duration 有效，
+    // 说明文件已被识别、可正常解码，seek 只是还没缓冲到目标位置
+    //（磁力流远端续播的典型表现）。此时绝不能重开流。
+    final p = _player;
+    if (p != null) {
+      try {
+        final rawDur = await getMpvProperty(p, 'duration');
+        final dur = double.tryParse(rawDur?.trim() ?? '') ?? 0;
+        if (dur > 0) {
+          final rawPos = await getMpvProperty(p, 'time-pos');
+          DebugLog.log(
+            'Play',
+            'openStart seek 未到位但流已就绪: '
+            'target=${target.inSeconds}s state.pos=${actual.inSeconds}s '
+            'mpv.duration=${dur.toStringAsFixed(1)}s '
+            'mpv.time-pos=${rawPos ?? '-'} '
+            '→ 不重开流，等待缓冲后由续播纠偏拉回',
+            flush: true,
+          );
+          return;
+        }
+      } catch (e) {
+        debugPrint('openStart seek 二次确认失败: $e');
+      }
+    }
 
     debugPrint(
       'startAt seek failed: target=${target.inSeconds}s actual=${actual.inSeconds}s',
@@ -536,6 +603,14 @@ class PlayerService {
       if (_disposed || _player == null) return;
       final dur = _player!.state.duration;
       if (dur > Duration.zero && dur >= target) return;
+      // 磁力流 `open(play:false)` 阶段 media_kit 的 Dart 状态会长期停在 0，
+      // 但 mpv 原生 duration 往往已经就绪（真机实测 Dart=0 / mpv=7507s）。
+      // 此时流已可定位，别再空等满 8 秒。
+      try {
+        final raw = await getMpvProperty(_player!, 'duration');
+        final nativeDur = double.tryParse(raw?.trim() ?? '') ?? 0;
+        if (nativeDur > 0 && nativeDur >= target.inSeconds) return;
+      } catch (_) {}
       await Future<void>.delayed(const Duration(milliseconds: 200));
     }
     final finalDur = _player?.state.duration ?? Duration.zero;
@@ -578,14 +653,61 @@ class PlayerService {
   }
 
   /// 加载外挂字幕文件（SRT / VTT 等，由 mpv 解析）。
+  ///
+  /// 2026-11-08 真机修复：原先走 `SubtitleTrack.uri(Uri.file(path).toString())`，
+  /// Android 上 `file://` URL 传给 mpv `sub-add` 后轨没进 track-list
+  /// （真机日志 `sid=3 visibility=yes sub-text=[] sub轨=仅两条内封 PGS`），
+  /// 「已挂在线简中字幕」其实是假象。改为先用 mpv 标准裸路径
+  /// `sub-add <path> select`，回读 track-list 确认；没有外部轨再用官方
+  /// `SubtitleTrack.data`（让 media_kit 自己写临时文件）兜底。
   Future<void> setExternalSubtitleFromFile(String filePath) async {
     if (kIsWeb || _player == null) return;
-    await _player!.setSubtitleTrack(
-      SubtitleTrack.uri(
-        Uri.file(filePath).toString(),
-        title: 'External',
-      ),
+    final p = _player!;
+    try {
+      final f = File(filePath);
+      final exists = f.existsSync();
+      DebugLog.log(
+        'Subtitle',
+        '外挂字幕挂载: path=$filePath exists=$exists '
+        'size=${exists ? f.lengthSync() : 0}',
+      );
+    } catch (_) {}
+
+    try {
+      await runMpvCommand(p, ['sub-add', filePath, 'select']);
+    } catch (e) {
+      debugPrint('mpv sub-add 裸路径失败: $e');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+
+    var hasExternal = false;
+    try {
+      final raw = await getMpvProperty(p, 'track-list');
+      hasExternal = (raw ?? '').contains('"external":true') ||
+          (raw ?? '').contains('"external": true');
+    } catch (_) {}
+    DebugLog.log(
+      'Subtitle',
+      '外挂字幕回读: 裸路径 sub-add 后外部轨=${hasExternal ? '存在' : '缺失'}',
     );
+
+    if (!hasExternal) {
+      try {
+        final text = await File(filePath).readAsString(encoding: utf8);
+        if (text.isNotEmpty) {
+          await p.setSubtitleTrack(
+            SubtitleTrack.data(
+              text,
+              title: 'External',
+              language: 'zh',
+            ),
+          );
+          DebugLog.log('Subtitle', '外挂字幕: 已走 SubtitleTrack.data 兜底');
+        }
+      } catch (e) {
+        debugPrint('外挂字幕 data 兜底失败: $e');
+      }
+    }
     // 换轨后 mpv 会保留 sub-delay，但外挂轨刚挂载时再刷一次更稳。
     await _applySubtitleDelay();
   }
@@ -652,8 +774,14 @@ class PlayerService {
       'demuxer-max-bytes': '${c.demuxerMaxBytes}',
       'demuxer-readahead-secs': '${c.demuxerReadaheadSecs}',
       'demuxer-readahead-bytes': '${c.demuxerReadaheadBytes}',
+      'cache-pause': c.cachePause,
       'network-timeout': '${c.networkTimeoutSecs}',
       'hwdec': mpvHwDecValue(_hwDecodeMode),
+      // mpv 的 `--slang` 是**加载期选项**：只在 open 媒体时参与自动选轨。
+      // 之前放到首帧后 4s 才设，早已错过选轨时机，是内封中文轨选不中的
+      // 根因之一（真机回读 sid=no）。这里在播放器初始化期（open 之前）下发，
+      // 让 mpv 打开文件时直接按语言优先级选中简中轨。
+      'slang': 'chi,zho,zh,chs,cht,zh-Hans',
     };
 
     for (final entry in props.entries) {
@@ -672,12 +800,67 @@ class PlayerService {
       'demuxer-max-bytes',
       'demuxer-readahead-secs',
       'demuxer-readahead-bytes',
+      'cache-pause',
       'cache-size',
+      'slang',
+      // 11-08 教训：数值属性设失败只 debugPrint，之前漏读这一项，
+      // 「network-timeout=60 已下发」其实从未被证实过。
+      'network-timeout',
     ]) {
       applied.add('$key=${await _safeMpvProperty(key) ?? '?'}');
     }
-    DebugLog.log('Play', 'mpv 缓存参数生效值: ${applied.join(' ')}', flush: true);
+    DebugLog.log(
+      'Play',
+      'mpv 调优参数生效值: runId=${PlaybackExperiment.runId} '
+          '${applied.join(' ')}',
+      flush: true,
+    );
+    _startExperimentLoop();
     await _persistHwDecodeState();
+  }
+
+  /// 实验台：每 5s 采一次 mpv 真实缓冲曲线，并检测配置热切。
+  ///
+  /// 只写观测数据、不改任何播放行为；实验文件不存在时整个定时器都不会创建。
+  void _startExperimentLoop() {
+    if (!PlaybackExperiment.enabled) return;
+    // 只允许一个活跃探针：切到新 DetailPlayer 时先停掉旧实例的定时器。
+    if (!identical(_activeProbeOwner, this)) {
+      _activeExperimentTimer?.cancel();
+      _activeExperimentTimer = null;
+      _activeProbeOwner = this;
+    }
+    _experimentTimer?.cancel();
+    _experimentTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+      // 旧实例 / 已 dispose / 播放器已释放 → 停表且绝不写空值行。
+      if (_disposed || _player == null || !identical(_activeProbeOwner, this)) {
+        _experimentTimer?.cancel();
+        _experimentTimer = null;
+        return;
+      }
+      // 8 个属性是 8 次 native IPC；上一轮没读完就别再起一轮，
+      // 否则并发抢通道也会把属性读成空。
+      if (_probeBusy) return;
+      _probeBusy = true;
+      try {
+        final changed = await PlaybackExperiment.load();
+        if (changed != null) {
+          DebugLog.log(
+            'Experiment',
+            '热切参数 -> runId=$changed ${PlaybackExperiment.summary}',
+            flush: true,
+          );
+          final cb = PlaybackExperiment.reapply;
+          if (cb != null) unawaited(cb());
+        }
+        await probeCacheState();
+      } catch (e) {
+        DebugLog.log('Experiment', '实验探针异常: $e');
+      } finally {
+        _probeBusy = false;
+      }
+    });
+    _activeExperimentTimer = _experimentTimer;
   }
 
   /// 把当前硬解档位落盘到日志目录（`hwdec_state.txt`）。
@@ -744,6 +927,57 @@ class PlayerService {
       return VideoOutputMode.gpu;
     }
     return _videoOutputMode;
+  }
+
+  /// mpv 当前能否把字幕画进视频帧。
+  ///
+  /// 决定字幕由 mpv 还是 Flutter 浮层渲染，见 `subtitle_render_policy.dart`。
+  /// 用实际生效的 vo（而非名义档位）：`mediacodec_embed` 在软解下会被
+  /// [_effectiveVoMode] 回落成 `gpu`，此时 mpv 又能画字幕了。
+  bool get mpvCanRenderSubtitle {
+    if (kIsWeb) return false; // web 字幕轨行为与原生不同，维持浮层兜底
+    if (!Platform.isAndroid) return true; // 桌面 mpv 正常
+    return _effectiveVoMode() != VideoOutputMode.mediacodecEmbed;
+  }
+
+  /// 用户是否要显示字幕（由 `DetailPlayer.showSubtitles` 收口写入）。
+  bool _subtitleVisible = false;
+
+  /// 同步字幕开关到 mpv。
+  ///
+  /// 单一渲染源是 mpv，所以「关字幕」必须真的写 `sub-visibility=no`；
+  /// 只改 Dart 字段的话，mpv 那份照旧画在帧里 —— 这正是历史上快捷键与
+  /// 弹窗「关闭字幕」关不掉的原因。
+  Future<void> syncSubtitleVisibility(bool visible) async {
+    _subtitleVisible = visible;
+    DebugLog.log(
+      'Subtitle',
+      '字幕可见性同步: show=$visible 渲染源='
+          '${resolveSubtitleRenderer(mpvCanRenderSubtitle: mpvCanRenderSubtitle).name}',
+      flush: true,
+    );
+    await _pushSubtitleVisibility();
+  }
+
+  /// 幂等重发字幕可见性。
+  ///
+  /// 每次 `open` 都会让 media_kit 的 `_create()` 把 `sub-visibility` /
+  /// `secondary-sub-visibility` 重置成 `yes`，所以 open 收尾和播放器重建后
+  /// 都要压一次，否则「上次关了字幕，换集又自己冒出来」。
+  Future<void> _pushSubtitleVisibility() async {
+    final p = _player;
+    if (p == null) return;
+    try {
+      await setMpvProperty(
+        p,
+        'sub-visibility',
+        subtitleVisibilityValue(showSubtitles: _subtitleVisible),
+      );
+    } catch (_) {}
+    // 第三处潜在双份来源：media_kit 默认把次字幕也设成可见。
+    try {
+      await setMpvProperty(p, 'secondary-sub-visibility', 'no');
+    } catch (_) {}
   }
 
   /// 创建 `VideoController` 时必须显式给出的 vo / hwdec。
@@ -869,12 +1103,22 @@ class PlayerService {
 
   /// 读一个可能不被当前 mpv 构建支持的属性（不支持时返回 null，不抛异常）。
   Future<String?> _safeMpvProperty(String name) async {
+    // 捕获局部引用：await 期间播放器可能被 recycle/dispose 置 null，
+    // 用 `_player!` 会直接抛异常并被吞成「属性不支持」，制造假空值。
+    final p = _player;
+    if (p == null) return null;
     try {
-      return await getMpvProperty(_player!, name);
+      return await getMpvProperty(p, name);
     } catch (_) {
       return null;
     }
   }
+
+  /// 供上层读 mpv 原生属性（首帧 / 解码证据等）。
+  ///
+  /// 磁力首帧看门狗要用 `estimated-vf-fps` 区分「解析出时长但一帧没解」
+  /// 与「真的出画」；这个属性读失败一律返回 null，调用方按「无证据」处理。
+  Future<String?> mpvProperty(String name) => _safeMpvProperty(name);
 
   /// 把 mpv 的帧率写进日志（fd 泄漏排查专用）。
   ///
@@ -905,10 +1149,29 @@ class PlayerService {
     final idle = await _safeMpvProperty('demuxer-cache-idle');
     final bs = await _safeMpvProperty('cache-buffering-state');
     final sp = await _safeMpvProperty('cache-speed');
+    // 「本地磁力流到底还在不在供数」的唯一直接证据：
+    // `raw-input-rate` 是 demuxer 每秒从输入（我们的本地 HTTP 流）吃进的字节数。
+    // 2026-11-08 真机现场，画面每 5 分钟才前进一帧，但当时没有任何一路数据
+    // 能区分「种子断供」与「本地服务器堵住」——加上这三项即可一眼定案：
+    //   raw-input-rate≈0 && eof-reached=yes → 流被对端关掉了（EOF）
+    //   raw-input-rate 正常 && cache 在涨 → 问题在解码/送显，不在数据
+    final inRate = await _safeMpvProperty('raw-input-rate');
+    final eof = await _safeMpvProperty('eof-reached');
+    final fsz = await _safeMpvProperty('file-size');
+    // inst 标记用于验收「连续读数来自同一个播放器实例」。
+    // 第九轮：mpv 读不到属性时可能返回空字符串而不是 null，旧判据
+    // `ct != null && cd != null` 会把「读到了空串」误判成有效观测，
+    // 使 probe=ok 比例虚高、空值率口径失真。只有能解析成数值才算有效。
+    final ok = double.tryParse(ct ?? '') != null
+        && double.tryParse(cd ?? '') != null;
     DebugLog.log(
       'Play',
-      '缓存: demuxer-cache-time=$ct cache-duration=$cd idle=$idle '
-          'buffering-state=$bs cache-speed=$sp',
+      '缓存: runId=${PlaybackExperiment.runId} inst=$_probeId '
+          'probe=${ok ? 'ok' : 'stale'} '
+          'demuxer-cache-time=$ct cache-duration=$cd idle=$idle '
+          'buffering-state=$bs cache-speed=$sp raw-input-rate=$inRate '
+          'eof=$eof file-size=$fsz',
+      flush: true,
     );
   }
 
@@ -1092,6 +1355,14 @@ class PlayerService {
   /// 释放播放器
   Future<void> dispose() async {
     _disposed = true;
+    // 门 0：页面退出必须停掉探针，否则旧实例会一直写全空缓存行。
+    _experimentTimer?.cancel();
+    _experimentTimer = null;
+    if (identical(_activeProbeOwner, this)) {
+      _activeExperimentTimer?.cancel();
+      _activeExperimentTimer = null;
+      _activeProbeOwner = null;
+    }
     final pendingPlay = _playChain;
     if (pendingPlay != null) {
       try {
@@ -1156,6 +1427,7 @@ class PlayerService {
         _player!,
         configuration: _videoControllerConfig(),
       );
+      await _pushSubtitleVisibility();
       _wireStreams();
 
       recycleEpoch++;
@@ -1165,6 +1437,7 @@ class PlayerService {
         await _playInternal(url, startAt: pos > Duration.zero ? pos : null);
       } else {
         await _player!.open(Media(url), play: false);
+        await _pushSubtitleVisibility();
         if (pos > Duration.zero) {
           await waitUntilSeekable(pos);
           await _seekForOpenStart(pos);

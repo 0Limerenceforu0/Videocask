@@ -33,7 +33,7 @@ class MainActivity : FlutterActivity() {
         if (messenger != null) {
             // 让 Dart 在播放器后端（media_kit/libmpv）初始化后重新断言崩溃处理器，
             // 抢回可能被覆盖的 native 信号处理器。
-            MethodChannel(messenger, "guanzi/crash").setMethodCallHandler { call, result ->
+            MethodChannel(messenger, "videocask/crash").setMethodCallHandler { call, result ->
                 if (call.method == "reassert") {
                     CrashHandler.install(this)
                     result.success(null)
@@ -42,9 +42,9 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-            // 诊断日志导出：把 App 私有目录里的 guanzi_logs（含 crash_*.txt）打包后的 zip
+            // 诊断日志导出：把 App 私有目录里的 videocask_logs（含 crash_*.txt）打包后的 zip
             // 写入系统「下载」目录，免权限、用户可在任意文件管理器取用/删除。
-            MethodChannel(messenger, "guanzi/logExport").setMethodCallHandler { call, result ->
+            MethodChannel(messenger, "videocask/logExport").setMethodCallHandler { call, result ->
                 when (call.method) {
                     "export" -> {
                         val srcPath = call.argument<String>("path")
@@ -70,7 +70,7 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-            // ===== 系统音量统一（guanzi/volume）=====
+            // ===== 系统音量统一（videocask/volume）=====
             // App 内音量手势 / 滑块与系统音量（STREAM_MUSIC）统一为同一个音量；
             // 实际响度由系统音量决定，播放器保持 100% 直通，仅静音走播放器增益。
             val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
@@ -79,7 +79,7 @@ class MainActivity : FlutterActivity() {
                 val max = audioManager.getStreamMaxVolume(musicStream).coerceAtLeast(1)
                 return audioManager.getStreamVolume(musicStream).toDouble() / max
             }
-            MethodChannel(messenger, "guanzi/volume").setMethodCallHandler { call, result ->
+            MethodChannel(messenger, "videocask/volume").setMethodCallHandler { call, result ->
                 when (call.method) {
                     "getVolume" -> result.success(currentVolumeLevel())
                     "getMaxVolume" -> result.success(audioManager.getStreamMaxVolume(musicStream))
@@ -94,10 +94,10 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-            // ===== 后台播放前台服务（guanzi/playbackService）=====
+            // ===== 后台播放前台服务（videocask/playbackService）=====
             // Dart 侧在「通知栏显示后台播放」时启动，回到前台/停止播放时关闭。
             // 服务本身不碰播放器，只负责把进程钉在 foreground 优先级。
-            MethodChannel(messenger, "guanzi/playbackService").setMethodCallHandler { call, result ->
+            MethodChannel(messenger, "videocask/playbackService").setMethodCallHandler { call, result ->
                 when (call.method) {
                     "start" -> {
                         val title = call.argument<String>("title")
@@ -132,11 +132,11 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-            // ===== 设备信息（guanzi/device）=====
+            // ===== 设备信息（videocask/device）=====
             // 只暴露内存：demuxer 缓冲挡位要按整机内存分档（128~512MB），
             // 并按「系统可用内存」在播放中动态升降档。
             // /proc/meminfo 在 Android 10+ 对普通应用已受限，必须走 ActivityManager。
-            MethodChannel(messenger, "guanzi/device").setMethodCallHandler { call, result ->
+            MethodChannel(messenger, "videocask/device").setMethodCallHandler { call, result ->
                 when (call.method) {
                     "getTotalMemory" -> {
                         val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
@@ -156,13 +156,13 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-            // ===== 挖孔区绘制（guanzi/display）=====
+            // ===== 挖孔区绘制（videocask/display）=====
             // 默认（DEFAULT）系统会把前置挖孔划成安全区，应用窗口被裁窄。
             // 实测荣耀 70 横屏：屏幕 2400x1080，mAppBounds 只有 2310x1080，
             // 右侧 90px 永远画不进去（视频因此看起来像「右边一条黑边」）。
             // 全屏播放时切成 ALWAYS/SHORT_EDGES，让画面真正铺满整块屏幕；
             // 退出全屏必须恢复 DEFAULT，否则其它页面顶部/侧边会被挖孔遮挡。
-            MethodChannel(messenger, "guanzi/display").setMethodCallHandler { call, result ->
+            MethodChannel(messenger, "videocask/display").setMethodCallHandler { call, result ->
                 when (call.method) {
                     "setCutoutMode" -> {
                         val allow = call.argument<Boolean>("allow") ?: false
@@ -173,10 +173,10 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-            // ===== 应用内更新（guanzi/update）=====
+            // ===== 应用内更新（videocask/update）=====
             // 原生只负责三件事：报 ABI、查/开「安装未知应用」权限、把 APK 交给系统安装器。
             // 版本比较、下载、进度、镜像回退全在 Dart 侧，保持各平台逻辑一致。
-            MethodChannel(messenger, "guanzi/update").setMethodCallHandler { call, result ->
+            MethodChannel(messenger, "videocask/update").setMethodCallHandler { call, result ->
                 when (call.method) {
                     // 设备首选 ABI，用于挑对应架构的 APK。
                     "getAbi" -> result.success(Build.SUPPORTED_ABIS.toList())
@@ -251,7 +251,7 @@ class MainActivity : FlutterActivity() {
             }
 
             // ===== 硬件音量键 / 系统设置变化回写 Dart（多数设备经 VOLUME_CHANGED_ACTION）。
-            val volumeEvents = EventChannel(messenger, "guanzi/volumeEvents")
+            val volumeEvents = EventChannel(messenger, "videocask/volumeEvents")
             var volumeSink: EventChannel.EventSink? = null
             val volumeReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {

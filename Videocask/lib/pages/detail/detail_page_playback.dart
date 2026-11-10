@@ -4,7 +4,7 @@ part of 'detail_page.dart';
 // 通过 extension on _DetailPageState 直接访问原类的私有成员。
 
 /// 挖孔区绘制通道（仅 Android 侧实现，见 `MainActivity.applyCutoutMode`）。
-const MethodChannel _displayChannel = MethodChannel('guanzi/display');
+const MethodChannel _displayChannel = MethodChannel('videocask/display');
 
 extension _DetailPagePlaybackExt on _DetailPageState {  Movie? _displayMovie(MovieProvider mp) {
     final cm = mp.currentMovie;
@@ -137,12 +137,35 @@ extension _DetailPagePlaybackExt on _DetailPageState {  Movie? _displayMovie(Mov
     // 缓冲挡位不重建播放器：applyPlaybackStrategy 只在 vo 变化时 recycle，
     // 其它情况走 _applyMpvTuning 热设 mpv 属性，改完立刻生效。
     final buffer = settings.effectiveBufferBytes;
-    if (hw == _appliedHwDecodeMode &&
+    // 实验台启用时不做早退：每组参数都必须真正重新下发一次，否则
+    // 「代码写了」和「mpv 收到了」会再次脱节。
+    if (!PlaybackExperiment.enabled &&
+        hw == _appliedHwDecodeMode &&
         vo == _appliedVideoOutputMode &&
         buffer == _appliedBufferBytes) {
       return;
     }
     unawaited(_applyPlayerPlaybackTuning());
+  }
+
+  /// 实验台参数覆盖（文件不存在时原样返回，生产路径零变化）。
+  PlaybackStrategyConfig _experimentConfig(PlaybackStrategyConfig c) {
+    if (!PlaybackExperiment.enabled) return c;
+    const mb = 1024 * 1024;
+    int? bytes(String key) {
+      final v = PlaybackExperiment.intOf(key);
+      return v == null ? null : v * mb;
+    }
+
+    return c.copyWith(
+      demuxerBufferBytes: bytes('buffer_mb'),
+      demuxerMaxBytes: bytes('max_mb'),
+      demuxerReadaheadBytes: bytes('readahead_mb'),
+      demuxerReadaheadSecs: PlaybackExperiment.intOf('readahead_secs'),
+      cacheSecs: PlaybackExperiment.intOf('cache_secs'),
+      networkTimeoutSecs: PlaybackExperiment.intOf('network_timeout'),
+      cachePause: PlaybackExperiment.strOf('cache_pause'),
+    );
   }
 
   Future<void> _applyPlayerPlaybackTuning() async {
@@ -153,12 +176,46 @@ extension _DetailPagePlaybackExt on _DetailPageState {  Movie? _displayMovie(Mov
     _appliedHwDecodeMode = hw;
     _appliedVideoOutputMode = vo;
     _appliedBufferBytes = settings.effectiveBufferBytes;
+    final base = PlaybackStrategyConfig.fromKey(
+      settings.playbackStrategy,
+      bufferBytes: settings.effectiveBufferBytes,
+      hrSeek: settings.hrSeekMode,
+      // 磁力 P2P 流：关闭 cache-pause，打破「暂停→停止读请求→下载塌缩→
+      // 永远不恢复」的死锁（见 PlaybackStrategyConfig.cachePause 注释）。
+      cachePause: _isMagnetDetailEntry ? 'no' : 'yes',
+    );
+    // 🔴 2026-11-08 真机（4081）治本：磁力 P2P 本地流是「按 mpv 请求逐 piece
+    // 下载」，不是秒回的本地文件 / 快 HTTP。三档策略默认的 512MB demuxer 缓存
+    // + 1800s readahead 会让 mpv 一开播就试图预读 512MB / 30 分钟，本地流服务
+    // 器供不上 → mpv 的 open/demux 卡住 → 偶发 `unsupported`（数据在流却读不出
+    // 画面）。磁力流改用轻量缓存（128MB 上限 + 120s readahead）+ 更大的
+    // network-timeout（让 mpv 愿意等分片按需到达），开播即轻量、随到随播。
+    final baseCfg = _isMagnetDetailEntry
+        ? base.copyWith(
+            demuxerBufferBytes: 128 * 1024 * 1024,
+            demuxerMaxBytes: 128 * 1024 * 1024,
+            demuxerReadaheadBytes: 128 * 1024 * 1024,
+            demuxerReadaheadSecs: 120,
+            cacheSecs: 120,
+            networkTimeoutSecs: 60,
+          )
+        : base;
+    final cfg = _experimentConfig(baseCfg);
+    // 播放中热切参数时由实验台回调这里重新下发。
+    PlaybackExperiment.reapply = _applyPlayerPlaybackTuning;
+    if (PlaybackExperiment.enabled) {
+      DebugLog.log(
+        'Experiment',
+        '参数下发 runId=${PlaybackExperiment.runId} '
+            'max=${cfg.demuxerMaxBytes} secs=${cfg.cacheSecs} '
+            'raSecs=${cfg.demuxerReadaheadSecs} '
+            'cachePause=${cfg.cachePause} timeout=${cfg.networkTimeoutSecs} '
+            'magnetEntry=$_isMagnetDetailEntry',
+        flush: true,
+      );
+    }
     await _playerModule.playerService.applyPlaybackStrategy(
-      PlaybackStrategyConfig.fromKey(
-        settings.playbackStrategy,
-        bufferBytes: settings.effectiveBufferBytes,
-        hrSeek: settings.hrSeekMode,
-      ),
+      cfg,
       hwDecodeMode: hw,
       videoOutputMode: vo,
     );

@@ -12,8 +12,8 @@ class SystemVolume {
 
   static final SystemVolume instance = SystemVolume._();
 
-  static const MethodChannel _channel = MethodChannel('guanzi/volume');
-  static const EventChannel _events = EventChannel('guanzi/volumeEvents');
+  static const MethodChannel _channel = MethodChannel('videocask/volume');
+  static const EventChannel _events = EventChannel('videocask/volumeEvents');
 
   Stream<double>? _stream;
 

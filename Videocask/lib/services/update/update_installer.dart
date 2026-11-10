@@ -43,13 +43,13 @@ class InstallResult {
 class UpdateInstaller {
   UpdateInstaller._();
 
-  static const MethodChannel _channel = MethodChannel('guanzi/update');
+  static const MethodChannel _channel = MethodChannel('videocask/update');
 
   /// 下载目录：Android 用应用私有 cache（FileProvider 可共享，免存储权限），
   /// Windows 用临时目录（更新完即可丢弃）。
   static Future<Directory> downloadDirectory() async {
     final base = await getTemporaryDirectory();
-    final dir = Directory('${base.path}${Platform.pathSeparator}guanzi_updates');
+    final dir = Directory('${base.path}${Platform.pathSeparator}videocask_updates');
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
@@ -137,7 +137,7 @@ class UpdateInstaller {
     try {
       final workRoot = Directory(
         '${(await getTemporaryDirectory()).path}'
-        '${Platform.pathSeparator}guanzi_update_payload',
+        '${Platform.pathSeparator}videocask_update_payload',
       );
       if (await workRoot.exists()) {
         await workRoot.delete(recursive: true);
@@ -167,7 +167,7 @@ class UpdateInstaller {
       }
 
       final batPath =
-          '${workRoot.parent.path}${Platform.pathSeparator}guanzi_apply_update.bat';
+          '${workRoot.parent.path}${Platform.pathSeparator}videocask_apply_update.bat';
       final script = _buildWindowsApplyScript(
         payloadDir: workRoot.path,
         installDir: installDir,

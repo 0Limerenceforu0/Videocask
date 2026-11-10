@@ -688,9 +688,15 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
                 // 磁力 P2P 准备：仅底部进度条 + 单行文案（避免与中心 loading 叠加）
                 if (_showMagnetPrepIndicator()) _buildTorrentProgressBar(),
 
-                // 字幕叠加层
-                if (_playerModule.showSubtitles &&
-                    _playerModule.currentSubtitleText.isNotEmpty)
+                // 字幕叠加层：只在 mpv 画不了字幕时兜底
+                // （Android vo=mediacodec_embed / Web）。
+                // 常态下字幕由 mpv/libass 画进视频帧，这里再叠一层就会出现
+                // 「同一句台词上下两份 + 半透明黑底」，且投屏/截图与手机屏不一致。
+                if (shouldShowFlutterOverlay(
+                  showSubtitles: _playerModule.showSubtitles,
+                  renderer: _playerModule.subtitleRenderer,
+                  subtitleText: _playerModule.currentSubtitleText,
+                ))
                   _buildSubtitleOverlay(),
 
                 // 手势提示（亮度/音量）

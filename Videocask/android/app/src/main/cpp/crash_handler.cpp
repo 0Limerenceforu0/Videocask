@@ -122,7 +122,7 @@ static void CrashSignalHandler(int sig) {
   strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tmv);
 
   std::string dir = g_log_dir;
-  if (dir.empty()) dir = "/sdcard/Android/data/com.example.movie_app/files/guanzi_logs";
+  if (dir.empty()) dir = "/sdcard/Android/data/com.example.movie_app/files/videocask_logs";
   EnsureDir(dir.c_str());
 
   std::string file = dir + "/crash_" + stamp + ".txt";
@@ -131,7 +131,7 @@ static void CrashSignalHandler(int sig) {
 
   char header[512];
   int hl = snprintf(header, sizeof(header),
-      "Guanzi native crash: signal %d (%s)\n"
+      "Videocask native crash: signal %d (%s)\n"
       "time: %s\n"
       "process: com.example.movie_app\n"
       "frames: %zu\n"
@@ -164,7 +164,7 @@ static void CrashSignalHandler(int sig) {
   AppendFdState(fd, dir);
   close(fd);
 
-  __android_log_print(ANDROID_LOG_ERROR, "GuanziCrash",
+  __android_log_print(ANDROID_LOG_ERROR, "VideocaskCrash",
       "native crash signal %d written to %s", sig, file.c_str());
 
   // 直接退出，让进程干净死亡（已写好可读栈）。

@@ -9,6 +9,42 @@
 > ⚠️ 早期本文件写的「打包一次升一次」是错的，指的是「全部打包给我」的交付动作，
 > 不是任意一次打包。
 
+## 1.1.8 (2026-11-10)
+
+> 本次为 Android + Windows + Web 三端一次性交付，版本 `1.1.8+68`。
+> 相对 1.1.7 的全部改动如下。磁力缓冲「部分 piece 供数」实验经真机双向压力配对确认
+> 无可复现收益，**默认保持关闭**，本版播放行为与 1.1.7 一致，不含该项优化。
+
+### 字幕与资源标注
+
+- 搜索结果、详情页、下载按钮旁的字幕标注改为分层探测结论：快速层看元数据文件清单，
+  用户主动点徽标才读 MKV 内封轨 / 外挂字幕正文；取不到信息时明确写「字幕未知」，
+  不再把「未知」误标成「没有字幕」，也不让探测抢播放的 peer。
+- 磁力资源新增音轨 / 配音语言与字幕语言徽标，进详情页之前即可判断资源语言。
+- 修复双字幕重影与字幕黑底：统一由 mpv / libass 单一渲染源出图，
+  移除 Flutter 字幕浮层的重复绘制；外挂 SRT 与内封轨不再互相打架。
+- 修复在线简中字幕匹配闭环；内封 `[简体内封]` 多为 PGS 图形轨、Android mpv 无法选中，
+  此时自动降级到在线 SRT，并按正文汉字数校验，最多换 6 条。
+
+### 播放稳定性与画面
+
+- 修复磁力播放「永久定格」：同一 info-hash 复用 `torrent_handle` 时两个 id 指向同一种子，
+  字幕层或任一方 `remove_torrent()` 会删掉正在播放的文件；现改为复用 id、
+  活跃流绑定拒删、删除前解绑并唤醒等待线程。
+- 修复全屏播放右侧黑边（前置挖孔 cutout 安全区），进入全屏用 `ALWAYS`、退出恢复 `DEFAULT`。
+- 修复失败态无人清理导致压住在播画面：位置连续推进才撤销失败态，接策略层纯函数与单测。
+- 修复调试日志并发写入丢行：改用 `RandomAccessFile` + 同步写 + 完整性横幅，
+  日志可按「起始行号区间 + 本次启动横幅」双重切段。
+
+### 构建与 Web
+
+- 修复 Web 端构建失败：新增的字幕探测服务无条件引入 `dart:io` 与 `libtorrent_flutter`，
+  经所有端共用的 `magnet_action_widgets.dart` 把 `dart:ffi` 拖进 dart2js 编译单元，
+  报 `Only JS interop members may be 'external'`。现按平台条件加载，
+  Web 端使用不依赖 FFI 的占位实现，结论显示「字幕未知」。
+- 应用内更新检测沿用 GitHub `releases/latest`；本版 tag `v1.1.8`，
+  客户端按语义版本比较后能正确识别 1.1.7 → 1.1.8 的升级。
+
 ## 1.1.7 (2026-11-06)
 
 > 本次为 Android + Windows + Web 三端一次性交付，版本 `1.1.7+67`。
@@ -55,13 +91,13 @@
 - 磁力内置死源（YTS / 1337x / BT4G / Nyaa 等）从 UI 收敛并默认关闭，给一次自动关闭提示。
 - 数据导出 / 导入改走文件（系统下载目录 + `file_picker`）；WebDAV 抽公共弹窗，
   「我的」页可直达、设置页支持 anchor 定位。
-  - 补修跨平台回归：`guanzi/logExport` 通道只有 Android 实现，旧版 `DataExport`
+  - 补修跨平台回归：`videocask/logExport` 通道只有 Android 实现，旧版 `DataExport`
     与 `LogExport` 无条件调用 → Windows / Linux 点导出必抛
     `MissingPluginException`（导出数据降级剪贴板、导出日志直接失败）。新增
     `download_export.dart` 按平台分流：Android→MediaStore 通道，桌面→直接写
     `getDownloadsDirectory()`（取不到退应用文档目录），Web→剪贴板；路由抽成
     纯函数、写文件抽成可直测 helper，7 条单测覆盖真实落盘、二进制 zip、
-    同名覆盖与 `write()` 端到端。Windows AOT 里 `guanzi/logExport` 被
+    同名覆盖与 `write()` 端到端。Windows AOT 里 `videocask/logExport` 被
     tree-shake 掉，编译期即确认桌面不会走 Android 通道。
 - 「我的」页重排：头像压一行、统计卡只留「继续观看」、删快捷任务组、
   「数据同步」改「云备份」、关于与播放源去重；账号体系按用户要求保留。

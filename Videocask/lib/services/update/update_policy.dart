@@ -5,7 +5,7 @@
 ///
 /// 约定（与发版脚本 `tool/publish_release.py` 保持一致）：
 /// - GitHub tag 形如 `v1.1.8`，Release 标题形如 `罐子 1.1.8`；
-/// - 产物名形如 `guanzi-android-arm64-v1.1.8.apk`；
+/// - 产物名形如 `videocask-android-arm64-v1.1.8.apk`；
 /// - 正文含 `[强制更新]` 或 `[mandatory]` 时，跳过「稍后」直接要求更新。
 library;
 
@@ -172,7 +172,7 @@ const Map<String, List<String>> _abiAliases = {
 ///
 /// 匹配规则（大小写不敏感）：
 /// - Android：名字必须含 `android`；优先与设备 abi 精确对应，
-///   其次其它 abi，最后接受不带 abi 的通用包（`guanzi-android-v1.1.8.apk`）。
+///   其次其它 abi，最后接受不带 abi 的通用包（`videocask-android-v1.1.8.apk`）。
 /// - Windows：名字必须含 `windows` 且以 `.zip` 结尾（项目发的是绿色版压缩包）。
 /// - Web：名字必须含 `web` 且以 `.zip` 结尾。
 ///

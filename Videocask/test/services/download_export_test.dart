@@ -36,7 +36,7 @@ void main() {
     late Directory root;
 
     setUp(() async {
-      root = await Directory.systemTemp.createTemp('guanzi_download_export_');
+      root = await Directory.systemTemp.createTemp('videocask_download_export_');
     });
 
     tearDown(() async {
@@ -51,12 +51,12 @@ void main() {
 
       final result = await DownloadExport.copyIntoDirectory(
         sourcePath: src.path,
-        name: 'guanzi_backup_test.json',
+        name: 'videocask_backup_test.json',
         dir: destDir,
       );
 
       final dest = File(
-        '${destDir.path}${Platform.pathSeparator}guanzi_backup_test.json',
+        '${destDir.path}${Platform.pathSeparator}videocask_backup_test.json',
       );
       expect(destDir.existsSync(), isTrue);
       expect(dest.existsSync(), isTrue);
@@ -75,7 +75,7 @@ void main() {
 
       final result = await DownloadExport.copyIntoDirectory(
         sourcePath: src.path,
-        name: 'guanzi_logs_test.zip',
+        name: 'videocask_logs_test.zip',
         dir: destDir,
       );
 
@@ -115,7 +115,7 @@ void main() {
 
     setUp(() async {
       TestWidgetsFlutterBinding.ensureInitialized();
-      root = await Directory.systemTemp.createTemp('guanzi_write_e2e_');
+      root = await Directory.systemTemp.createTemp('videocask_write_e2e_');
       downloads = Directory('${root.path}${Platform.pathSeparator}Downloads');
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(
@@ -144,7 +144,7 @@ void main() {
 
       final dest = await DownloadExport.write(
         sourcePath: src.path,
-        name: 'guanzi_backup_e2e.json',
+        name: 'videocask_backup_e2e.json',
       );
       final f = File(dest);
       try {

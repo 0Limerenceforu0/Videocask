@@ -95,6 +95,14 @@ class DetailMagnetPlayback {
   /// 避免对死种做高频无意义的 addMagnet（每次都会新建种子对象 + 打 tracker）。
   static const Duration _retryDelayMax = Duration(seconds: 10);
 
+  /// 同一 streamUrl 的「就地重开 mpv」次数上限（不含首次）。
+  ///
+  /// 2026-11-08 真机（4081）定案：mpv open 本地 HTTP 流偶发卡住（unsupported）
+  /// 时，根因是 mpv 当次打开偶发失败，不是种子没数据——重开 mpv（只停 mpv、
+  /// 绝不删种子）即可救回，且数据已在缓冲，20s 内必出画。所以交出去后若读不
+  /// 出画面，先在本循环里重 open 几次，只有全部失败才退回外层删种子冷重启。
+  static const int _maxOpenRetries = 3;
+
   /// 是否无限自动重试。
   ///
   /// 用户 2026-10-28 明确要求：磁力连不上**不要「再试一次」按钮**，直接自动重试。
@@ -349,10 +357,25 @@ class DetailMagnetPlayback {
     // 表现就是黑屏 + 进度条 0%。这种「交接但零数据」必须在这里当失败处理，
     // 触发自动二次尝试，而不是把黑屏丢给用户。
     final buffered = player.torrentService.bufferPct;
+    // 🔴 2026-11-08 真机（4080）二次定案 —— 这里**不能再因「缓冲偏薄」重试**：
+    //
+    // 上一版用 `handoverTooThin(<12%)` 把 buffer=6% 判失败并触发重试。但
+    // `addMagnet` 会先 `stop()` 掉旧种子再加新种子，等于把已经 4MB/s 的下载
+    // 进度清零重来；新种子冷启动常常一个字节都拿不到（实测 torrentId=2 连了
+    // 927 个 peer 仍 `native=3 B/s`、done=0），最终 45s 超时「磁力播放失败」。
+    //
+    // 而「6% 交接后一帧都解不出」的真正根因是 mpv `cache-pause=yes`：缓存低于
+    // 低水位时 mpv 自暂停并**停止向本地流发读请求** → libtorrent 不再拉 piece
+    // → 下载塌缩 → 永远补不满（死锁）。现在磁力流已改 `cache-pause=no`，mpv
+    // 会持续读流、持续供数，6% 起播能自己长起来，就不该丢弃它重来。
+    //
+    // 结论：只有「一个字节都没有」才判失败并重试（死 swarm 才值得重新打洞）；
+    // 缓冲偏薄只记日志，照常交接，由 mpv 读流 + 看门狗兜底。
     if (buffered <= 0) {
       DebugLog.log(
         'Magnet',
-        '起流后零缓冲（${player.torrentService.metaWaitSeconds}s 内无数据）: '
+        '起流后零缓冲 buffer=$buffered% '
+        '(${player.torrentService.metaWaitSeconds}s): '
         'activePeers=${player.torrentService.activePeers} '
         'neverConnected=${player.torrentService.handoverWithoutPeers} '
         'seeds=${player.torrentService.seeds} '
@@ -362,6 +385,16 @@ class DetailMagnetPlayback {
       return MagnetAttemptResult.failed(
         message: l10n.detailMagnetNoData,
         retryable: true,
+        noFrame: true,
+      );
+    }
+    if (MagnetFirstFramePolicy.handoverTooThin(bufferPct: buffered)) {
+      DebugLog.log(
+        'Magnet',
+        '缓冲偏薄 buffer=$buffered% '
+        '(参考下限 ${MagnetFirstFramePolicy.minHandoverBufferPct}%) '
+        '→ 不重试，照常交接：cache-pause=no 会持续读流供数',
+        flush: true,
       );
     }
 
@@ -388,42 +421,95 @@ class DetailMagnetPlayback {
 
     await player.ensureInitialized();
     if (!isMounted() || playVersion != torrent.magnetPlayVersion) return null;
-
-    await applyPlayerTuning();
+    // 磁力链路较长（元数据 → 取文件 → 建流 → 起播），页面对象可能跨多次重建；
+    // 每次起播都幂等重装心跳，保证「在播期间一定有位置心跳 + 卡死看门狗」。
+    player.ensureHeartbeat();
     if (!isMounted() || playVersion != torrent.magnetPlayVersion) return null;
 
-    // 磁力本地 HTTP 流在 open 后立即 seek 易触发 mpv/libtorrent 原生崩溃；
-    // 续播改由 onDurationChanged → _applyPendingResume 在时长就绪后再 seek。
-    player.resetResumeConsumeForNewOpen();
-    // 交接前先记下基线：上一部片可能还残留着非零时长/位置，如果不比对基线，
-    // 「时长 > 0」会把「新流根本没打开」误判成「已经出画」。
-    final beforePosition = player.position;
-    final beforeDuration = player.duration;
-    await player.playerService.play(streamUrl);
-    if (!isMounted()) return null;
-
-    // 阶段 6 后半程：等第一帧。
+    // 🔴 2026-11-08 真机（4081）定案 —— 就地重开 mpv，不删种子。
     //
-    // 为什么必须等：mpv open 一个本地 HTTP 流不报错不代表能播。mp4 的 moov
-    // 在尾部（非 faststart）时要额外拉一段文件尾，头部解码器又要等关键帧，
-    // 这段时间 UI 上是 `0:00 / 0:00` + 全黑，而且**没有终点**——用户 2026-10-28
-    // 截图反馈的正是这个「没有时长的黑屏，一直黑屏」。
-    final frame = await _waitForFirstFrame(
-      playVersion: playVersion,
-      beforePosition: beforePosition,
-      beforeDuration: beforeDuration,
-    );
+    // 旧逻辑：_waitForFirstFrame 一旦判 `unsupported`（数据在流但 mpv 偶发打
+    // 不开），就返回 failed → 外层 _attempt 的 stop() 把**已下到 81% 的健康
+    // 种子整个删掉冷重启**；新种子冷启动常常拿不到数据 → 最终黑屏卡死。
+    // 而「换个全新种子反而能播」证明问题只是 mpv 当次 open 偶发卡住，重开即可。
+    //
+    // 所以这里把「mpv 打开/起播」单独抽成**就地重开循环**：对同一 streamUrl
+    // 重 open mpv（只停 mpv、绝不碰 torrentService），最多 _maxOpenRetries 次；
+    // 只有全部失败才退回外层删种子重开。这样健康的缓冲不会被废，冷启动翻车
+    // 也被绕开。
+    MagnetFirstFrameOutcome frame = MagnetFirstFrameOutcome.cancelled;
+    for (int openTry = 0; openTry < _maxOpenRetries; openTry++) {
+      if (openTry > 0) {
+        // 仅停 mpv（本地流服务器 / 种子保持存活，downloadSpeed 继续涨）。
+        await player.playerService.stop();
+        if (!isMounted() || playVersion != torrent.magnetPlayVersion) return null;
+        player.playbackErrorType = PlaybackErrorType.none;
+        player.magnetWaitingFirstFrame = false;
+        // 让 mpv 线程回到 idle，避免叠在上一轮 open 的残态上。
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        if (!isMounted() || playVersion != torrent.magnetPlayVersion) return null;
+        DebugLog.log(
+          'Magnet',
+          '就地重开 mpv 第 $openTry/${(_maxOpenRetries - 1)} 次'
+          '（不删种子，streamUrl 不变）',
+          flush: true,
+        );
+      }
+
+      await applyPlayerTuning();
+      if (!isMounted() || playVersion != torrent.magnetPlayVersion) return null;
+
+      // 磁力本地 HTTP 流在 open 后立即 seek 易触发 mpv/libtorrent 原生崩溃；
+      // 续播改由 onDurationChanged → _applyPendingResume 在时长就绪后再 seek。
+      player.resetResumeConsumeForNewOpen();
+      // 交接前先记下基线：上一部片可能还残留着非零时长/位置，如果不比对基线，
+      // 「时长 > 0」会把「新流根本没打开」误判成「已经出画」。
+      final beforePosition = player.position;
+      final beforeDuration = player.duration;
+      await player.playerService.play(streamUrl);
+      if (!isMounted()) return null;
+
+      // 阶段 6 后半程：等第一帧。
+      //
+      // 为什么必须等：mpv open 一个本地 HTTP 流不报错不代表能播。mp4 的 moov
+      // 在尾部（非 faststart）时要额外拉一段文件尾，头部解码器又要等关键帧，
+      // 这段时间 UI 上是 `0:00 / 0:00` + 全黑，而且**没有终点**——用户 2026-10-28
+      // 截图反馈的正是这个「没有时长的黑屏，一直黑屏」。
+      //
+      // 第 1 次用完整硬上限（40s）兜底慢种子；就地重开的第 2/3 次数据已在缓冲，
+      // 卡住必定是 mpv open 偶发，20s 足够判定，避免无意义的长等。
+      frame = await _waitForFirstFrame(
+        playVersion: playVersion,
+        beforePosition: beforePosition,
+        beforeDuration: beforeDuration,
+        hardTimeoutOverride:
+            openTry == 0 ? null : const Duration(seconds: 20),
+      );
+      if (frame == MagnetFirstFrameOutcome.arrived) break;
+      if (frame == MagnetFirstFrameOutcome.cancelled) return null;
+      // noData / unsupported：还有就地重试额度就继续；否则跳出交给外层删种子重开。
+      DebugLog.log(
+        'Magnet',
+        '就地重开第 $openTry 次仍 ${frame.name}: '
+        'pos=${player.position.inMilliseconds}ms '
+        'dur=${player.duration.inMilliseconds}ms '
+        'buffer=${player.torrentService.bufferPct}% '
+        'speed=${player.torrentService.downloadSpeed} B/s',
+        flush: true,
+      );
+    }
+
     switch (frame) {
-      case MagnetFirstFrameOutcome.cancelled:
-        return null; // 已被新的播放取代
       case MagnetFirstFrameOutcome.arrived:
         break;
+      case MagnetFirstFrameOutcome.cancelled:
+        return null; // 已被新的播放取代
       case MagnetFirstFrameOutcome.noData:
       case MagnetFirstFrameOutcome.unsupported:
         final svc = player.torrentService;
         DebugLog.log(
           'Magnet',
-          '交接后迟迟无画面/时长（${frame.name}）: '
+          '就地重开 $_maxOpenRetries 次仍无画面/时长（${frame.name}）: '
           'pos=${player.position.inMilliseconds}ms '
           'dur=${player.duration.inMilliseconds}ms '
           'buffer=${svc.bufferPct}% speed=${svc.downloadSpeed} B/s '
@@ -474,6 +560,9 @@ class DetailMagnetPlayback {
     required int playVersion,
     required Duration beforePosition,
     required Duration beforeDuration,
+    /// 就地重开场景用：把「数据在流但读不出画面」的硬上限从 40s 缩短到该值。
+    /// 首次 open 传 null（沿用默认 40s 兜底慢种子）；就地重开传 20s 即可判定。
+    Duration? hardTimeoutOverride,
   }) async {
     player.magnetWaitingFirstFrame = true;
     player.torrentStage = 6;
@@ -502,6 +591,7 @@ class DetailMagnetPlayback {
         beforeDuration: beforeDuration,
         position: player.position,
         duration: player.duration,
+        decodingFrames: await _hasDecodedFrames(),
       )) {
         return MagnetFirstFrameOutcome.arrived;
       }
@@ -520,7 +610,29 @@ class DetailMagnetPlayback {
       );
       if (reason != null) return reason;
 
+      // 就地重开场景：缩短「数据在流但读不出画面」的硬上限，避免长时间空等。
+      if (hardTimeoutOverride != null &&
+          now.difference(startedAt) >= hardTimeoutOverride) {
+        return MagnetFirstFrameOutcome.unsupported;
+      }
+
       await Future<void>.delayed(MagnetFirstFramePolicy.pollInterval);
+    }
+  }
+
+  /// 是否真的有帧被解出来。
+  ///
+  /// mpv 的 `duration` 在读完容器头就有值，不能当出画证据；`estimated-vf-fps`
+  /// 是实际送显帧率，恒空（真机 2026-11-08）就说明一帧都没解出。
+  /// 读不到属性时一律按「无证据」处理，让首帧看门狗继续等。
+  Future<bool> _hasDecodedFrames() async {
+    try {
+      final raw = await player.playerService.mpvProperty('estimated-vf-fps');
+      if (raw == null) return false;
+      final value = double.tryParse(raw.trim());
+      return value != null && value > 0;
+    } catch (_) {
+      return false;
     }
   }
 

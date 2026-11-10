@@ -5,15 +5,25 @@
 不受 WorkBuddy/Git Bash 进程树环境影响。
 """
 
+import os
 import subprocess
 
 MSBUILD = r"D:\VS Studio\Community\MSBuild\Current\Bin\amd64\MSBuild.exe"
-OUT = r"C:\Users\Wang\WorkBuddy\2026-09-08-02-26-53\diag\detached_result.txt"
+
+# 临时目录与结果文件都落在 F 盘工作区，不写 C 盘；工程根按脚本位置自推导。
+PROJECT = os.environ.get(
+    "VIDEOCASK_PROJECT",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+)
+WORKSPACE = os.path.dirname(os.path.dirname(PROJECT))
+TMP_DIR = os.path.join(WORKSPACE, "_build", "tmp")
+os.makedirs(TMP_DIR, exist_ok=True)
+OUT = os.path.join(WORKSPACE, "_build", "logs", "detached_result.txt")
 
 env = {
     "SYSTEMROOT": r"C:\Windows",
-    "TEMP": r"C:\Users\Wang\AppData\Local\Temp",
-    "TMP": r"C:\Users\Wang\AppData\Local\Temp",
+    "TEMP": TMP_DIR,
+    "TMP": TMP_DIR,
     "PATH": r"C:\Windows\System32;C:\Windows",
 }
 

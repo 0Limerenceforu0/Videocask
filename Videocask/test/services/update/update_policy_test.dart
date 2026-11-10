@@ -86,20 +86,20 @@ void main() {
   group('pickAsset', () {
     const assets = [
       ReleaseAsset(
-        name: 'guanzi-android-arm64-v1.1.8.apk',
+        name: 'videocask-android-arm64-v1.1.8.apk',
         downloadUrl: 'https://x/a.apk',
         size: 36 * 1024 * 1024,
       ),
       ReleaseAsset(
-        name: 'guanzi-android-armeabi-v7a-v1.1.8.apk',
+        name: 'videocask-android-armeabi-v7a-v1.1.8.apk',
         downloadUrl: 'https://x/b.apk',
       ),
       ReleaseAsset(
-        name: 'guanzi-android-x86_64-v1.1.8.apk',
+        name: 'videocask-android-x86_64-v1.1.8.apk',
         downloadUrl: 'https://x/c.apk',
       ),
-      ReleaseAsset(name: 'guanzi-windows-x64-v1.1.8.zip', downloadUrl: 'https://x/d.zip'),
-      ReleaseAsset(name: 'guanzi-web-v1.1.8.zip', downloadUrl: 'https://x/e.zip'),
+      ReleaseAsset(name: 'videocask-windows-x64-v1.1.8.zip', downloadUrl: 'https://x/d.zip'),
+      ReleaseAsset(name: 'videocask-web-v1.1.8.zip', downloadUrl: 'https://x/e.zip'),
     ];
 
     test('Android 精确命中设备 abi', () {
@@ -109,7 +109,7 @@ void main() {
           platform: UpdatePlatform.android,
           androidAbi: 'armeabi-v7a',
         )!.name,
-        'guanzi-android-armeabi-v7a-v1.1.8.apk',
+        'videocask-android-armeabi-v7a-v1.1.8.apk',
       );
     });
 
@@ -120,19 +120,19 @@ void main() {
           platform: UpdatePlatform.android,
           androidAbi: 'mips',
         )!.name,
-        'guanzi-android-arm64-v1.1.8.apk',
+        'videocask-android-arm64-v1.1.8.apk',
       );
     });
 
     test('Windows 只挑 windows 的 zip，不会拿到 apk', () {
       final picked = pickAsset(assets: assets, platform: UpdatePlatform.windows)!;
-      expect(picked.name, 'guanzi-windows-x64-v1.1.8.zip');
+      expect(picked.name, 'videocask-windows-x64-v1.1.8.zip');
     });
 
     test('Web 挑 web 的 zip', () {
       expect(
         pickAsset(assets: assets, platform: UpdatePlatform.web)!.name,
-        'guanzi-web-v1.1.8.zip',
+        'videocask-web-v1.1.8.zip',
       );
     });
 
@@ -140,7 +140,7 @@ void main() {
       expect(
         pickAsset(
           assets: const [
-            ReleaseAsset(name: 'guanzi-android-arm64-v1.1.8.apk', downloadUrl: 'u'),
+            ReleaseAsset(name: 'videocask-android-arm64-v1.1.8.apk', downloadUrl: 'u'),
           ],
           platform: UpdatePlatform.windows,
         ),
@@ -167,7 +167,7 @@ void main() {
 
     test('不带 abi 的通用 apk 作为兜底', () {
       const generic = [
-        ReleaseAsset(name: 'guanzi-android-v1.1.8.apk', downloadUrl: 'https://x/g.apk'),
+        ReleaseAsset(name: 'videocask-android-v1.1.8.apk', downloadUrl: 'https://x/g.apk'),
       ];
       expect(
         pickAsset(
@@ -175,7 +175,7 @@ void main() {
           platform: UpdatePlatform.android,
           androidAbi: 'arm64-v8a',
         )!.name,
-        'guanzi-android-v1.1.8.apk',
+        'videocask-android-v1.1.8.apk',
       );
     });
 

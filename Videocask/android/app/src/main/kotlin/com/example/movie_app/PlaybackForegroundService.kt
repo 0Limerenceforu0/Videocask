@@ -29,7 +29,7 @@ import android.os.PowerManager
 class PlaybackForegroundService : Service() {
 
     companion object {
-        private const val CHANNEL_ID = "guanzi_playback"
+        private const val CHANNEL_ID = "videocask_playback"
         private const val NOTIFICATION_ID = 1001
 
         private const val EXTRA_TITLE = "title"
@@ -94,7 +94,7 @@ class PlaybackForegroundService : Service() {
     private fun acquireWakeLock() {
         if (wakeLock?.isHeld == true) return
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "guanzi:playback").apply {
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "videocask:playback").apply {
             setReferenceCounted(false)
             try {
                 acquire(12 * 60 * 60 * 1000L) // 12 小时上限，防止异常退出后永久持锁

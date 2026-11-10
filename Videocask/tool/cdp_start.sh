@@ -5,7 +5,10 @@
 set -u
 EDGE="/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
 [ -f "$EDGE" ] || EDGE="/c/Program Files/Microsoft/Edge/Application/msedge.exe"
-PROFILE="D:/flutter-dome/movie_app/movie_app/.edge_cdp"
+# 工程根 = 本脚本所在 tool/ 的上一级；pwd -W 输出 Windows 风格路径给 msedge.exe
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && { pwd -W 2>/dev/null || pwd; })"
+PROJECT="$(dirname "$SCRIPT_DIR")"
+PROFILE="$PROJECT/.edge_cdp"
 
 if netstat -ano 2>/dev/null | grep -qE "127.0.0.1:9222 .*LISTENING"; then
   echo "9222 已在监听，复用现有测试实例"

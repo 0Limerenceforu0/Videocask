@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -10,21 +11,25 @@ import '../utils/app_data_paths.dart';
 /// 诊断日志：把播放 / 代理 / 续播 / 异常等关键事件写入本地文件，便于复现问题时提取。
 ///
 /// 目录选择（优先「用户容易拿到」的位置）：
-/// - 桌面端（Win/Linux/macOS）：软件所在目录下的 `guanzi_logs/`（绿色便携、跟着 exe 走）
+/// - 桌面端（Win/Linux/macOS）：软件所在目录下的 `videocask_logs/`（绿色便携、跟着 exe 走）
 /// - Android：外置存储应用私有目录
-///   `.../Android/data/com.example.movie_app/files/guanzi_logs/`
-/// - iOS：应用支持目录下的 `guanzi_logs/`
+///   `.../Android/data/com.example.movie_app/files/videocask_logs/`
+/// - iOS：应用支持目录下的 `videocask_logs/`
 /// - Web：不写文件（Web 走同源代理日志，见 web_dev_server.py）
 ///
 /// 提取方式（回复中会写明）：
-/// - Windows：直接打开 exe 旁的 `guanzi_logs` 文件夹
-/// - Android：用文件管理器进入 `Android/data/com.example.movie_app/files/guanzi_logs`，
-///   或用电脑 `adb pull /storage/emulated/0/Android/data/com.example.movie_app/files/guanzi_logs`
+/// - Windows：直接打开 exe 旁的 `videocask_logs` 文件夹
+/// - Android：用文件管理器进入 `Android/data/com.example.movie_app/files/videocask_logs`，
+///   或用电脑 `adb pull /storage/emulated/0/Android/data/com.example.movie_app/files/videocask_logs`
 abstract final class DebugLog {
   static Directory? _dir;
   static File? _file;
-  static IOSink? _sink;
+  static RandomAccessFile? _raf;
   static final List<String> _mem = <String>[];
+  static final List<String> _pending = <String>[];
+  static bool _draining = false;
+  static int _logged = 0;
+  static int _written = 0;
   static const int _memCap = 5000;
   static bool enabled = true;
   static Timer? _flushTimer;
@@ -35,6 +40,18 @@ abstract final class DebugLog {
   /// 当前正在写入的日志文件绝对路径（清空日志时跳过，避免删掉正在写的句柄）。
   static String? get currentFilePath => _file?.path;
 
+  /// 完整性自检：`_logged == _written + _pending.length` 恒成立。
+  /// 不相等就说明有行被静默吞掉，可用于真机日志核验与单测。
+  static String logIntegritySnapshot() =>
+      'logged=$_logged written=$_written pending=${_pending.length}';
+
+  @visibleForTesting
+  static int get loggedCountForTest => _logged;
+  @visibleForTesting
+  static int get writtenCountForTest => _written;
+  @visibleForTesting
+  static int get pendingCountForTest => _pending.length;
+
   /// 初始化日志文件，返回日志目录绝对路径（供 UI 展示）。
   static Future<String> init({bool enable = true}) async {
     enabled = enable;
@@ -42,16 +59,17 @@ abstract final class DebugLog {
       _dir = null;
       return '';
     }
-    // 重复 init（热重启 / 多入口 / 测试）时先释放旧 sink 与旧定时器：
-    // 否则旧 sink 保持打开 → 句柄泄漏，且后续写入与旧 close 竞态会抛异常。
+    // 重复 init（热重启 / 多入口 / 测试）时先释放旧句柄与旧定时器：
+    // 否则旧句柄保持打开 → FD 泄漏，且后续写入与旧 close 竞态会抛异常。
     _flushTimer?.cancel();
-    final oldSink = _sink;
-    _sink = null;
-    if (oldSink != null) {
+    final oldRaf = _raf;
+    _raf = null;
+    if (oldRaf != null) {
       try {
-        await oldSink.close();
+        await oldRaf.close();
       } catch (_) {}
     }
+    // 不清空 _pending：init 之前（或旧句柄关闭窗口内）产生的行要补写进新文件。
     Directory base;
     if (Platform.isAndroid || Platform.isIOS) {
       try {
@@ -63,27 +81,35 @@ abstract final class DebugLog {
     } else {
       base = await AppDataPaths.root();
     }
-    _dir = Directory('${base.path}${Platform.pathSeparator}guanzi_logs');
+    _dir = Directory('${base.path}${Platform.pathSeparator}videocask_logs');
     try {
       await _dir!.create(recursive: true);
     } catch (_) {}
     final now = DateTime.now();
     final name =
-        'guanzi_debug_${now.year}${_pad2(now.month)}${_pad2(now.day)}.log';
+        'videocask_debug_${now.year}${_pad2(now.month)}${_pad2(now.day)}.log';
     _file = File('${_dir!.path}${Platform.pathSeparator}$name');
     try {
-      _sink = _file!.openWrite(mode: FileMode.append);
+      _raf = await _file!.open(mode: FileMode.append);
     } catch (_) {
-      _sink = null;
+      _raf = null;
     }
+    // 把 init 之前暂存的行补写进新文件。
+    _drain(forceFlush: true);
     _writePathPointer();
     _cleanupOldLogs();
     _flushTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
-      unawaited(flush());
+      // 兜底重试：正常路径每行已同步落盘，这里只补写「句柄未打开期间」的
+      // 暂存行与写失败的批次。
+      _drain();
       // 每 ~30s（300ms×100）记录一次进程 FD 数 / 线程数，用于诊断文件描述符泄漏
       // （长时间播放偶发 SIGABRT 的根因疑似 FD 耗尽）。仅 Android 有 /proc。
       if (Platform.isAndroid) {
-        if (++_resTick % 100 == 0) _logResourceUsage();
+        if (++_resTick % 100 == 0) {
+          _logResourceUsage();
+          // 完整性横幅：真机上可直接核对有没有静默丢行。
+          log('DebugLog', '日志完整性 ${logIntegritySnapshot()}');
+        }
       }
     });
     log('DebugLog', '========== 日志系统启动 ==========');
@@ -109,9 +135,9 @@ abstract final class DebugLog {
         '====================\n'
         '本目录：\n${_dir!.path}\n\n'
         '今日日志文件：\n${_file!.path}\n\n'
-        '复现问题后，把整个 guanzi_logs 文件夹发给我即可。\n'
+        '复现问题后，把整个 videocask_logs 文件夹发给我即可。\n'
         '（Android 需用文件管理器进入 '
-        'Android/data/com.example.movie_app/files/guanzi_logs，'
+        'Android/data/com.example.movie_app/files/videocask_logs，'
         '或用电脑 adb pull 该目录）\n',
       );
     } catch (_) {}
@@ -123,7 +149,7 @@ abstract final class DebugLog {
       final cutoff = DateTime.now().subtract(const Duration(days: 7));
       _dir!.listSync().whereType<File>().where((f) {
         final name = f.path.split(Platform.pathSeparator).last;
-        return name.startsWith('guanzi_debug_') && name.endsWith('.log');
+        return name.startsWith('videocask_debug_') && name.endsWith('.log');
       }).where((f) {
         try {
           return f.lastModifiedSync().isBefore(cutoff);
@@ -204,30 +230,69 @@ abstract final class DebugLog {
         '${_pad2(d.millisecond ~/ 10)}';
   }
 
-  /// 写一行日志。[flush]=true 时立即刷盘（用于崩溃/异常/关键事件，尽量保留现场）。
+  /// 写一行日志。[flush]=true 时额外调用 `flushSync()`（关键事件尽量保留现场）。
+  ///
+  /// 🔴 2026-11-08 修复「并发丢行」：旧实现用 `File.openWrite()` 的 `IOSink`，
+  /// `writeln()` 只是把字符串塞进内存缓冲，`flush: true` 又用
+  /// `unawaited(flush())` 并发触发几十个 `await _sink?.flush()`。真机日志实证
+  /// （8103 装机后 21:31:33~21:33）：17 次 `调用 addMagnet` 只落下 2 条同批次
+  /// 的「放行」——缺的正是高并发瞬间写入、且依赖异步 flush 的行；
+  /// 进程被 force-stop / LMK 杀死时，缓冲里的行还会整批消失。
+  ///
+  /// 现在改成「同步追加写 + 单一写入口」：每行进队列后立刻用
+  /// `RandomAccessFile.writeFromSync` 落到内核页缓存，Dart 单 isolate 内天然
+  /// 串行，`_draining` 再挡一层重入；写失败整批留在队列等下次重试。
+  /// 写盘异常一律吞掉，绝不让日志调用方崩掉（历史事故：recyclePlayer 被打断）。
   static void log(String tag, String msg, {bool flush = false}) {
     if (!enabled) return;
     final line = '${_ts()} [$tag] $msg';
     if (_mem.length >= _memCap) _mem.removeAt(0);
     _mem.add(line);
-    // 写盘失败绝不能让日志调用方崩掉。
-    // 真实事故：close() 期间（_sink 尚未置空）周期日志写入会抛
-    // `Bad state: StreamSink is bound to a stream`，而该异常发生在
-    // recyclePlayer 内部 → 把整个重建流程打断（真机表现为
-    // 「触发回收 197 次、recyclePlayer 开始 0 次」），且异常向上逃逸到
-    // 未捕获区，ErrorHandler 再写日志又抛，形成连环失败。
-    try {
-      _sink?.writeln(line);
-    } catch (_) {}
+    _logged++;
+    _pending.add(line);
+    _drain(forceFlush: flush);
     if (kDebugMode) debugPrint(line);
-    if (flush) unawaited(DebugLog.flush());
   }
 
-  /// 异步刷盘（关键事件 await 用）。
-  static Future<void> flush() async {
+  /// 把暂存行一次性同步写入已打开的日志文件。
+  /// 写失败时整批保留（顺序不变），由 300ms 兜底 Timer 或下次 log 重试。
+  static void _drain({bool forceFlush = false}) {
+    if (_draining || _pending.isEmpty) return;
+    final raf = _raf;
+    // Web / init 之前：只保留内存队列，等句柄就绪后由 init 补写。
+    if (raf == null) return;
+    _draining = true;
     try {
-      await _sink?.flush();
-    } catch (_) {}
+      final n = drainPending(_pending, (text) {
+        raf.writeFromSync(utf8.encode(text));
+      });
+      _written += n;
+      if (forceFlush) {
+        try {
+          raf.flushSync();
+        } catch (_) {}
+      }
+    } catch (_) {
+      // 整批留在队列，绝不向上抛。
+    } finally {
+      _draining = false;
+    }
+  }
+
+  /// 纯函数：把 [pending] 拼成一次写操作；[write] 抛异常时不清理队列。
+  /// 抽出来自测，避免「写失败后行永久消失」这类回归。
+  @visibleForTesting
+  static int drainPending(List<String> pending, void Function(String text) write) {
+    if (pending.isEmpty) return 0;
+    final batch = List<String>.from(pending, growable: false);
+    write('${batch.join('\n')}\n');
+    pending.removeRange(0, batch.length);
+    return batch.length;
+  }
+
+  /// 兼容旧调用点（关键事件 `await DebugLog.flush()`）：现在是同步刷盘。
+  static Future<void> flush() async {
+    _drain(forceFlush: true);
   }
 
   /// 按类型统计本进程 fd：socket / pipe / anon / file / other。
@@ -344,11 +409,11 @@ abstract final class DebugLog {
       Map<String, int> fullKinds, bool fullCovered}) fdDelta({
     int maxScan = 3000,
   }) {
-    final empty = (
+    const empty = (
       total: 0,
-      added: const <String, int>{},
+      added: <String, int>{},
       removed: 0,
-      fullKinds: const <String, int>{},
+      fullKinds: <String, int>{},
       fullCovered: false,
     );
     try {
@@ -520,7 +585,7 @@ abstract final class DebugLog {
       log(
         'Res',
         'fds=$fdCount${limit == null ? '' : '/$limit'} threads=$threadCount'
-        '${rate == null ? '' : ' rate=${rate >= 0 ? '+' : ''}${rate!.toStringAsFixed(1)}fd/s'}'
+        '${rate == null ? '' : ' rate=${rate >= 0 ? '+' : ''}${rate.toStringAsFixed(1)}fd/s'}'
         '$addedText$removedText$fullText',
       );
       _lastFdSampleDetail =
@@ -573,12 +638,11 @@ abstract final class DebugLog {
   static Future<void> close() async {
     _flushTimer?.cancel();
     await flush();
-    // 先摘引用再 close：`await sink.close()` 会挂起，若此时周期日志（300ms）
-    // 仍持有旧 _sink 去写，会抛 StreamSink is bound to a stream。
-    final sink = _sink;
-    _sink = null;
+    // 先摘引用再 close，避免 close 挂起期间又往已关闭的句柄写。
+    final raf = _raf;
+    _raf = null;
     try {
-      await sink?.close();
+      await raf?.close();
     } catch (_) {}
   }
 }

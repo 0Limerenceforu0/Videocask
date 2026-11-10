@@ -57,6 +57,27 @@ void main() {
       expect(hasChineseSubtitleMark(v), isFalse);
     });
 
+    test('标题写 Zho/Chi 语言码 → 有中文字幕（不指定简繁）', () {
+      // Torrentio 上真实存在的发布名。
+      const title = 'Блуждающая Земля / The Wandering Earth [2019 BDRip 1080p] '
+          'MVO + DVO + Sub Rus Zho Eng + Original Zho';
+      final v = detectMagnetSubtitle(title);
+      expect(v, MagnetSubtitleAvailability.chineseUnspecified);
+      expect(subtitleAvailabilityLabel(v), '有中文字幕');
+      expect(hasChineseSubtitleMark(v), isTrue);
+    });
+
+    test('chill/zhone 之类不会被误当成 zho/chi', () {
+      expect(
+        detectMagnetSubtitle('Chill.Out.2020.1080p.WEB-DL'),
+        MagnetSubtitleAvailability.notMarked,
+      );
+      expect(
+        detectMagnetSubtitle('Zhone.Test.2019.1080p'),
+        MagnetSubtitleAvailability.notMarked,
+      );
+    });
+
     test('空标题不抛异常', () {
       expect(detectMagnetSubtitle(null), MagnetSubtitleAvailability.notMarked);
       expect(detectMagnetSubtitle('  '), MagnetSubtitleAvailability.notMarked);

@@ -5,10 +5,12 @@ import 'package:flutter/foundation.dart';
 
 import 'package:flutter/widgets.dart';
 import 'package:libtorrent_flutter/libtorrent_flutter.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'torrent_player_models.dart';
 
 import 'debug_log.dart';
+import 'playback_experiment.dart';
 
 /// `flutter test` 的绑定类型名包含 TestWidgets，避免在 VM 测试中初始化原生 libtorrent。
 bool _isFlutterWidgetTest() {
@@ -105,6 +107,24 @@ class TorrentPlayerService with ChangeNotifier {
   int _activePeers = 0;
   int get activePeers => _activePeers;
   String get activePeersDisplay => formatSwarmCount(_activePeers);
+
+  /// —— 以下三个字段纯粹是**诊断快照**，不参与任何控制流 ——
+  ///
+  /// 为什么需要：2026-11-08 的现场里，`done` 停在 28.5MB、`activePeers` 掉到 0，
+  /// 但无法判断「种子被暂停」「种子认为已下完」还是「本地流服务器不再请求」。
+  /// `isPaused` / `isFinished` / `streamState` / `readHead` 正好把这四种情况
+  /// 区分开，一行日志即可定案。
+  String _diagTorrent = '-';
+  String _diagStream = '-';
+  int _diagReadHead = -1;
+
+  /// 正在播的文件 index（供「供数停滞兜底」重新放行该文件下载优先级）。
+  int _currentPlayFileIndex = -1;
+
+  /// 供数停滞兜底：最后一次看到的 totalDone 与时刻。
+  int _stallDoneSnapshot = -1;
+  DateTime? _stallDoneAt;
+  bool _stallLogged = false;
 
   /// 本次流「曾经连上过的最大节点数」：判定「是否从未连上过任何节点」用。
   /// 见 [_isDeadSwarm] 的说明（只作诊断，不触发早停）。
@@ -304,6 +324,17 @@ class TorrentPlayerService with ChangeNotifier {
       );
       _engine = LibtorrentFlutter.instance;
 
+      // 原生调试日志落盘（Android 上 logcat 常被 ROM 关闭，插件自身的 TB_LOG
+      // 在 Android 又恒为空操作）。必须写「外置存储应用私有目录」，
+      // 否则 release 包（不可 run-as）连 adb pull 都取不出来。
+      try {
+        final ext = await getExternalStorageDirectory();
+        final base = ext ?? Directory.systemTemp;
+        _engine.setNativeLogPath(
+          '${base.path}${Platform.pathSeparator}ltbridge_native.log',
+        );
+      } catch (_) {}
+
       // 关键性能调优：在 init 之后立刻下发到原生 session。
       _engine.configureSession(_buildPerformanceConfig());
 
@@ -340,11 +371,13 @@ class TorrentPlayerService with ChangeNotifier {
 
   /// 会话级 BtConfig：与 TorrServer 默认对齐但拉高「流播放」相关参数。
   BtConfig _buildPerformanceConfig() {
+    const mb = 1024 * 1024;
+    final btCacheMb = PlaybackExperiment.intOf('bt_cache_mb');
     return BtConfig(
       // 256MB 内存 piece cache：头 30 秒下载量能完整装下，避开边读边丢。
-      cacheSize: 256 * 1024 * 1024,
+      cacheSize: (btCacheMb ?? 256) * mb,
       // 100% read-ahead：牺牲随机读 IO 换顺序流读写命中率。
-      readerReadAhead: 100,
+      readerReadAhead: PlaybackExperiment.intOf('reader_read_ahead_pct') ?? 100,
       // 80% 预热：startStream 那一刻就让 reader 预读 80% 缓存大小，避开冷启动。
       preloadCache: 80,
       // 单种子 peer 上限。这个值会被原生同时用在两个地方：
@@ -370,7 +403,8 @@ class TorrentPlayerService with ChangeNotifier {
       // 限速 0 = 不限；播放期间也不要限速。
       downloadRateLimit: 0,
       // 上传限速 4MB/s 防止上传吃满带宽影响下行。
-      uploadRateLimit: 4096,
+      // 注：不是「不限速」——之前的诊断误把原生默认值 0 当成了实际生效值。
+      uploadRateLimit: PlaybackExperiment.intOf('upload_kb') ?? 4096,
       // 注意：原生层并没有真正读取 peersListenPort（torrent_bridge.cpp 里只出现在
       // 默认值与回读），监听端口实际由 listen_interfaces 决定，见下方 enableIpv6。
       peersListenPort: 0,
@@ -399,6 +433,10 @@ class TorrentPlayerService with ChangeNotifier {
     await stop();
     if (_state != TorrentPlayState.idle) return false;
 
+    // 上一次残留的残缺数据会让 libtorrent 反复 recheck、并把坏 piece 交给 mpv
+    // （见 [_wipeTorrentDataDir] 的实测说明）。必须在 add 之前清掉。
+    _wipeTorrentDataDir();
+
     _setState(TorrentPlayState.fetchingMeta, '');
     _metaWaitSeconds = 0;
     _streamStage = 0;
@@ -410,6 +448,14 @@ class TorrentPlayerService with ChangeNotifier {
     _lastSpeedSampleAt = null;
     _downloadSpeed = 0;
     _uploadSpeed = 0;
+    // 诊断快照 / 兜底状态随新种子复位。
+    _diagTorrent = '-';
+    _diagStream = '-';
+    _diagReadHead = -1;
+    _currentPlayFileIndex = -1;
+    _stallDoneSnapshot = -1;
+    _stallDoneAt = null;
+    _stallLogged = false;
 
     try {
       final enhancedMagnet = _enhanceMagnet(magnetUri);
@@ -528,30 +574,100 @@ class TorrentPlayerService with ChangeNotifier {
   /// 同时打出来才能定位瓶颈在 peer 发现、元数据还是吞吐本身。
   /// 日志量：加载期每秒 1 行，起播即停，可接受。
   Timer? _statsTimer;
+  int _statsTick = 0;
   void _startStatsTicker() {
     _statsTimer?.cancel();
+    _statsTick = 0;
     _statsTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (_state == TorrentPlayState.playing ||
-          _state == TorrentPlayState.idle) {
+      _statsTick++;
+      if (_state == TorrentPlayState.idle) {
         _stopStatsTicker();
         return;
+      }
+      // 起播后**不再停止**统计，只降频到 5s 一行。
+      //
+      // 为什么必须留着：2026-11-08 真机现场，起播后 stat 立刻停写，播放又
+      // 以 ~0.02x 速度「一格一格」推进，日志里既没有下载速率也没有缓存状态，
+      // 无法判断是「种子断供」还是「本地流服务器堵住」——只能靠猜。
+      // 降频到 5s 后，2 小时片长也只多出 ~1400 行，完全可接受。
+      if (_state == TorrentPlayState.playing && _statsTick % 5 != 0) {
+        return;
+      }
+      // 兜底恢复：见 [playFile] 里关于「原生 metadata 暂停 alert 晚到」的说明。
+      // 我们从不主动 pause 种子，所以这里 resume 一定是安全的（幂等）。
+      final tid = _currentTorrentId;
+      if (tid != null &&
+          (_state == TorrentPlayState.buffering ||
+              _state == TorrentPlayState.playing)) {
+        try {
+          _engine.resumeTorrent(tid);
+        } catch (_) {}
       }
       DebugLog.log(
         'Magnet',
         'stat: state=${_state.name} speed=${_formatBytes(_downloadSpeed)}/s '
+        'up=${_formatBytes(_uploadSpeed)}/s '
         '(native=${_formatBytes(_nativeDownloadRate)}/s) '
         'done=${_formatBytes(_lastTotalDone < 0 ? 0 : _lastTotalDone)} '
         'progress=${(_downloadProgress * 100).toStringAsFixed(1)}% '
         'peers=$_peers seeds=$_seeds activePeers=$_activePeers buf=$_bufferPct% '
-        'stage=$_streamStage metaWait=${_metaWaitSeconds}s',
+        'stage=$_streamStage metaWait=${_metaWaitSeconds}s '
+        '| torrent=$_diagTorrent stream=$_diagStream readHead=$_diagReadHead '
+        'tid=$_currentTorrentId files=${_files.length} '
+        'file=$_currentPlayFileIndex',
         flush: true,
       );
+      if (_state == TorrentPlayState.playing) _logDeliveryStall();
     });
   }
 
   void _stopStatsTicker() {
     _statsTimer?.cancel();
     _statsTimer = null;
+  }
+
+  /// 供数停滞观察（仅诊断，不改控制流）。
+  ///
+  /// ⚠️ 这里**故意不调 `setFilePriorities`**：`prioritize_files()` 是异步的，
+  /// 会把 `startStream` 精心设好的「头部 top_priority + 紧 deadline」整体冲掉，
+  /// 退回 rarest-first 随机下载 —— 实测（6086/6087）反而让 mpv 连容器都解析
+  /// 不出来（`Failed to recognize file format`、`readHead` 恒 0）。
+  /// 源码 `playFile` 上方那段注释警告的就是这件事，别再用它「兜底」。
+  void _logDeliveryStall() {
+    final done = _lastTotalDone;
+    final now = DateTime.now();
+    final since = _stallDoneAt;
+    if (done != _stallDoneSnapshot) {
+      _stallDoneSnapshot = done;
+      _stallDoneAt = now;
+      return;
+    }
+    if (since == null || now.difference(since) < const Duration(seconds: 20)) {
+      return;
+    }
+    if (_stallLogged) return;
+    _stallLogged = true;
+    DebugLog.log(
+      'Magnet',
+      '供数停滞 20s: done=$done readHead=$_diagReadHead '
+          'peers=$_activePeers buf=$_bufferPct%（仅记录，不干预调度）',
+      flush: true,
+    );
+    // 把 libtorrent 自己的告警抖出来 —— release 下 logcat 里没有 print 输出，
+    // 只有这里能看到「种子被暂停 / 文件错误 / 校验失败」这类真正原因。
+    try {
+      final alerts = _engine.recentAlertLines;
+      final tail = alerts.length > 40
+          ? alerts.sublist(alerts.length - 40)
+          : alerts;
+      DebugLog.log(
+        'Magnet',
+        'libtorrent 告警(${alerts.length} 条, 末 40): ${tail.join(' ⏎ ')}',
+        flush: true,
+      );
+    } catch (e) {
+      DebugLog.log('Magnet', '读取 libtorrent 告警失败: $e', flush: true);
+    }
   }
 
   void fetchFiles() {
@@ -668,6 +784,11 @@ class TorrentPlayerService with ChangeNotifier {
       _streamStage = 1; // 进入「缓冲头」阶段
       _bufferPct = 0;
       _etaSeconds = -1;
+      _currentPlayFileIndex = fileIndex;
+      // 新的流 = 新的供数周期，兜底状态全部复位。
+      _stallDoneSnapshot = -1;
+      _stallDoneAt = null;
+      _stallLogged = false;
 
       debugPrint('TorrentPlayerService: 流已启动, url=${streamInfo.url}');
       DebugLog.log(
@@ -683,15 +804,51 @@ class TorrentPlayerService with ChangeNotifier {
       // 它会被原生成 `handle.set_max_connections()`，即**单个种子的 peer 上限**。
       // 扇出过大时，time-critical picker 把 piece 请求摊到几百个 peer 上，
       // 进度被最慢的那个拖住（队头阻塞），头几个起播 piece 反而更晚到。
+      const mb = 1024 * 1024;
+      final expCapMb = PlaybackExperiment.intOf('stream_cache_mb');
+      final expPreloadMb = PlaybackExperiment.intOf('preload_mb');
+      final expConn = PlaybackExperiment.intOf('connections');
+      final expRaPct = PlaybackExperiment.intOf('stream_read_ahead_pct');
       _engine.setCacheSettings(
         _currentStreamId!,
-        capacity: 256 * 1024 * 1024,
-        readAheadPct: 100,
-        connectionsLimit: _streamConnectionsPerTorrent,
+        capacity: (expCapMb ?? 256) * mb,
+        readAheadPct: expRaPct ?? 100,
+        connectionsLimit: expConn ?? _streamConnectionsPerTorrent,
       );
 
       // 立刻把首部 64MB 拉满，mpv 切到这一帧时就能立即解码。
-      _engine.preloadStream(_currentStreamId!, preloadBytes: 64 * 1024 * 1024);
+      _engine.preloadStream(
+        _currentStreamId!,
+        preloadBytes: (expPreloadMb ?? 64) * mb,
+      );
+      if (PlaybackExperiment.enabled) {
+        DebugLog.log(
+          'Experiment',
+          'BT 参数 runId=${PlaybackExperiment.runId} '
+              'streamCache=${expCapMb ?? 256}MB preload=${expPreloadMb ?? 64}MB '
+              'conn=${expConn ?? _streamConnectionsPerTorrent} '
+              'raPct=${expRaPct ?? 100} '
+              'btCache=${PlaybackExperiment.intOf('bt_cache_mb') ?? 256}MB '
+              'uploadKb=${PlaybackExperiment.intOf('upload_kb') ?? 4096}',
+          flush: true,
+        );
+      }
+
+      // 🔴 2026-11-08 真机定案（本轮根因）——原生会把 streamOnly 种子暂停。
+      //
+      // `torrent_bridge.cpp:1134-1153` 在 `metadata_received_alert` 里对
+      // **ephemeral（streamOnly=true）** 种子执行「全文件 dont_download +
+      // handle.pause()」。该 alert 由 libtorrent 告警线程异步投递，**完全可能
+      // 晚于 startStream 内部的 handle.resume() 到达**，于是种子在起播后几秒
+      // 被暂停：done 停在「头部刚下完的那几 MB」不再增长、num_peers 掉到 0，
+      // mpv 读完头部就 EOF 定格。
+      //
+      // 实测证据（6083 诊断包）：11:37:35 done=5.3MB / 11:37:40 done=5.4MB 且
+      // activePeers 999→0，此后 5 分钟零增长 —— 而网络直测有 1.98MB/s、WiFi
+      // RSSI -49。不是死种、不是限速，就是种子被暂停了。
+      //
+      // 交接后显式恢复一次；统计 ticker 里每拍再兜底（resume 幂等）。
+      _engine.resumeTorrent(torrentId);
 
       await _waitForStreamReady();
 
@@ -857,6 +1014,8 @@ class TorrentPlayerService with ChangeNotifier {
 
     _downloadProgress = t.progress;
     _nativeDownloadRate = t.downloadRate;
+    _diagTorrent =
+        'state=${t.state.name},paused=${t.isPaused},finished=${t.isFinished}';
     // 真的开始下数据了 → 之前的「没有可用节点」提示自动撤销。
     if (_deadSwarmAt != null && (t.progress > 0 || t.totalDone > 0)) {
       _deadSwarmAt = null;
@@ -947,6 +1106,8 @@ class TorrentPlayerService with ChangeNotifier {
     // 因查询未带 peer 统计位恒为 -1，这里才是 libtorrent 无条件算出的真值。
     _activePeers = s.activePeers;
     if (_activePeers > _maxActivePeers) _maxActivePeers = _activePeers;
+    _diagStream = s.streamState.name;
+    _diagReadHead = s.readHead;
     if (_downloadSpeed > 0 && _bufferPct < 100) {
       final target = 30;
       if (_bufferPct < target) {
@@ -1082,6 +1243,37 @@ class TorrentPlayerService with ChangeNotifier {
       return '$tmp${Platform.pathSeparator}movie_app_torrent';
     } catch (_) {
       return '.';
+    }
+  }
+
+  /// 清空磁力数据目录（每次起播前调用）。
+  ///
+  /// 🔴 2026-11-08 真机定案 —— 这是「磁力起播十几秒就定格」的最后一块拼图。
+  ///
+  /// 本服务固定用 `<systemTemp>/movie_app_torrent` 当保存目录，而 `streamOnly`
+  /// 断流时**不会删数据**。反复起播同一条磁力后，目录里留下上一次被强杀时
+  /// 写了一半的稀疏文件，于是每次 add 都出现：
+  ///   1. libtorrent 进入 `checking_files` 校验（stat 里该状态长期不消失），
+  ///      **校验期间不能下载** → `done` 卡在十几 MB 不动；
+  ///   2. 校验把「残缺 piece」也标成已有 → `read_piece` 直接把这些字节交给
+  ///      mpv → 容器解析失败（`Failed to recognize file format`），或者
+  ///      头几个 piece 恰好完整、播到 ~11s 就 EOF 定格。
+  ///
+  /// 这两条现象在 6083~6086 四个包里全部复现过。磁力本来就是从头播，没有
+  /// 跨会话续传的价值，每次起播前清干净最稳，顺带解决临时目录无限增长。
+  void _wipeTorrentDataDir() {
+    try {
+      final dir = Directory(_resolveSavePath());
+      if (dir.existsSync()) {
+        dir.deleteSync(recursive: true);
+        DebugLog.log(
+          'Magnet',
+          '已清空种子数据目录（避免 recheck / 残缺 piece 污染）',
+          flush: true,
+        );
+      }
+    } catch (e) {
+      DebugLog.log('Magnet', '清空种子数据目录失败（忽略）: $e', flush: true);
     }
   }
 

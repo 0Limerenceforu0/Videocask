@@ -37,7 +37,7 @@ android {
         // 按架构分包改用命令行 `--split-per-abi`。
     }
 
-    // 原生崩溃捕获模块：崩溃瞬间把调用栈写入 guanzi_logs/crash_*.txt（手机端直接提取）。
+    // 原生崩溃捕获模块：崩溃瞬间把调用栈写入 videocask_logs/crash_*.txt（手机端直接提取）。
     // 不设置 ndk.abiFilters（会与 --split-per-abi 冲突），cmake 按目标 ABI 各自构建。
     externalNativeBuild {
         cmake {

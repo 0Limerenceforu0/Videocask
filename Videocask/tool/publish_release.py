@@ -16,11 +16,11 @@
 产物来源：`deliverables/`（由 `tool/package_deliverables.py` 生成）。
 上传时会重命名为 ASCII，避免中文文件名在部分下载器 / 代理上乱码：
 
-    guanzi-android-arm64-v1.1.8.apk
-    guanzi-android-armeabi-v7a-v1.1.8.apk
-    guanzi-android-x86_64-v1.1.8.apk
-    guanzi-windows-x64-v1.1.8.zip
-    guanzi-web-v1.1.8.zip
+    Videocask-android-arm64-v1.1.8.apk
+    Videocask-android-armeabi-v7a-v1.1.8.apk
+    Videocask-android-x86_64-v1.1.8.apk
+    Videocask-windows-x64-v1.1.8.zip
+    Videocask-web-v1.1.8.zip
 
 发版前自检（任一不通过就退出，不产生半成品 Release）：
   - pubspec.yaml 的 version 与 lib/config/constants.dart 的 appVersion 必须一致
@@ -112,17 +112,17 @@ def classify_asset(path: Path) -> str | None:
     name = path.name.lower()
     if name.endswith(".apk"):
         if "arm64" in name:
-            return "guanzi-android-arm64-v{ver}.apk"
+            return "Videocask-android-arm64-v{ver}.apk"
         if "armeabi" in name or "armv7" in name:
-            return "guanzi-android-armeabi-v7a-v{ver}.apk"
+            return "Videocask-android-armeabi-v7a-v{ver}.apk"
         if "x86_64" in name or "x64" in name:
-            return "guanzi-android-x86_64-v{ver}.apk"
-        return "guanzi-android-v{ver}.apk"
+            return "Videocask-android-x86_64-v{ver}.apk"
+        return "Videocask-android-v{ver}.apk"
     if name.endswith(".zip"):
         if "windows" in name:
-            return "guanzi-windows-x64-v{ver}.zip"
+            return "Videocask-windows-x64-v{ver}.zip"
         if "web" in name:
-            return "guanzi-web-v{ver}.zip"
+            return "Videocask-web-v{ver}.zip"
     return None
 
 
@@ -236,7 +236,7 @@ def request(
     req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Accept", accept)
     req.add_header("X-GitHub-Api-Version", "2022-11-28")
-    req.add_header("User-Agent", "guanzi-release-publisher")
+    req.add_header("User-Agent", "Videocask-release-publisher")
     if data is not None:
         req.add_header("Content-Type", content_type)
     try:

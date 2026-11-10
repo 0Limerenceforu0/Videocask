@@ -8,8 +8,8 @@ import 'download_export.dart';
 
 /// 诊断日志导出 / 清空。
 ///
-/// 痛点：guanzi_logs（含 crash_*.txt / java_crash_*.txt）位于应用私有外部目录
-/// `Android/data/com.example.movie_app/files/guanzi_logs`，Android 11+ 的
+/// 痛点：videocask_logs（含 crash_*.txt / java_crash_*.txt）位于应用私有外部目录
+/// `Android/data/com.example.movie_app/files/videocask_logs`，Android 11+ 的
 /// 分区存储下普通文件管理器进不去、用户既取不出也删不掉。
 ///
 /// 解决：
@@ -24,7 +24,7 @@ abstract final class LogExport {
     return '${d.year}${p(d.month)}${p(d.day)}_${p(d.hour)}${p(d.minute)}${p(d.second)}';
   }
 
-  /// 把 guanzi_logs 目录打包并导出到系统「下载」目录。
+  /// 把 videocask_logs 目录打包并导出到系统「下载」目录。
   /// 返回用户可见的目标路径描述；失败时抛异常（调用方负责提示）。
   static Future<String> exportToDownloads() async {
     final dir = DebugLog.directory;
@@ -38,7 +38,7 @@ abstract final class LogExport {
 
     // 1) 打包到临时目录（应用私有，可写）
     final tmp = await getTemporaryDirectory();
-    final zipName = 'guanzi_logs_${_timeStamp()}.zip';
+    final zipName = 'videocask_logs_${_timeStamp()}.zip';
     final zipPath = '${tmp.path}${Platform.pathSeparator}$zipName';
     final archive = Archive();
     for (final f in files) {
@@ -64,7 +64,7 @@ abstract final class LogExport {
     }
   }
 
-  /// 清空 guanzi_logs：删除除「当前正在写入的日志」以外的所有文件。
+  /// 清空 videocask_logs：删除除「当前正在写入的日志」以外的所有文件。
   /// 返回成功删除的文件数（应用对自身私有目录有删除权限，无需用户授权）。
   static Future<int> clearLogs() async {
     final dir = DebugLog.directory;

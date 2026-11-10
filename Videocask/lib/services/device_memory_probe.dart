@@ -13,7 +13,7 @@ import 'package:flutter/services.dart';
 class DeviceMemoryProbe {
   DeviceMemoryProbe._();
 
-  static const MethodChannel _channel = MethodChannel('guanzi/device');
+  static const MethodChannel _channel = MethodChannel('videocask/device');
 
   /// 物理内存探测结果缓存：一次运行内不会变，避免每次读设置都过通道。
   static int? _cached;
