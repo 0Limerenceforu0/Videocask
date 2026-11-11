@@ -952,6 +952,11 @@ class AppLocalizationsZh extends AppLocalizations {
   String get detailMagnetNoData => '连接超时：45 秒内没有下载到任何数据';
 
   @override
+  String detailMagnetWeakSwarm(String count) {
+    return '这个资源实际只连上 $count 个节点，供数不足';
+  }
+
+  @override
   String get detailMagnetWaitingFrame => '已连上资源，正在等待画面…';
 
   @override

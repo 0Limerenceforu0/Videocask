@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:movie_app/config/constants.dart';
 import 'package:movie_app/l10n/app_localizations.dart';
 
+import 'app_bottom_sheet.dart';
+
 /// 倍速选择展示方式。
 enum SpeedSelectorPresentation {
   /// 独立播放页等：底部 sheet。
@@ -206,9 +208,11 @@ Future<void> _showSpeedBottomSheet({
   required double currentSpeed,
   required ValueChanged<double> onSelected,
 }) async {
-  await showModalBottomSheet<void>(
+  await showAppBottomSheet<void>(
     context: context,
     backgroundColor: Colors.transparent,
+    // SpeedSelector 自绘圆角卡片，不叠加系统拖拽条。
+    showDragHandle: false,
     builder: (context) => SpeedSelector(
       currentSpeed: currentSpeed,
       onSelected: (speed) {

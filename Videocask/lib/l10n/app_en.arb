@@ -528,6 +528,7 @@
   "detailMagnetEngineInitFailed": "Failed to start the P2P engine",
   "detailMagnetMetaTimeout": "Timed out: no peer returned the torrent metadata",
   "detailMagnetNoData": "Timed out: no data downloaded within 45 seconds",
+  "detailMagnetWeakSwarm": "This torrent only has {count} connected peer(s) — not enough to stream",
   "detailMagnetWaitingFrame": "Connected — waiting for the first frame…",
   "detailMagnetNoFrame": "Data is coming in, but the player can't decode any video (duration 0:00)",
   "detailMagnetNoFrameNoData": "Peers connected, but no data is being sent (buffer stalled)",

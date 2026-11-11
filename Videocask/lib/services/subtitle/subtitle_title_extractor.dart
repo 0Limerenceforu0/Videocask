@@ -44,6 +44,30 @@ const Set<String> _noiseWords = <String>{
   'dbd-raws', 'raws', 'chd', 'wiki', 'frds', 'cmct', 'ourtv', 'yyets',
   '5.1', '7.1', 'ma', 'ddp5', 'ac3', 'eac3', 'lpcm', 'pcm',
   'sub', 'subs', 'subtitle', 'subtitles', 'movie', 'video',
+  // 真机 2026-11-11：`Hi Mom 2021 720p Chinese HDRip HC H264 BONE`
+  // 清洗成 `Hi Mom Chinese HDRip HC BONE`，IMDb 三路全 null。
+  // 这些是压制组/规格词，不是片名。
+  'hdrip', 'hdrips', 'hc', 'bone', 'chinese', 'english', 'eng',
+  'dub', 'dubbed', 'subbed', 'hardsub', 'softsub', 'web', 'hdtvrip',
+  'proper', 'repack', 'internal', 'limited', 'unrated', 'extended',
+  'remastered', 'imax', 'dv', 'dolby', 'vision', 'hdr10plus',
+  'dvdr', 'bd', 'uhd', 'fhd', 'hd', 'sd', '3d', 'pdtv', 'camrip',
+};
+
+/// 「技术标签起点」：release 名的通用格式是
+/// `片名 年份 分辨率 片源 编码 压制组`，一旦出现第一个规格标签，
+/// 后面的词全都是标签，直接截断比逐个列黑名单可靠。
+///
+/// 之前只靠 [_noiseWords] 逐词过滤，`Chinese / HC / BONE` 这些
+/// 没进词表的词就混进片名，导致 IMDb 联想命中率为 0。
+const Set<String> _releaseTagStarters = <String>{
+  '480p', '540p', '576p', '720p', '720i', '1080p', '1080i', '1440p',
+  '2160p', '4320p', '4k', '8k', 'uhd', 'fhd',
+  'hdrip', 'bdrip', 'brrip', 'webdl', 'web-dl', 'webrip', 'dvdrip',
+  'hdtv', 'hdtvrip', 'remux', 'hdcam', 'camrip', 'pdtv', 'dvdscr',
+  'x264', 'x265', 'h264', 'h265', 'hevc', 'avc', 'av1', 'vc1',
+  'bluray', 'blueray', 'hdr', 'hdr10', 'hdr10plus', 'sdr', '10bit',
+  'mkv', 'mp4', 'avi', 'iso', 'm2ts',
 };
 
 /// 中文片名里的噪声短语（不会误伤片名本身）。
@@ -91,6 +115,17 @@ String _cleanLatin(String raw) {
   s = s.replaceAll(_bracket, ' ');
   s = s.replaceAll(RegExp(r'[._\-]+'), ' ');
   s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+  // 🔴 截断必须发生在「删分辨率」之前。`2160p` / `1080p` 会被下面的
+  // `\b\d{3,4}[pi]\b` 直接抹掉，等抹完再找标签起点就找不到了
+  // （单测 `Dune...2160p.WEB-DL...` 曾漏出 `DL` 就是这么来的）。
+  final tokens = s.split(' ');
+  final cut = tokens.indexWhere(
+    (w) => _releaseTagStarters.contains(w.toLowerCase()),
+  );
+  if (cut >= 0) tokens.removeRange(cut, tokens.length);
+  s = tokens.join(' ');
+
   s = s.replaceAll(RegExp(r'\b(?:19|20)\d{2}\b'), ' ');
   s = s.replaceAll(RegExp(r'\b\d{3,5}x\d{3,5}\b', caseSensitive: false), ' ');
   s = s.replaceAll(RegExp(r'\bS\d{1,2}E\d{1,3}\b', caseSensitive: false), ' ');
@@ -101,7 +136,11 @@ String _cleanLatin(String raw) {
     final w = word.trim();
     if (w.isEmpty) continue;
     if (RegExp(r'^\d+$').hasMatch(w)) continue;
-    if (_noiseWords.contains(w.toLowerCase())) continue;
+    final lw = w.toLowerCase();
+    // 🔴 规格标签一旦出现，后面整段都是压制组信息，直接停。
+    // `Hi Mom 2021 720p Chinese HDRip HC H264 BONE` -> `Hi Mom`。
+    if (_releaseTagStarters.contains(lw)) break;
+    if (_noiseWords.contains(lw)) continue;
     if (!_latin.hasMatch(w)) continue;
     kept.add(w);
   }

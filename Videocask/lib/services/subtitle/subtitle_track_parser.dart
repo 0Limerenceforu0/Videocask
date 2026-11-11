@@ -43,6 +43,15 @@ List<SubtitleTrackInfo> parseMpvSubtitleTracks(String? raw) {
   return out;
 }
 
+/// 取出所有外挂字幕轨的 mpv 轨道 id，供 `sub-remove <id>` 精确卸载。
+///
+/// 只认 `external == true` 的 `sub` 轨：内封轨必须原样留着，否则
+/// 「恢复内嵌轨」就无从谈起。纯函数，track-list 读失败时返回空列表。
+List<int> externalSubtitleTrackIds(String? raw) => parseMpvSubtitleTracks(raw)
+    .where((t) => t.isExternal)
+    .map((t) => t.id)
+    .toList(growable: false);
+
 /// 把 mpv `track-list` 压成「每条轨一行」的短摘要。
 ///
 /// DebugLog 单条会被截断到约 1000 字符，而完整 track-list 动辄 3~6KB：

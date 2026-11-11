@@ -1838,6 +1838,12 @@ abstract class AppLocalizations {
   /// **'连接超时：45 秒内没有下载到任何数据'**
   String get detailMagnetNoData;
 
+  /// No description provided for @detailMagnetWeakSwarm.
+  ///
+  /// In zh, this message translates to:
+  /// **'这个资源实际只连上 {count} 个节点，供数不足'**
+  String detailMagnetWeakSwarm(String count);
+
   /// No description provided for @detailMagnetWaitingFrame.
   ///
   /// In zh, this message translates to:

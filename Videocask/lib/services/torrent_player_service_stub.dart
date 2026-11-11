@@ -55,6 +55,12 @@ class TorrentPlayerService with ChangeNotifier {
   /// Web 端没有真实 P2P 引擎（走云端代理），永远不存在「连不上节点」。
   bool get handoverWithoutPeers => false;
 
+  /// Web 端没有真实 swarm，不存在「弱 swarm 早止损」（与 IO 实现同形 API）。
+  bool get weakSwarmAbort => false;
+
+  /// 早止损时的在连 peer 数（Web 占位：恒 0）。
+  int get weakSwarmPeers => 0;
+
   /// 与 IO 实现同形的空实现（Web 端没有死种结论可清）。
   void clearDeadSwarm() {}
 

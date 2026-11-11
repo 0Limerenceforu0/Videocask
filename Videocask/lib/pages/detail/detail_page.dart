@@ -25,7 +25,13 @@ import 'package:window_manager/window_manager.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/api_service.dart';
 import '../../services/subtitle_service.dart';
-import '../../widgets/subtitle_selector.dart' show runSubtitleAiGeneration;
+import '../../widgets/subtitle_selector.dart'
+    show runSubtitleAiGeneration, isSubtitleAiBackendConfigured;
+import '../../widgets/ai_subtitle_settings_panel.dart'
+    show showAiSubtitleSettings;
+import '../../widgets/app_bottom_sheet.dart' show showAppBottomSheet;
+import '../../services/subtitle_ai_service.dart' show SubtitleAiService;
+import '../../services/subtitle_ai_availability_policy.dart';
 // 图片缓存
 import 'package:cached_network_image/cached_network_image.dart';
 
@@ -97,6 +103,7 @@ import 'playback/subtitle_simplified_policy.dart';
 import 'playback/magnet_prep_progress_policy.dart';
 import 'playback/background_playback_policy.dart';
 import 'playback/player_fit_policy.dart';
+import 'playback/magnet_seek_visual_policy.dart';
 
 part 'detail_page_data.dart';
 part 'detail_page_dlna.dart';

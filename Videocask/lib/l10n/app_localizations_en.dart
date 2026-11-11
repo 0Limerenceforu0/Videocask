@@ -988,6 +988,11 @@ class AppLocalizationsEn extends AppLocalizations {
       'Timed out: no data downloaded within 45 seconds';
 
   @override
+  String detailMagnetWeakSwarm(String count) {
+    return 'This torrent only has $count connected peer(s) — not enough to stream';
+  }
+
+  @override
   String get detailMagnetWaitingFrame =>
       'Connected — waiting for the first frame…';
 

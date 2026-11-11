@@ -7,6 +7,24 @@ class DoubanLookupService {
   static final DoubanLookupService instance = DoubanLookupService._();
 
   static final RegExp _cjkPattern = RegExp(r'[\u4e00-\u9fff]');
+  static final RegExp _fourDigitYear = RegExp(r'^(?:19|20)\d{2}$');
+
+  /// 是否为可比较的 4 位年份（1900~2099）；空串 / 区间年份（如 `2021-2022`）
+  /// 都不参与「年份否决」。
+  static bool _isFourDigitYear(String s) => _fourDigitYear.hasMatch(s);
+
+  /// 候选年份与年份提示是否**明确冲突**（双方都是 4 位年份，且相差超过 1 年）。
+  ///
+  /// 留 1 年容差：豆瓣的 `year` 是上映年，release 名里的年份常是制作年，
+  /// 电影节首映 / 不同地区上映会差 1 年；一刀切会误杀正确条目。
+  /// 任一方缺失或不可解析时返回 false —— 豆瓣剧集常缺 `year`，不能因此误杀。
+  static bool _yearConflict(DoubanSuggestMatch item, String? yearHint) {
+    final hint = yearHint?.trim() ?? '';
+    final itemYear = item.year.trim();
+    if (!_isFourDigitYear(hint) || !_isFourDigitYear(itemYear)) return false;
+    final diff = int.parse(hint) - int.parse(itemYear);
+    return diff.abs() > 1;
+  }
 
   final Dio _dio = Dio(
     BaseOptions(
@@ -45,12 +63,20 @@ class DoubanLookupService {
 
       DoubanSuggestMatch? best;
       var bestScore = 0.0;
+      var rejectedByYear = 0;
       final yearHint = year?.trim();
+      final hintText = (yearHint == null || yearHint.isEmpty)
+          ? ''
+          : ' [年份提示=$yearHint]';
 
       for (final raw in data) {
         if (raw is! Map) continue;
         final parsed = parseSuggestItem(raw);
         if (parsed == null) continue;
+        if (_yearConflict(parsed, yearHint)) {
+          rejectedByYear++;
+          continue;
+        }
         final score = _scoreMatch(parsed, q, yearHint);
         if (score > bestScore) {
           bestScore = score;
@@ -59,10 +85,24 @@ class DoubanLookupService {
       }
 
       if (best != null && bestScore >= 80) {
+        // 把年份提示一并打出来：否则「年份否决到底有没有生效」在真机上无法核对
+        // （2026-11-11 就是靠这条日志才发现 `Hi Mom` 撞了 1970 的同名片）。
         debugPrint(
-          '豆瓣解析: $q -> ${best.englishTitle.isNotEmpty ? best.englishTitle : best.title} (${best.year})',
+          '豆瓣解析: $q$hintText'
+          ' -> ${best.englishTitle.isNotEmpty ? best.englishTitle : best.title} (${best.year})',
         );
         return best;
+      }
+      if (rejectedByYear > 0) {
+        debugPrint(
+          '豆瓣解析: $q$hintText 候选年份全部不一致，已否决 $rejectedByYear 条'
+          '（宁可无补全，也不贴错片）',
+        );
+      } else if (best != null) {
+        debugPrint(
+          '豆瓣解析未达门槛: $q$hintText'
+          ' 最高分=${bestScore.toStringAsFixed(0)} (${best.title}/${best.year})',
+        );
       }
     } catch (e) {
       debugPrint('豆瓣联想失败 ($q): $e');
@@ -102,6 +142,14 @@ class DoubanLookupService {
     String query,
     String? yearHint,
   ) {
+    // 年份硬约束（2026-11-11 实机根因）：旧实现只给「年份命中 +110」，
+    // 但对「年份明确不一致」没有任何惩罚 —— `Hi Mom`（2021）撞上 1970 年的
+    // 同名短片 `Hi, Mom!` 时，靠分词各命中一个词就能拿到 145 分过门槛，
+    // 于是豆瓣把 1970 的条目当成匹配项塞进补全链路（`豆瓣解析: Hi Mom ->
+    // Hi, Mom! (1970)`）。与 IMDb 侧同一口径：双方都是 4 位年份且不等时
+    // 直接判为「不是同一部片」，避免把错片海报/主创贴到详情页。
+    if (_yearConflict(item, yearHint)) return 0;
+
     var s = 0.0;
     final qn = query.toLowerCase();
     // 中文查询比中文名，英文查询比英文副标题（`sub_title`）。
@@ -119,8 +167,9 @@ class DoubanLookupService {
         if (tn.contains(t)) s += 40;
       }
     }
-    final yh = yearHint ?? '';
-    if (yh.length == 4 && item.year == yh) {
+    // 走到这里说明年份要么一致、要么有一方缺失；一致时给硬证据加分。
+    final hintYear = yearHint?.trim() ?? '';
+    if (hintYear.isNotEmpty && item.year.trim() == hintYear) {
       s += 110;
     }
     // 英文查询命中英文副标题时，`title` 就是中文名 —— 额外加分。

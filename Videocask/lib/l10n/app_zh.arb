@@ -528,6 +528,14 @@
   "detailMagnetEngineInitFailed": "P2P 引擎启动失败",
   "detailMagnetMetaTimeout": "解析超时：没能从任何节点取到种子信息",
   "detailMagnetNoData": "连接超时：45 秒内没有下载到任何数据",
+  "detailMagnetWeakSwarm": "这个资源实际只连上 {count} 个节点，供数不足",
+  "@detailMagnetWeakSwarm": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
   "detailMagnetWaitingFrame": "已连上资源，正在等待画面…",
   "detailMagnetNoFrame": "数据在下载，但播放器一直读不出画面（时长 0:00）",
   "detailMagnetNoFrameNoData": "节点连上了，但一直没有数据下发（缓冲停住不动）",

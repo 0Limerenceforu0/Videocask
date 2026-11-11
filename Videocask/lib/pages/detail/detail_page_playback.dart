@@ -490,12 +490,13 @@ extension _DetailPagePlaybackExt on _DetailPageState {  Movie? _displayMovie(Mov
       return;
     }
 
-    showModalBottomSheet<void>(
+    showAppBottomSheet<void>(
       context: context,
+      showDragHandle: false,
       backgroundColor: Colors.grey.shade900,
       builder: (ctx) {
-        return ListView(
-          shrinkWrap: true,
+        return Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             for (var i = 0; i < movie.playRoutes.length; i++)
               ListTile(
@@ -794,7 +795,8 @@ extension _DetailPagePlaybackExt on _DetailPageState {  Movie? _displayMovie(Mov
       buffering: _playerModule.isBuffering,
       openingMedia: _playerModule.isOpeningMedia,
       magnetPreparing: _playerModule.magnetSourcePreparing,
-      seekLandingPending: _playerModule.hasSeekLandingPending,
+      seekLandingPending: _playerModule.hasSeekLandingPending ||
+          _playerModule.magnetSeekVisualPending,
     )) {
       return;
     }
@@ -807,7 +809,8 @@ extension _DetailPagePlaybackExt on _DetailPageState {  Movie? _displayMovie(Mov
             buffering: _playerModule.isBuffering,
             openingMedia: _playerModule.isOpeningMedia,
             magnetPreparing: _playerModule.magnetSourcePreparing,
-            seekLandingPending: _playerModule.hasSeekLandingPending,
+            seekLandingPending: _playerModule.hasSeekLandingPending ||
+                _playerModule.magnetSeekVisualPending,
           )) {
         _setState(() {
           _playerModule.showControls = false;

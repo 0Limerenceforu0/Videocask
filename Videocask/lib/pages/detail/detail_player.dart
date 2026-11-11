@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import '../../services/player_service.dart';
 import '../../services/subtitle_render_policy.dart';
+import '../../services/subtitle_style_policy.dart';
 import '../../services/torrent_player_service.dart';
 import '../../models/movie.dart';
 import '../../providers/history_provider.dart';
@@ -25,6 +26,7 @@ import 'playback/seek_landing_policy.dart';
 import 'playback/discontinuity_recovery_policy.dart';
 import 'playback/completion_policy.dart';
 import 'playback/magnet_failure_dismiss_policy.dart';
+import 'playback/magnet_seek_visual_policy.dart';
 import 'playback_error_type.dart';
 import '../../services/system_volume.dart';
 import '../../config/constants.dart';
@@ -58,6 +60,7 @@ class DetailPlayer {
 
   DetailPlayer() {
     _openElapsedTicker = OpenElapsedTicker(openElapsedSeconds);
+    _seekWaitTicker = OpenElapsedTicker(seekWaitSeconds);
     playback.session.lifecycleNotifier.addListener(_onLifecycleChanged);
     // 读取上次选择的画面比例模式（铺满/原始），默认原始。
     fitCover = StorageService().getBoolSetting(AppConstants.keyPlayerFitCover);
@@ -393,8 +396,38 @@ class DetailPlayer {
   /// 字幕文件名称
   String subtitleFileName = '';
 
-  /// 字幕字体大小
-  double subtitleFontSize = 18.0;
+  /// 字幕字体大小（浮层兜底路径的历史字段，mpv 路径由样式策略裁决）。
+  double subtitleFontSize = 22.0;
+
+  /// 字幕视觉档位：片源同款（默认）/ 放大易读。
+  ///
+  /// 收口到 [PlayerService.syncSubtitleStyle]，切换后立刻重发 mpv 属性；
+  /// 浮层兜底路径读同一个值，保证两条渲染路径观感一致。
+  SubtitleStylePreset get subtitleStylePreset =>
+      playerService.subtitleStylePreset;
+
+  set subtitleStylePreset(SubtitleStylePreset value) {
+    if (playerService.subtitleStylePreset == value) return;
+    unawaited(playerService.syncSubtitleStyle(value));
+  }
+
+  // 字幕面板只需要这些「无类型泄漏」的入口：detail_page.dart 是宿主库，
+  // 不必为了显示档位名再把策略类型 import 进来。
+  bool get isBurnedInSubtitleStyle =>
+      playerService.subtitleStylePreset == SubtitleStylePreset.burnedIn;
+
+  String get subtitleStyleLabel =>
+      subtitleStylePresetLabel(playerService.subtitleStylePreset);
+
+  String get subtitleStyleHint =>
+      subtitleStylePresetHint(playerService.subtitleStylePreset);
+
+  /// 在「片源同款 / 放大易读」之间切换，写入即重发 mpv 属性。
+  void toggleSubtitleStyle() {
+    subtitleStylePreset = isBurnedInSubtitleStyle
+        ? SubtitleStylePreset.enlarged
+        : SubtitleStylePreset.burnedIn;
+  }
 
   /// 字幕颜色
   Color subtitleColor = Colors.white;
@@ -583,6 +616,22 @@ class DetailPlayer {
   Completer<void>? _seekLandingCompleter;
 
   bool get hasSeekLandingPending => _pendingSeekTarget != null;
+
+  /// 磁力 seek 之后「等画面真的出来」的加载态。
+  ///
+  /// 与 [hasSeekLandingPending] 刻意分开：后者服务进度权威（2.5s 兜底超时
+  /// 保证进度条别乱跳），这里服务 UI（磁力按块下载，seek 到未下载片段时
+  /// mpv 要阻塞 5~10s，加载提示必须等到出画）。判定见
+  /// `playback/magnet_seek_visual_policy.dart`。
+  bool magnetSeekVisualPending = false;
+  Duration? _magnetSeekVisualTarget;
+  Timer? _magnetSeekVisualTimer;
+  bool _magnetSeekPolling = false;
+
+  /// 等出画时长的 UI 计数（与 open 的 [openElapsedSeconds] 分开，避免
+  /// seek 期间显示上一次开播留下的陈旧「已等待 Ns」）。
+  final ValueNotifier<double> seekWaitSeconds = ValueNotifier<double>(0.0);
+  late final OpenElapsedTicker _seekWaitTicker;
 
   /// seek 落位（或超时/失败）后通知 UI 恢复控制栏隐藏计时。
   void Function()? onSeekLandedUi;
@@ -917,6 +966,8 @@ class DetailPlayer {
     // mpv 报错后 buffering 流事件可能停留在 true，缓冲遮罩会永久卡在
     // 「Buffering… 已等待 0s」。错误即停止缓冲态，让错误 UI 露出。
     isBuffering = false;
+    // 报错了就别再挂着「正在缓冲」的加载提示，让错误卡片露出来。
+    _finishMagnetSeekVisual();
     playback.onPlaybackError();
     _notifyUiImmediate();
   }
@@ -1771,6 +1822,88 @@ class DetailPlayer {
     }
   }
 
+  /// 开始等「磁力 seek 之后画面真的回来」。
+  ///
+  /// 必须在 `await playerService.seek()` **之前**调用：磁力流 seek 到一个还没
+  /// 下载到的片段时，这个 await 本身就会阻塞好几秒（真机日志里 496s / 3046s
+  /// 两处都是这样）。
+  void _startMagnetSeekVisualWait(Duration target) {
+    if (!isMagnetStreamSessionActive) return;
+    _magnetSeekVisualTimer?.cancel();
+    _magnetSeekVisualTarget = target;
+    magnetSeekVisualPending = true;
+    _seekWaitTicker.start();
+    final startedAt = DateTime.now();
+    _magnetSeekVisualTimer = Timer.periodic(
+      kMagnetSeekVisualPollInterval,
+      (_) => unawaited(_pollMagnetSeekVisual(startedAt)),
+    );
+    _notifyUiImmediate();
+  }
+
+  /// 轮询 mpv 原生属性判断是否已出画。
+  ///
+  /// `seeking` 是 mpv 自己的「还在 seek 吗」，比位置上报更贴近「画面回来
+  /// 没有」；`demuxer-cache-duration` 是目标附近可立即播放的缓存量。任一
+  /// 读到 null 就按无证据处理（只靠位置推进 / 兜底上限收尾）。
+  Future<void> _pollMagnetSeekVisual(DateTime startedAt) async {
+    if (_magnetSeekPolling) return;
+    final target = _magnetSeekVisualTarget;
+    if (target == null || _disposing) {
+      _finishMagnetSeekVisual();
+      return;
+    }
+    _magnetSeekPolling = true;
+    try {
+      final elapsed = DateTime.now().difference(startedAt);
+      // 磁力流下 mpv 可能正卡在 demuxer 读上，属性读取跟着长时间不返回；
+      // 每次读都设上限，读不到按「无证据」处理，绝不让轮询自己挂死。
+      Future<String?> read(String name) => playerService
+          .mpvProperty(name)
+          .timeout(kMagnetSeekPropertyTimeout, onTimeout: () => null);
+      final pos = parseMpvSeconds(await read('time-pos'));
+      final seeking = parseMpvFlag(await read('seeking'));
+      final cache = parseMpvSeconds(await read('demuxer-cache-duration'));
+      if (_disposing || _magnetSeekVisualTarget != target) return;
+      final reported = pos ?? playback.lastPlayerReport;
+      if (!shouldFinishMagnetSeekVisualWait(
+        target: target,
+        reportedPosition: reported,
+        mpvSeeking: seeking,
+        cacheDuration: cache,
+        playing: isPlaying,
+        elapsed: elapsed,
+      )) {
+        return;
+      }
+      DebugLog.log(
+        'Playhead',
+        '磁力 seek 出画: target=${target.inSeconds}s '
+        'pos=${reported.inSeconds}s '
+        'seeking=${seeking == null ? '?' : (seeking ? 'yes' : 'no')} '
+        'cache=${cache?.inMilliseconds ?? -1}ms '
+        '耗时=${elapsed.inMilliseconds}ms',
+        flush: true,
+      );
+      _finishMagnetSeekVisual();
+    } finally {
+      _magnetSeekPolling = false;
+    }
+  }
+
+  /// 结束「等出画」：出画 / 超时 / 报错 / 换集都走这里。
+  void _finishMagnetSeekVisual() {
+    _magnetSeekVisualTimer?.cancel();
+    _magnetSeekVisualTimer = null;
+    _magnetSeekVisualTarget = null;
+    _seekWaitTicker.stop();
+    if (!magnetSeekVisualPending) return;
+    magnetSeekVisualPending = false;
+    _notifyUiImmediate();
+    // 加载态结束 = 控制栏可以重新进入 3 秒隐藏倒计时。
+    if (!_disposing) onSeekLandedUi?.call();
+  }
+
   /// 暂停 / 恢复前等在途 seek 落位，避免「向未缓冲位置 seek 途中暂停」导致
   /// mpv 没有解码出任何新帧、外层黑底直接透出来（2026-11-07 用户反馈）。
   Future<void> _awaitSeekLanding() async {
@@ -1809,6 +1942,8 @@ class DetailPlayer {
     playback.confirmExplicitPosition(position, duration: duration);
     this.position = playback.authoritativePosition;
     _seekLandingTimer = Timer(kSeekLandingTimeout, _finishSeekLanding);
+    // 磁力：进度权威 2.5s 兜底超时只影响进度条，加载提示要按「真的出画」撤。
+    _startMagnetSeekVisualWait(position);
     try {
       await playerService.seek(position);
     } catch (e) {
@@ -1953,6 +2088,7 @@ class DetailPlayer {
     playback.resetSession();
     isBuffering = false;
     _clearSeekLanding();
+    _finishMagnetSeekVisual();
     _lastUserPauseAt = null;
     cacheSpeed = 0;
     _throughputEstimator.reset();
@@ -2016,6 +2152,7 @@ class DetailPlayer {
 
     _seekLandingTimer?.cancel();
     _clearSeekLanding();
+    _finishMagnetSeekVisual();
     hideTimer?.cancel();
     seekBubbleTimer?.cancel();
     gestureBarTimer?.cancel();
@@ -2040,6 +2177,7 @@ class DetailPlayer {
     positionListenable.dispose();
     playerLifecycleNotifier.dispose();
     openElapsedSeconds.dispose();
+    seekWaitSeconds.dispose();
     playback.dispose();
 
     unawaited(_releasePlayerResources());

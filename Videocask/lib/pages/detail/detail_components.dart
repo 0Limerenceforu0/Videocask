@@ -7,6 +7,7 @@ import '../../utils/web_http_stub.dart'
     if (dart.library.html) '../../utils/web_http.dart' as web_http;
 
 import '../../models/movie.dart';
+import '../../services/subtitle_style_policy.dart';
 import 'playback/magnet_prep_progress_policy.dart';
 
 /// 可复用的UI组件
@@ -216,7 +217,7 @@ class DetailComponents {
   /// 构建磁力准备进度条（底部单条，含一步文案）
   ///
   /// 升级版：实时显示下载速度、做种/下载节点数、ETA、缓冲百分比、当前阶段。
-  /// 当 [bufferPct] > 0 时切换为「缓冲」阶段；当 [metaWait] > 30s 时提示「解析较慢」。
+  /// 当 [bufferPct] > 0 时切换为「缓冲」阶段；当 [metaWait] > 30s 时提示「加载较慢」。
   static Widget buildTorrentProgressBar(
     int torrentStep,
     String torrentMessage, {
@@ -378,7 +379,12 @@ class DetailComponents {
             // 第二行：节点 / 缓冲 / ETA
             if (activePeers >= 0 || bufferPct > 0 || metaWait.isNotEmpty) ...[
               const SizedBox(height: 6),
-              Row(
+              // 芯片多的阶段（节点/做种/缓冲/ETA/加载）在窄屏会横向溢出，
+              // 末尾的「加载 Xs」被裁到只剩「加载」→ 用 Wrap 自动换行保住数值。
+              Wrap(
+                spacing: 0,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   // 真实在连节点数（activePeers，来自流状态，libtorrent 无条件算）。
                   // 替代旧的「peers（torrent status 恒为 -1 永不显示）」——
@@ -415,12 +421,12 @@ class DetailComponents {
                       icon: Icons.timer_outlined,
                       text: 'ETA $etaFormatted',
                     ),
+                    const SizedBox(width: 6),
                   ],
-                  const Spacer(),
                   if (metaWait.isNotEmpty)
                     _TorrentStatChip(
                       icon: Icons.hourglass_empty_rounded,
-                      text: '解析 $metaWait',
+                      text: '加载 $metaWait',
                       color: metaWait.contains('m')
                           ? const Color(0xFFFFB74D)
                           : Colors.white70,
@@ -476,37 +482,59 @@ class DetailComponents {
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 
-  /// 构建字幕叠加层
+  /// 构建字幕叠加层（仅 mpv 画不了字幕时的兜底路径）。
+  ///
+  /// 🔴 不再用 `Colors.black54` 半透明黑底盒子 —— 那是之前「两个字幕 + 黑底」
+  /// 丑观感的直接来源。样式由 `subtitle_style_policy.dart` 裁决，与 mpv 路径
+  /// 同一档位：默认「片源同款」= 烧录硬字幕的白字 + 细黑边 + 无底板 +
+  /// 非粗体；「放大易读」保留 8113 版双层重阴影。
   static Widget buildSubtitleOverlay(
     String subtitleText, {
-    double fontSize = 16,
+    double? fontSize,
+    double screenWidth = 420,
+    SubtitleStylePreset stylePreset = kDefaultSubtitleStylePreset,
     Color color = Colors.white,
     double bottom = 80,
     EdgeInsets padding = EdgeInsets.zero,
   }) {
+    final overlay = overlaySubtitleStyle(stylePreset);
+    final effectiveSize = fontSize ??
+        overlaySubtitleFontSize(
+          screenWidth: screenWidth,
+          preset: stylePreset,
+        );
+    final fontWeight = overlay.fontWeightIndex == 4
+        ? FontWeight.w400
+        : FontWeight.w500;
+    // 片源硬字幕只有约 1px 黑细边、没有投影；浮层用单层极浅阴影近似，
+    // 放大档沿用原来的双层重阴影。
+    final shadows = overlay.shadowCount == 1
+        ? const <Shadow>[
+            Shadow(
+              offset: Offset(0, 0.6),
+              blurRadius: 1.2,
+              color: Colors.black,
+            ),
+          ]
+        : const <Shadow>[
+            Shadow(offset: Offset(0, 1), blurRadius: 3, color: Colors.black),
+            Shadow(offset: Offset(0, 2), blurRadius: 6, color: Colors.black87),
+          ];
     return Positioned(
-      bottom: bottom + padding.bottom,
+      bottom: bottom + overlay.bottomInset + padding.bottom,
       left: padding.left + 12,
       right: padding.right + 12,
       child: Center(
-        child: Container(
+        child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.black54,
-            borderRadius: BorderRadius.circular(4),
-          ),
           child: Text(
             subtitleText,
             style: TextStyle(
               color: color,
-              fontSize: fontSize,
-              shadows: const [
-                Shadow(
-                  offset: Offset(0, 1),
-                  blurRadius: 4,
-                  color: Colors.black87,
-                ),
-              ],
+              fontSize: effectiveSize,
+              fontWeight: fontWeight,
+              height: 1.25,
+              shadows: shadows,
             ),
             textAlign: TextAlign.center,
           ),
@@ -663,7 +691,7 @@ class DetailComponents {
   }
 }
 
-/// 磁力 / 缓冲条上的小信息芯片（下载速度 / 节点数 / 缓冲 / ETA / 解析耗时）。
+/// 磁力 / 缓冲条上的小信息芯片（下载速度 / 节点数 / 缓冲 / ETA / 加载耗时）。
 class _TorrentStatChip extends StatelessWidget {
   const _TorrentStatChip({
     required this.icon,

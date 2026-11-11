@@ -6,6 +6,7 @@ part of 'detail_page.dart';
 extension _DetailPageSubtitleExt on _DetailPageState {
   Widget _buildSubtitleOverlay() {
     final safe = MediaQuery.paddingOf(context);
+    final size = MediaQuery.sizeOf(context);
     final controlsVisible = _playerModule.showControls &&
         !_playerModule.isScreenLocked &&
         _playerModule.currentPlayUrl != null;
@@ -13,9 +14,12 @@ extension _DetailPageSubtitleExt on _DetailPageState {
     final bottom = _playerModule.isFullScreen
         ? safe.bottom + (controlsVisible ? controlBarHeight : 20)
         : (controlsVisible ? 88.0 : 40.0);
+    // 字号与字形由同一份样式策略裁决（片源同款 / 放大易读），
+    // 保证浮层兜底与 mpv 渲染出来的字幕是同一种观感。
     return DetailComponents.buildSubtitleOverlay(
       _playerModule.currentSubtitleText,
-      fontSize: _playerModule.subtitleFontSize,
+      screenWidth: size.width,
+      stylePreset: _playerModule.subtitleStylePreset,
       color: _playerModule.subtitleColor,
       bottom: bottom,
       padding: _playerModule.isFullScreen
@@ -165,8 +169,20 @@ extension _DetailPageSubtitleExt on _DetailPageState {
     return null;
   }
 
+  /// 该播放 URL 是否来自磁力（而非聚合/在线线路）。
+  bool _isMagnetSource(Movie movie, String playUrl) {
+    if (widget.sourceId == AppConstants.magnetDetailSourceId) return true;
+    if (movie.sourceId == AppConstants.magnetDetailSourceId) return true;
+    final u = playUrl.toLowerCase();
+    return u.startsWith('magnet:') || u.contains('magnet');
+  }
+
   /// 「能直接拿到就直接用」：先读片源内封中文轨（零原生改动、简体优先），
   /// 没有再走免费在线中文源。整条链路无 Key、无配置、无点击。
+  ///
+  /// 🔴 聚合/在线线路不叠加外部 SRT：这类源本身已带字幕，应用再下载一份
+  /// 外部 SRT 挂上去就是「再做一次字幕」（双份 + 观感差）。所以外部兜底
+  /// （种子内 / 在线简中）只对磁力生效，聚合源只保留「① 内封轨选择」。
   Future<void> _maybeAutoMatchSubtitlePlay(Movie movie, String playUrl) async {
     if (kIsWeb) return;
     if (!_shouldTrySubtitleAutoMatch(movie, playUrl)) return;
@@ -177,8 +193,11 @@ extension _DetailPageSubtitleExt on _DetailPageState {
     MagnetSubtitleService().cancel();
     if (!mounted) return;
 
-    // ① 片源自带中文轨优先，简体在前。
+    // ① 片源自带中文轨优先，简体在前（聚合 / 磁力通用）。
     if (await _applyEmbeddedChineseSubtitle()) return;
+
+    // 聚合/在线源到此为止：不叠外部 SRT（见方法注释）。
+    if (!_isMagnetSource(movie, playUrl)) return;
 
     // ①.5 种子内独立中文字幕（S3）：只有内封轨没有时才额外建短命磁力任务。
     if (await _applyTorrentChineseSubtitle()) return;
@@ -584,6 +603,57 @@ extension _DetailPageSubtitleExt on _DetailPageState {
       return;
     }
 
+    // 🔴 两层门槛：① 这个平台是否真能离线识别（Android 缺 ffmpeg runner，
+    // 设置页自己都写着「尚未接入」）；② 是否选了离线模型。
+    // 旧逻辑只弹一句「请先配置后端」，既没说清去哪配，又在移动端给出了
+    // 「下载模型后自动生成」这种兑现不了的承诺。
+    final support = offlineSubtitleSupport();
+    final canRunOffline = support == SubtitleAiOfflineSupport.ready;
+    var runtime = SubtitleAiService().runtimeFromSettings();
+    if (!canRunOffline || !isSubtitleAiBackendConfigured(runtime)) {
+      if (!mounted) return;
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(
+            canRunOffline
+                ? '本地离线字幕需要先配置'
+                : '此设备暂不支持离线识别',
+          ),
+          content: Text(
+            canRunOffline
+                ? '当前还没有选择离线识别模型。请在「AI 字幕生成」里选择模型并下载'
+                    '（约 50MB），完成后会自动继续生成；这一步只需做一次。'
+                : '${offlineSubtitleUnavailableReason(support)}\n\n'
+                    '可到「AI 字幕生成」查看在线 API 配置，或在桌面端使用离线识别。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(canRunOffline ? '去配置' : '查看设置'),
+            ),
+          ],
+        ),
+      );
+      if (go != true || !mounted) return;
+      await showAiSubtitleSettings(context);
+      // 移动端只做说明，绝不自动重试（重试必然抛 ffmpeg runner 未注册）。
+      if (!mounted || !canRunOffline) return;
+      runtime = SubtitleAiService().runtimeFromSettings();
+      if (!isSubtitleAiBackendConfigured(runtime)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('仍未选择离线模型，配置完成后再点一次生成即可'),
+          ),
+        );
+        return;
+      }
+    }
+
     await runSubtitleAiGeneration(
       context: context,
       source: source,
@@ -621,15 +691,16 @@ extension _DetailPageSubtitleExt on _DetailPageState {
 
   Future<void> _showSubtitleTrackSheet(Movie movie) async {
     final l10n = AppLocalizations.of(context)!;
-    await showModalBottomSheet<void>(
+    // 🔴 统一走公共底部弹窗：之前这里手写 showModalBottomSheet，
+    // 没有 isScrollControlled / 滚动容器，超长内容直接被屏幕底边裁掉，
+    // 「字幕延时」整行点不到（2026-11-11 实机 + UI 层级 dump 坐实）。
+    await showAppBottomSheet<void>(
       context: context,
-      showDragHandle: true,
       builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
                 child: Text(
@@ -657,7 +728,11 @@ extension _DetailPageSubtitleExt on _DetailPageState {
                 ListTile(
                   leading: const Icon(Icons.graphic_eq_outlined),
                   title: const Text('本地离线生成中文字幕'),
-                  subtitle: const Text('无需联网，首次需下载约 50MB 模型'),
+                  subtitle: Text(
+                    isOfflineSubtitleRunnable()
+                        ? '无需联网，需先选择并下载约 50MB 模型'
+                        : '此设备暂不支持离线识别，可改用在线 API',
+                  ),
                   onTap: () {
                     Navigator.pop(ctx);
                     unawaited(_runAiSubtitleGeneration(movie));
@@ -674,6 +749,7 @@ extension _DetailPageSubtitleExt on _DetailPageState {
               ListTile(
                 leading: const Icon(Icons.closed_caption_off_outlined),
                 title: Text(l10n.detailPlayerSubtitleOff),
+                subtitle: const Text('卸载外部字幕文件轨，保留片源内嵌轨'),
                 onTap: () async {
                   Navigator.pop(ctx);
                   if (!kIsWeb) {
@@ -681,9 +757,28 @@ extension _DetailPageSubtitleExt on _DetailPageState {
                         .clearExternalSubtitleTrack();
                   }
                   if (mounted) {
-                    _setState(() => _playerModule.showSubtitles = false);
+                    // 🔴 旧实现在这里设 false，等于连内嵌轨一起关掉，
+                    // 「恢复」二字名不副实。可见性改由下面的开关单独控制。
+                    _setState(() => _playerModule.showSubtitles = true);
                   }
                 },
+              ),
+              // 单独的总开关：想关掉所有软字幕用这里，想恢复也用这里。
+              StatefulBuilder(
+                builder: (switchCtx, setSwitchState) => SwitchListTile(
+                  secondary: const Icon(Icons.subtitles_outlined),
+                  title: const Text('显示字幕'),
+                  subtitle: Text(
+                    _playerModule.showSubtitles
+                        ? '软字幕可见（内嵌轨 / 外挂轨）'
+                        : '已隐藏所有软字幕',
+                  ),
+                  value: _playerModule.showSubtitles,
+                  onChanged: (v) {
+                    _setState(() => _playerModule.showSubtitles = v);
+                    setSwitchState(() {});
+                  },
+                ),
               ),
               ListTile(
                 leading: const Icon(Icons.search),
@@ -694,6 +789,30 @@ extension _DetailPageSubtitleExt on _DetailPageState {
                 },
               ),
               const Divider(height: 1),
+              // 字幕样式档位：默认「片源同款」= 与烧录进帧的硬字幕一致。
+              // 用户觉得偏小可点一下切到「放大易读」，切换立即重发 mpv 属性。
+              StatefulBuilder(
+                builder: (sheetCtx, setStyleState) {
+                  final burnedIn = _playerModule.isBurnedInSubtitleStyle;
+                  return ListTile(
+                    leading: const Icon(Icons.text_fields_outlined),
+                    title: const Text('字幕样式'),
+                    subtitle: Text(
+                      '${_playerModule.subtitleStyleLabel}：'
+                      '${_playerModule.subtitleStyleHint}（点击切换）',
+                    ),
+                    trailing: Icon(
+                      burnedIn
+                          ? Icons.straighten_outlined
+                          : Icons.zoom_in_outlined,
+                    ),
+                    onTap: () {
+                      _playerModule.toggleSubtitleStyle();
+                      setStyleState(() {});
+                    },
+                  );
+                },
+              ),
               StatefulBuilder(
                 builder: (ctx, setSheetState) {
                   final delay = _playerModule.subtitleDelaySeconds;
@@ -742,8 +861,7 @@ extension _DetailPageSubtitleExt on _DetailPageState {
                   );
                 },
               ),
-            ],
-          ),
+          ],
         );
       },
     );
@@ -766,10 +884,32 @@ extension _DetailPageSubtitleExt on _DetailPageState {
     _setState(() => _playerModule.subtitleDelaySeconds = 0);
   }
 
+  /// 手动叠加外部 SRT 的源类型闸门。
+  ///
+  /// 自动链 `_maybeAutoMatchSubtitlePlay` 对聚合 / 在线线路只做「内封轨选择」，
+  /// 不叠外部字幕；但两个手动入口以前没有这道判断，用户一点就会绕过约束，
+  /// 又变成「聚合资源被 App 重新渲染一份字幕」（2026-11-11 代码复查）。
+  /// 这里统一挡住并给可操作提示，本地字幕文件是用户自己选的，不在此限。
+  bool _rejectExternalSubtitleForAggregated(Movie movie) {
+    final playUrl = _playerModule.activeStreamUrl ??
+        _playerModule.currentOpenUrl ??
+        '';
+    if (_isMagnetSource(movie, playUrl)) return false;
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('聚合 / 在线线路自带字幕，不叠加外部字幕'),
+        ),
+      );
+    }
+    return true;
+  }
+
   /// 手动「在线自动匹配」：与自动链共用免费的 IMDb 解析与在线源。
   /// S5 起不再有 API Key 门槛，也不需要 login。
   Future<void> _runSubtitleAutoMatch(Movie movie) async {
     if (kIsWeb) return;
+    if (_rejectExternalSubtitleForAggregated(movie)) return;
     final l10n = AppLocalizations.of(context)!;
     final svc = SubtitleService();
     final imdbId = await _resolveSubtitleImdbId(movie);
@@ -856,6 +996,7 @@ extension _DetailPageSubtitleExt on _DetailPageState {
 
   Future<void> _showSubtitleSearchPicker(Movie movie) async {
     if (kIsWeb) return;
+    if (_rejectExternalSubtitleForAggregated(movie)) return;
     final l10n = AppLocalizations.of(context)!;
     final svc = SubtitleService();
     final imdbId = await _resolveSubtitleImdbId(movie);

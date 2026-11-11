@@ -78,6 +78,52 @@ void main() {
       expect(q.local, isEmpty);
       expect(q.english, 'The Wandering Earth');
     });
+
+    test('纯英文 release 名剥掉压制组噪声（2026-11-11 真机 IMDb 三路全 null）',
+        () {
+      // 修复前清洗成 `Hi Mom Chinese HDRip HC BONE`，IMDb 查不到。
+      final q = extractSubtitleTitleQuery(
+        primary: 'Hi Mom 2021 720p Chinese HDRip HC H264 BONE',
+      );
+      expect(q.english, 'Hi Mom');
+      expect(q.local, isEmpty);
+      expect(q.year, '2021');
+    });
+
+    test('第一个技术标签之后整段截断，压制组名不会混进片名', () {
+      final q = extractSubtitleTitleQuery(
+        primary: 'Dune.Part.Two.2024.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.mkv',
+      );
+      expect(q.english, 'Dune Part Two');
+      expect(q.year, '2024');
+    });
+
+    test('方括号中英并列组不受截断规则影响', () {
+      final q = extractSubtitleTitleQuery(
+        primary: '[DBD-Raws][流浪地球/The.Wandering.Earth.]'
+            '[1080P][BDRip][HEVC-10bit][简体内封][FLAC][MKV]',
+        releaseName: 'The.Wandering.Earth.2019.1080p.BluRay.x264.mkv',
+      );
+      expect(q.local, '流浪地球');
+      expect(q.english, 'The Wandering Earth');
+    });
+  });
+
+  group('externalSubtitleTrackIds', () {
+    test('只返回 external=true 的 sub 轨，内封轨与 id=0 一律排除', () {
+      const raw = '[{"id":1,"type":"video","selected":true},'
+          '{"id":1,"type":"sub","external":false,"selected":true},'
+          '{"id":3,"type":"sub","external":true,"selected":true},'
+          '{"id":4,"type":"sub","external":true,"selected":false},'
+          '{"id":0,"type":"sub","external":true}]';
+      expect(externalSubtitleTrackIds(raw), <int>[3, 4]);
+    });
+
+    test('空 / 非法输入返回空列表', () {
+      expect(externalSubtitleTrackIds(null), isEmpty);
+      expect(externalSubtitleTrackIds('not json'), isEmpty);
+      expect(externalSubtitleTrackIds('[]'), isEmpty);
+    });
   });
 
   group('describeMpvTracks', () {

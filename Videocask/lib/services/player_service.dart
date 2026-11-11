@@ -13,6 +13,8 @@ import 'debug_log.dart';
 import 'hw_decode_policy.dart';
 import 'video_output_policy.dart';
 import 'subtitle_render_policy.dart';
+import 'subtitle_style_policy.dart';
+import 'subtitle/subtitle_track_parser.dart' show externalSubtitleTrackIds;
 import 'player_listeners.dart';
 import 'playback_experiment.dart';
 import 'resource_scope.dart';
@@ -712,10 +714,43 @@ class PlayerService {
     await _applySubtitleDelay();
   }
 
-  /// 恢复为内嵌轨自动选择（并卸掉外挂文件轨）。
+  /// 精确卸掉外挂字幕轨，恢复片源内嵌轨的自动选择。
+  ///
+  /// 🔴 2026-11-11 修复：旧实现只有 `setSubtitleTrack(SubtitleTrack.auto())`，
+  /// 但外挂是用 mpv `sub-add <path> select` 挂的 —— `sid=auto` 不会移除这条
+  /// external 轨；调用方再把 `showSubtitles` 设成 false，最终变成
+  /// 「所有软字幕一起关掉」，和「恢复内嵌轨」正好相反（实机已坐实）。
+  /// 现在按 track-list 逐个 `sub-remove`，可见性由面板的 showSubtitles 收口，
+  /// 这里绝不动 `sub-visibility`。
   Future<void> clearExternalSubtitleTrack() async {
-    if (_player == null) return;
-    await _player!.setSubtitleTrack(SubtitleTrack.auto());
+    final p = _player;
+    if (p == null || kIsWeb) return;
+    var removed = 0;
+    try {
+      final raw = await getMpvProperty(p, 'track-list');
+      final ids = externalSubtitleTrackIds(raw);
+      for (final id in ids) {
+        try {
+          await runMpvCommand(p, ['sub-remove', '$id']);
+          removed++;
+        } catch (e) {
+          debugPrint('mpv sub-remove id=$id 失败: $e');
+        }
+      }
+      DebugLog.log(
+        'Subtitle',
+        '恢复内嵌轨: 外挂轨=${ids.length} 条 已卸载=$removed 可见性保持原值',
+        flush: true,
+      );
+    } catch (e) {
+      debugPrint('恢复内嵌轨读取 track-list 失败: $e');
+    }
+    try {
+      await p.setSubtitleTrack(SubtitleTrack.auto());
+    } catch (e) {
+      debugPrint('恢复内嵌轨 auto 失败: $e');
+    }
+    await _applySubtitleDelay();
   }
 
   /// 暂停
@@ -943,6 +978,27 @@ class PlayerService {
   /// 用户是否要显示字幕（由 `DetailPlayer.showSubtitles` 收口写入）。
   bool _subtitleVisible = false;
 
+  /// 当前字幕视觉档位（片源同款 / 放大易读）。
+  ///
+  /// 默认「片源同款」：软字幕按硬字幕的白字细黑边 + 3.1% 字高渲染，
+  /// 见 `subtitle_style_policy.dart` 的量化依据。
+  SubtitleStylePreset _subtitleStylePreset = kDefaultSubtitleStylePreset;
+
+  SubtitleStylePreset get subtitleStylePreset => _subtitleStylePreset;
+
+  /// 切换字幕档位并立刻重发 mpv 属性，用户点完就能看到变化。
+  Future<void> syncSubtitleStyle(SubtitleStylePreset preset) async {
+    if (_subtitleStylePreset == preset) return;
+    _subtitleStylePreset = preset;
+    DebugLog.log(
+      'Subtitle',
+      '字幕样式切换: ${subtitleStylePresetLabel(preset)} '
+          'sub-scale=${mpvSubtitleStyle(preset)['sub-scale']}',
+      flush: true,
+    );
+    await _applySubtitleStyle();
+  }
+
   /// 同步字幕开关到 mpv。
   ///
   /// 单一渲染源是 mpv，所以「关字幕」必须真的写 `sub-visibility=no`；
@@ -978,6 +1034,44 @@ class PlayerService {
     try {
       await setMpvProperty(p, 'secondary-sub-visibility', 'no');
     } catch (_) {}
+    // 单一渲染源（mpv/libass）字幕样式。档位可运行时切换（字幕面板），
+    // 幂等重发，保证 open / recycle / 切档后都不会退回 mpv 出厂样式。
+    await _applySubtitleStyle();
+  }
+
+  /// mpv/libass 字幕样式（仅在 mpv 实际绘制字幕时生效）。
+  ///
+  /// 样式表由 `subtitle_style_policy.dart` 统一裁决：默认「片源同款」按
+  /// 真机硬字幕原图量化（白字、细黑边、无阴影、字高约画面高 3.1%），
+  /// 「放大易读」保留 8113 版行为。所有量都是相对视频高度，自适应分辨率；
+  /// 不指定 `sub-font`，避免落到设备上不存在的字体导致更丑的回退。
+  Future<void> _applySubtitleStyle() async {
+    final p = _player;
+    if (p == null) {
+      DebugLog.log('Subtitle', '字幕样式跳过: player 未就绪');
+      return;
+    }
+    if (!mpvCanRenderSubtitle) {
+      DebugLog.log('Subtitle', '字幕样式跳过: 渲染源=flutterOverlay（浮层路径）');
+      return;
+    }
+    final style = mpvSubtitleStyle(_subtitleStylePreset);
+    var ok = 0;
+    for (final e in style.entries) {
+      try {
+        await setMpvProperty(p, e.key, e.value);
+        ok++;
+      } catch (_) {}
+    }
+    // 可观测性：不写日志就永远只能「凭嘴说样式生效」，无法在真机核对。
+    DebugLog.log(
+      'Subtitle',
+      '字幕样式下发: $ok/${style.length} 项 '
+          '档位=${subtitleStylePresetLabel(_subtitleStylePreset)} '
+          'sub-scale=${style['sub-scale']} '
+          '描边=${style['sub-border-size']} '
+          '阴影=${style['sub-shadow-offset']} 渲染源=mpv',
+    );
   }
 
   /// 创建 `VideoController` 时必须显式给出的 vo / hwdec。

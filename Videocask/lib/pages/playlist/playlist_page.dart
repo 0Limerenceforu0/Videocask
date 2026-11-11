@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../../config/routes.dart';
 import '../../models/playlist.dart';
 import '../../providers/playlist_provider.dart';
+import '../../widgets/app_bottom_sheet.dart';
 
 /// 播放列表页面
 ///
@@ -256,16 +257,17 @@ class PlaylistPage extends StatelessWidget {
   void _showOptionsSheet(BuildContext context, Playlist playlist) {
     final theme = Theme.of(context);
 
-    showModalBottomSheet(
+    showAppBottomSheet<void>(
       context: context,
+      // 卡片自带拖拽条，这里不再叠加系统的 drag handle。
+      showDragHandle: false,
       backgroundColor: theme.colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+      builder: (sheetContext) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
             const SizedBox(height: 8),
             Container(
               width: 40,
@@ -296,9 +298,8 @@ class PlaylistPage extends StatelessWidget {
                 _showDeleteConfirmDialog(context, playlist);
               },
             ),
-            const SizedBox(height: 8),
-          ],
-        ),
+          const SizedBox(height: 8),
+        ],
       ),
     );
   }

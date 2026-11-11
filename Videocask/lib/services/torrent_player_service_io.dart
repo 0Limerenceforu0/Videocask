@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'torrent_player_models.dart';
 
 import 'debug_log.dart';
+import 'magnet_weak_swarm_policy.dart';
 import 'playback_experiment.dart';
 
 /// `flutter test` 的绑定类型名包含 TestWidgets，避免在 VM 测试中初始化原生 libtorrent。
@@ -161,6 +162,24 @@ class TorrentPlayerService with ChangeNotifier {
 
   int _totalSize = 0;
   int get totalSize => _totalSize;
+
+  /// 本次流的缓存容量（字节），[playFile] 起流时写入。
+  ///
+  /// 只给 ETA 当分母用：`TorrentInfo.totalWanted` 在 streamOnly 下只统计
+  /// **当前 wanted 窗口**，窗口随读取滑动，用它算 ETA 会得到一个几乎恒定
+  /// 的假值（真机实锤：恒显「ETA 10s」永不归零）。
+  int _streamCacheBytes = 0;
+
+  /// 本次起流是否被「弱 swarm 早止损」中止（见 [MagnetWeakSwarmPolicy]）。
+  ///
+  /// 中止时 [playFile] 返回 null，上层据此给出「资源做种太少」的文案，
+  /// 而不是笼统的「启动播放流失败」。
+  bool _weakSwarmAbort = false;
+  bool get weakSwarmAbort => _weakSwarmAbort;
+
+  /// 早止损那一刻真实在连的 peer 数（给 UI 文案用）。
+  int _weakSwarmPeers = 0;
+  int get weakSwarmPeers => _weakSwarmPeers;
 
   /// 0–100，已预缓冲数据相对流首部首 MB 的比例（来自 [StreamInfo.bufferPct]）。
   int _bufferPct = 0;
@@ -556,7 +575,7 @@ class TorrentPlayerService with ChangeNotifier {
     _metaWaitSeconds = 0;
     _metaWaitTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       _metaWaitSeconds += 1;
-      // meta 解析超过 30s 时给 UI 一个「重试 / 换源」入口。
+      // 整体准备（元数据 + 缓冲）超过 30s 时给 UI 一个「重试 / 换源」入口。
       notifyListeners();
     });
   }
@@ -753,6 +772,11 @@ class TorrentPlayerService with ChangeNotifier {
   /// 实际上 startStream 已经把所有 piece 先置为 `dont_download`，再只放行
   /// 当前文件的 head / tail，比「文件级优先级」更精确，无需我们再干预。
   Future<String?> playFile(int fileIndex) async {
+    // 新一轮起流 = 新的供数周期：上一轮的「弱 swarm」结论必须在**任何
+    // 提前 return 之前**作废，否则上层会拿旧结论给这次失败贴错标签。
+    _weakSwarmAbort = false;
+    _weakSwarmPeers = 0;
+
     if (_currentTorrentId == null) return null;
 
     _setState(TorrentPlayState.buffering, '');
@@ -809,9 +833,12 @@ class TorrentPlayerService with ChangeNotifier {
       final expPreloadMb = PlaybackExperiment.intOf('preload_mb');
       final expConn = PlaybackExperiment.intOf('connections');
       final expRaPct = PlaybackExperiment.intOf('stream_read_ahead_pct');
+      final cacheBytes = (expCapMb ?? 256) * mb;
+      // 记下本轮真正的缓存窗口：ETA 用它当分母（见 [_streamCacheBytes] 注释）。
+      _streamCacheBytes = cacheBytes;
       _engine.setCacheSettings(
         _currentStreamId!,
-        capacity: (expCapMb ?? 256) * mb,
+        capacity: cacheBytes,
         readAheadPct: expRaPct ?? 100,
         connectionsLimit: expConn ?? _streamConnectionsPerTorrent,
       );
@@ -852,9 +879,26 @@ class TorrentPlayerService with ChangeNotifier {
 
       await _waitForStreamReady();
 
+      if (_weakSwarmAbort) {
+        // 弱 swarm 提前中止（见 _waitForStreamReady 里的判定）：
+        // **绝不能把这条空流交给 mpv** —— 那等于让用户在「已连上资源，正在
+        // 等待画面…」上再干等 40s 首帧 + 2 次 20s 就地重开，最后仍然失败。
+        // 停流会连带移除 ephemeral 种子，正好让上层换一轮重新打洞。
+        await _stopCurrentStream();
+        _streamUrl = null;
+        _setState(TorrentPlayState.buffering, '');
+        DebugLog.log(
+          'Magnet',
+          '弱 swarm 中止，不交接 mpv: peers=$_weakSwarmPeers',
+          flush: true,
+        );
+        return null;
+      }
+
       if (_streamUrl != null && _state != TorrentPlayState.error) {
         _setState(TorrentPlayState.playing, '');
         _streamStage = 2;
+        _stopMetaWaitTicker();
         return _streamUrl;
       }
 
@@ -913,6 +957,8 @@ class TorrentPlayerService with ChangeNotifier {
     const maxWait = Duration(seconds: 45);
     const checkInterval = Duration(milliseconds: 250);
     var elapsed = Duration.zero;
+    // 「弱 swarm」是从什么时候开始持续的（null = 当前不弱）。
+    Duration? weakSince;
 
     while (elapsed < maxWait) {
       if (_state == TorrentPlayState.error || _state == TorrentPlayState.idle) {
@@ -947,6 +993,41 @@ class TorrentPlayerService with ChangeNotifier {
             return;
           }
         }
+      }
+
+      // 🔴 弱 swarm 早止损（见 [MagnetWeakSwarmPolicy]）。
+      //
+      // 和下面「基于节点数的死种早停」不是一回事：那条是「peer 还没连上就
+      // 判死」，实测会误杀受限网络里 20–45s 才连上的可恢复 swarm，已废弃。
+      // 这条只看**持续一个确认窗口**（18s）内是否既连不到 2 个以上 peer、
+      // 下行又低于 120KB/s —— 真机实锤的「索引写 17 做种、实际只连上 1 个」
+      // 就是这种：继续等 45s 缓冲 + 40s 首帧 + 2×20s 就地重开，最后仍然失败，
+      // 用户白等 8 分钟。
+      //
+      // 早止损不置 error（置 error 会让 mpv 交接被当成失败、把用户弹回详情页）：
+      // 只打标记让 [playFile] 返回 null，由上层决定文案与是否再试一轮。
+      if (MagnetWeakSwarmPolicy.isWeak(
+        activePeers: _activePeers,
+        downloadSpeed: _downloadSpeed,
+        bufferPct: _bufferPct,
+        readyBufferPct: 5,
+      )) {
+        weakSince ??= elapsed;
+        if (elapsed - weakSince >= MagnetWeakSwarmPolicy.confirmWindow) {
+          _weakSwarmAbort = true;
+          _weakSwarmPeers = _activePeers;
+          DebugLog.log(
+            'Magnet',
+            '弱 swarm 早止损: activePeers=$_activePeers '
+            'speed=$_downloadSpeed B/s buffer=$_bufferPct% '
+            '已等 ${elapsed.inSeconds}s '
+            '(确认窗口 ${MagnetWeakSwarmPolicy.confirmWindow.inSeconds}s)',
+            flush: true,
+          );
+          return;
+        }
+      } else {
+        weakSince = null;
       }
 
       // 【已移除：基于节点数的死种早停】
@@ -1068,9 +1149,10 @@ class TorrentPlayerService with ChangeNotifier {
       );
     }
 
-    if (t.hasMetadata) {
-      _stopMetaWaitTicker();
-    }
+    // 注意：元数据就绪（hasMetadata）**不再停表**——解析计时器要累计到真正
+    // 起播（见 _onStreamUpdate 的 playing 转移），这样 UI 上的「加载 Xs」才能
+    // 反映「点磁力→出画」的总耗时，而不是卡在元数据就绪那一刻（曾表现为
+    // 「解析时间一直是 2s 不变」）。
 
     if (t.state.label == 'Error') {
       _stopMetaWaitTicker();
@@ -1111,8 +1193,14 @@ class TorrentPlayerService with ChangeNotifier {
     if (_downloadSpeed > 0 && _bufferPct < 100) {
       final target = 30;
       if (_bufferPct < target) {
-        final needPct = target - _bufferPct;
-        final needBytes = (_totalSize * needPct) ~/ 100;
+        // 🔴 分母必须用**固定的流缓存窗口**（[_streamCacheBytes]），不能用
+        // `_totalSize`（= `t.totalWanted`）：streamOnly 下 totalWanted 只统计
+        // 当前 wanted 窗口，而窗口随读取不停滑动，「缺口字节」几乎恒定 ——
+        // 算出来就是一个永远到不了 0 的假 ETA（真机实锤：恒显「ETA 10s」，
+        // 实际等了五分钟）。用缓存窗口做分母，bufferPct 涨 → 缺口降 → ETA
+        // 真正收敛。
+        final totalBytes = _streamCacheBytes > 0 ? _streamCacheBytes : _totalSize;
+        final needBytes = (totalBytes * (target - _bufferPct)) ~/ 100;
         _etaSeconds = (needBytes / _downloadSpeed).clamp(0, 9999).toInt();
       } else {
         _etaSeconds = 0;
@@ -1124,6 +1212,9 @@ class TorrentPlayerService with ChangeNotifier {
     if (s.isReady && _state == TorrentPlayState.buffering) {
       _setState(TorrentPlayState.playing, '');
       _streamStage = 2;
+      // 起播即停表：加载计时到此为止（芯片随后由 metaWaitFormatted 在
+      // playing 态返回空串而隐藏）。
+      _stopMetaWaitTicker();
     }
 
     notifyListeners();
@@ -1227,8 +1318,13 @@ class TorrentPlayerService with ChangeNotifier {
     return '${h}h${mm.toString().padLeft(2, '0')}m';
   }
 
-  /// 解析元数据等待秒数的友好文本。
+  /// 磁力整体准备（元数据解析 + 缓冲起流）的累计等待秒数友好文本。
+  ///
+  /// 计时器在 [addMagnet] 成功后启动、起播（playing）时停止，因此这里反映的
+  /// 是「从点磁力到真正出画」的总耗时，而非仅元数据解析耗时。起播后返回空串，
+  /// 让芯片隐藏，避免「加载 Xs」滞留误导（曾表现为「一直 2s 不变」）。
   String get metaWaitFormatted {
+    if (_state == TorrentPlayState.playing) return '';
     if (_metaWaitSeconds <= 0) return '';
     if (_metaWaitSeconds < 60) return '${_metaWaitSeconds}s';
     final m = _metaWaitSeconds ~/ 60;

@@ -1,11 +1,10 @@
 // ignore_for_file: prefer_const_constructors
 
-import 'dart:io';
-
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../services/storage_service.dart';
+import '../services/subtitle_ai_availability_policy.dart';
 import '../services/subtitle_ai_backend.dart';
 import '../services/subtitle_ai_model_manager.dart';
 
@@ -63,15 +62,9 @@ class _AiSubtitleSettingsPanelState extends State<AiSubtitleSettingsPanel> {
   ///
   /// 与其让用户点下去才报一句看不懂的错误，不如直接不给这个选项。
   String? get _offlineUnavailableReason {
-    if (kIsWeb) {
-      return '浏览器端离线识别需要 transformers.js 桥接（注入 web/index.html + '
-          '注册 MethodChannel），尚未接入。';
-    }
-    if (Platform.isAndroid || Platform.isIOS) {
-      return '移动端离线识别需要本地 ffmpeg 抽音（ffmpeg-kit），尚未接入；'
-          '请在桌面端使用，或改用「在线 API」。';
-    }
-    return null;
+    // 与播放页字幕面板共用同一份判据，避免两处各写一套、以后又对不上。
+    final reason = offlineSubtitleUnavailableReason(offlineSubtitleSupport());
+    return reason.isEmpty ? null : reason;
   }
 
   List<SubtitleAiBackendKind> _availableBackends() {

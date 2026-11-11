@@ -774,11 +774,20 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
                     ),
                   ),
 
-                // 缓冲 / 打开媒体（CMS 线路；磁力走底部进度条，不在此叠中心 loading）
-                if (!_isMagnetDetailEntry &&
-                    (_playerModule.isBuffering ||
-                        _playerModule.isOpeningMedia ||
-                        _playerModule.magnetSourcePreparing))
+                // 缓冲 / 打开媒体（CMS 线路）。
+                // 磁力默认走底部进度条（初始准备/起流阶段），但用户在播中拖动
+                // 进度条 seek 后，mpv 要在新位置重新缓冲、画面会黑，而底部条没有
+                // seek 表达 → 这里对磁力的 seek 也叠中心 loading，消除「黑屏无提示」。
+                // 磁力还必须等 `magnetSeekVisualPending`（真的出画）而不是只等
+                // `hasSeekLandingPending`：后者 2.5s 兜底超时就清了，加载提示会
+                // 在画面回来前先消失（2026-11-11 用户反馈）。
+                if ((!_isMagnetDetailEntry &&
+                        (_playerModule.isBuffering ||
+                            _playerModule.isOpeningMedia ||
+                            _playerModule.magnetSourcePreparing)) ||
+                    (_isMagnetDetailEntry &&
+                        (_playerModule.hasSeekLandingPending ||
+                            _playerModule.magnetSeekVisualPending)))
                   Center(
                     child: Container(
                       padding: const EdgeInsets.symmetric(
@@ -789,53 +798,81 @@ extension _DetailPagePlayerUiExt on _DetailPageState {
                         color: Colors.black.withValues(alpha: 0.72),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          SizedBox(
-                            width: 36,
-                            height: 36,
-                            child: ValueListenableBuilder<double>(
-                              valueListenable: _playerModule.openElapsedSeconds,
-                              builder: (context, elapsed, _) {
+                      child: ListenableBuilder(
+                        listenable: Listenable.merge(<Listenable>[
+                          _playerModule.openElapsedSeconds,
+                          _playerModule.seekWaitSeconds,
+                        ]),
+                        builder: (context, _) {
+                          // 磁力等出画时用独立的 seek 计时，避免显示上一次
+                          // 开播留下的陈旧「已等待 Ns」。
+                          final magnetWaiting =
+                              _playerModule.magnetSeekVisualPending;
+                          final elapsed = magnetWaiting
+                              ? _playerModule.seekWaitSeconds.value
+                              : _playerModule.openElapsedSeconds.value;
+                          // 磁力慢缓冲下加载圈必须是「不确定进度」：原来 5s 后
+                          // 切成固定 0.66 的半圈，长时间等待会被误看成卡死。
+                          final slowMagnetWait = magnetWaiting &&
+                              elapsed * 1000 >=
+                                  kMagnetSeekVisualSlowHint.inMilliseconds;
+                          final magnetWaitTimedOut = magnetWaiting &&
+                              elapsed * 1000 >=
+                                  kMagnetSeekVisualSoftTimeout.inMilliseconds;
+                          return Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 36,
+                                height: 36,
                                 // 5s 之内给一个基础圆环；之后切换到缓冲进度反馈。
-                                if (elapsed < 5.0) {
-                                  return const CircularProgressIndicator(
-                                    color: Colors.white,
-                                    strokeWidth: 3,
-                                  );
-                                }
-                                return const CircularProgressIndicator(
-                                  color: Colors.white,
-                                  strokeWidth: 3,
-                                  value: 0.66,
-                                );
-                              },
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          Text(
-                            _playerModule.isOpeningMedia
-                                ? l10n.detailBufferingConnect
-                                : l10n.detailBuffering,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          if (_playerModule
-                              .openElapsedSeconds.value.isFinite) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              '已等待 ${_playerModule.openElapsedSeconds.value.toStringAsFixed(0)}s',
-                              style: const TextStyle(
-                                color: Colors.white60,
-                                fontSize: 11,
+                                child: elapsed < 5.0 || magnetWaiting
+                                    ? const CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 3,
+                                      )
+                                    : const CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 3,
+                                        value: 0.66,
+                                      ),
                               ),
-                            ),
-                          ],
-                        ],
+                              const SizedBox(height: 10),
+                              Text(
+                                _playerModule.isOpeningMedia
+                                    ? l10n.detailBufferingConnect
+                                    : l10n.detailBuffering,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              if (slowMagnetWait) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  magnetWaitTimedOut
+                                      ? '这个位置一直没数据，仍在尝试（可返回换源）'
+                                      : '这个位置还没下载完，仍在等画面',
+                                  style: const TextStyle(
+                                    color: Colors.white60,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                              if (elapsed.isFinite && elapsed >= 1) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  '已等待 ${elapsed.toStringAsFixed(0)}s',
+                                  style: const TextStyle(
+                                    color: Colors.white60,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          );
+                        },
                       ),
                     ),
                   ),

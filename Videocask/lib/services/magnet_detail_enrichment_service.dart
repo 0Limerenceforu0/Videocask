@@ -6,6 +6,7 @@ import 'api_service.dart';
 import 'douban_lookup_service.dart';
 import 'imdb_lookup_service.dart';
 import 'storage_service.dart';
+import 'subtitle/subtitle_title_extractor.dart';
 import 'tmdb_lookup_service.dart';
 import 'video_title_resolve_service.dart';
 
@@ -16,6 +17,25 @@ class MagnetDetailEnrichmentService {
       MagnetDetailEnrichmentService._();
 
   static final RegExp _cjkPattern = RegExp(r'[\u4e00-\u9fff]');
+
+  /// 把磁力 release 名转成元数据检索用的「干净片名 + 年份」。
+  ///
+  /// 旧实现用 `ImdbLookupService.cleanTitleForLookup`（只去版本号），纯英文
+  /// release 名 `Hi Mom 2021 720p Chinese HDRip HC H264 BONE` 会原样喂给
+  /// IMDb / 豆瓣 / CMS，联想 0 命中 → 整个详情页补全失败。真机 2026-11-11
+  /// 13:32 logcat：`keyword=Hi Mom 2021 720p... → 0 条`、`(无补全)`。
+  ///
+  /// 复用字幕链路的 [extractSubtitleTitleQuery]，避免两套噪声词表漂移。
+  /// 中文分支会残留紧跟其后的英文规格词（`肖申克的救赎 1080p BluRay x264`），
+  /// 再用本服务的 [cleanSearchTitle] 从第一个技术标签处截断。
+  @visibleForTesting
+  static ({String title, String? year}) cleanLookupParts(String raw) {
+    final q = extractSubtitleTitleQuery(primary: raw);
+    final local = cleanSearchTitle(q.local);
+    final english = q.english.trim();
+    // 英文检索对 IMDb 联想更友好；没有英文时才退回中文。
+    return (title: english.isNotEmpty ? english : local, year: q.year);
+  }
 
   /// 将占位 [base] 合并为可展示的完整 [Movie]；失败时返回 null。
   Future<Movie?> enrich(
@@ -32,18 +52,20 @@ class MagnetDetailEnrichmentService {
 
     final hint = searchHint?.trim() ?? '';
     // 元数据检索优先用当前磁力资源标题，不用用户搜索词（搜索词仅作中文别名参考）。
-    final torrentTitle = ImdbLookupService.cleanTitleForLookup(base.name);
+    // 🔴 必须走 cleanLookupParts（复用字幕链路清洗器），不能直接用
+    // `cleanTitleForLookup`：后者只去版本号，压制组噪声会导致联想全灭。
+    final parts = cleanLookupParts(base.name);
+    final torrentTitle = parts.title;
     final lookupTitle = torrentTitle.isNotEmpty
         ? torrentTitle
-        : (hint.isNotEmpty
-            ? hint
-            : ImdbLookupService.cleanTitleForLookup(base.alias));
+        : (hint.isNotEmpty ? hint : cleanLookupParts(base.alias).title);
     if (lookupTitle.isEmpty) return null;
 
+    // 年份取清洗器抽出的值：片名剥干净后 `yearFromUserQuery(lookupTitle)`
+    // 已经拿不到 2021 这种夹在分辨率前面的年份了。
     final yearHint = base.year.trim().isNotEmpty
         ? base.year.trim()
-        : (ImdbLookupService.yearFromUserQuery(lookupTitle) ??
-            ImdbLookupService.yearFromUserQuery(base.name));
+        : (parts.year ?? ImdbLookupService.yearFromUserQuery(base.name));
 
     var imdbId = torrentImdbId?.trim().toLowerCase();
     if (imdbId != null && imdbId.isEmpty) imdbId = null;
@@ -55,7 +77,9 @@ class MagnetDetailEnrichmentService {
       resolved = await VideoTitleResolveService.instance.resolve(
         lookupTitle,
         year: yearHint,
-        alias: hint.isNotEmpty ? hint : base.alias,
+        // 脏英文别名会被 resolve 当成 englishTitle，反过来污染后面
+        // IMDb enrichment 的检索词（它优先用 englishName）。
+        alias: hint.isNotEmpty ? hint : cleanLookupParts(base.alias).title,
       );
       imdbId ??= resolved?.imdbId;
     }

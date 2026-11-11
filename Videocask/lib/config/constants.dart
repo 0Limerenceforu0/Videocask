@@ -7,7 +7,7 @@ class AppConstants {
   static const String appName = '罐子';
 
   /// 应用版本
-  static const String appVersion = '1.1.8';
+  static const String appVersion = '1.1.9';
 
   /// 默认API超时时间（毫秒）—— 10秒，减少用户等待
   static const int apiTimeout = 30000;

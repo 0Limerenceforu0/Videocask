@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import '../../l10n/app_localizations.dart';
 import '../../models/movie.dart';
 import '../../services/debug_log.dart';
+import '../../services/magnet_weak_swarm_policy.dart';
 import '../../services/torrent_player_service.dart';
 import '../../utils/magnet_episode_parser.dart';
 
@@ -29,18 +30,21 @@ class MagnetAttemptResult {
     required this.retryable,
     required this.message,
     this.noFrame = false,
+    this.weakSwarm = false,
   });
 
   const MagnetAttemptResult.success()
       : ok = true,
         retryable = false,
         message = '',
-        noFrame = false;
+        noFrame = false,
+        weakSwarm = false;
 
   const MagnetAttemptResult.failed({
     required this.message,
     required this.retryable,
     this.noFrame = false,
+    this.weakSwarm = false,
   }) : ok = false;
 
   final bool ok;
@@ -52,6 +56,12 @@ class MagnetAttemptResult {
   /// 这类失败与「连不上节点」要分开计数：连不上可以无限重试，读不出画面
   /// 重试多了也没意义（见 [MagnetFirstFramePolicy.maxNoFrameStrikes]）。
   final bool noFrame;
+
+  /// 失败原因是「swarm 本身没货」：连上来的 peer 极少且几乎不给数据。
+  ///
+  /// 与 [noFrame] 分开计数（见 [MagnetWeakSwarmPolicy.maxWeakStrikes]）：
+  /// 这类失败重开一两轮没改善就该停，否则用户会对着同一个弱种子无限转圈。
+  final bool weakSwarm;
 }
 
 /// 磁力 P2P 边下边播（从 [DetailPage] 抽离）。
@@ -148,6 +158,8 @@ class DetailMagnetPlayback {
     // （见 [MagnetFirstFramePolicy.maxNoFrameStrikes]），否则会对着同一个
     // 解不了的封装无限重开，用户看到的依然是黑屏，只是闪烁几下。
     var noFrameStrikes = 0;
+    // 「swarm 没货」的连续次数（见 [MagnetWeakSwarmPolicy]）。
+    var weakSwarmStrikes = 0;
 
     while (true) {
       attempt++;
@@ -193,7 +205,16 @@ class DetailMagnetPlayback {
         return;
       }
 
-      if (result.noFrame) {
+      if (result.weakSwarm) {
+        // swarm 没货：重开一轮换 tracker / 重新打洞还有救，但两轮都一样就停。
+        weakSwarmStrikes++;
+        if (weakSwarmStrikes >= MagnetWeakSwarmPolicy.maxWeakStrikes) {
+          _fail(result.message);
+          return;
+        }
+        // 与「读不出画面」分开计数，否则两类失败会互相把对方的额度耗光。
+        noFrameStrikes = 0;
+      } else if (result.noFrame) {
         noFrameStrikes++;
         if (noFrameStrikes >= MagnetFirstFramePolicy.maxNoFrameStrikes) {
           // 不是「连不上」，而是「连上了但播放器读不出画面」。重开同样的流
@@ -201,8 +222,10 @@ class DetailMagnetPlayback {
           _fail(result.message, noFrame: true);
           return;
         }
+        weakSwarmStrikes = 0;
       } else {
         noFrameStrikes = 0;
+        weakSwarmStrikes = 0;
       }
     }
   }
@@ -340,15 +363,24 @@ class DetailMagnetPlayback {
     final streamUrl = await player.torrentService.playFile(fileIndex);
     if (!isMounted() || playVersion != torrent.magnetPlayVersion) return null;
     if (streamUrl == null || streamUrl.isEmpty) {
+      final svc = player.torrentService;
+      // 弱 swarm 早止损时服务层会返回 null（不把空流交给 mpv），文案要
+      // 说清「这个资源做种太少」，而不是笼统的「启动播放流失败」。
+      final weak = svc.weakSwarmAbort;
       DebugLog.log(
         'Magnet',
-        'playFile 失败: index=$fileIndex, '
-        'err=${player.torrentService.errorMessage}',
+        weak
+            ? '弱 swarm 中止: index=$fileIndex, peers=${svc.weakSwarmPeers}, '
+                'err=${svc.errorMessage}'
+            : 'playFile 失败: index=$fileIndex, err=${svc.errorMessage}',
         flush: true,
       );
       return MagnetAttemptResult.failed(
-        message: l10n.detailMagnetStreamFailed,
+        message: weak
+            ? l10n.detailMagnetWeakSwarm('${svc.weakSwarmPeers}')
+            : l10n.detailMagnetStreamFailed,
         retryable: true,
+        weakSwarm: weak,
       );
     }
 
@@ -385,7 +417,10 @@ class DetailMagnetPlayback {
       return MagnetAttemptResult.failed(
         message: l10n.detailMagnetNoData,
         retryable: true,
-        noFrame: true,
+        // 🔴 零数据是「swarm 供不上」，不是「播放器读不出画面」：不能占
+        // noFrame 的名额（noFrame 是「有数据但解不开」，两次就彻底放弃）。
+        // 归到 weakSwarm 才有独立的、语义正确的重试上限。
+        weakSwarm: true,
       );
     }
     if (MagnetFirstFramePolicy.handoverTooThin(bufferPct: buffered)) {
