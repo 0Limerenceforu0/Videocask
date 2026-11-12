@@ -22,6 +22,10 @@ enum InstallFailure {
 
   /// 文件系统或系统调用失败。
   ioError,
+
+  /// 降级被系统拦截：已装的 versionCode 比新包更高（常见于残留的测试包）。
+  /// 此时系统弹「已存在更高版本」，我们提前拦截并给出「先卸载旧版本」的明确引导。
+  downgradeBlocked,
 }
 
 /// 安装结果。
@@ -92,6 +96,11 @@ class UpdateInstaller {
         '当前平台不支持安装 APK',
       );
     }
+    // 安装前先做「降级拦截」：若设备上已装的 versionCode 比新包更高
+    // （典型场景是之前装过更高版本号的测试包），系统会报「已存在更高版本」且原因含糊。
+    // 这里提前识别，给出「先卸载旧版本」的可操作引导，而不是把系统错误甩给用户。
+    final downgrade = await _checkDowngrade(apkPath);
+    if (downgrade != null) return downgrade;
     try {
       final result = await _channel.invokeMethod<bool>(
         'installApk',
@@ -118,6 +127,30 @@ class UpdateInstaller {
     } catch (e) {
       DebugLog.log('Update', '调起安装器异常: $e');
       return InstallResult.failure(InstallFailure.ioError, e.toString());
+    }
+  }
+
+  /// 安装前比对已装版本与新包版本：已装 versionCode 更高则判为降级，拦截并给出引导文案。
+  /// 读取失败（如无法解析 APK）时放行，由系统兜底，不阻断正常安装。
+  static Future<InstallResult?> _checkDowngrade(String apkPath) async {
+    try {
+      final res = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'verifyUpdateInstall',
+        {'path': apkPath},
+      );
+      if (res == null) return null;
+      final allowed = res['allowed'] == true;
+      if (allowed) return null;
+      final installed = res['installedVersionCode'];
+      final apk = res['apkVersionCode'];
+      return InstallResult.failure(
+        InstallFailure.downgradeBlocked,
+        '当前已安装更高版本（versionCode $installed），无法降级安装到 $apk。\n'
+        '请先在系统「设置 → 应用」中卸载旧版本（含测试包）后重试。',
+      );
+    } catch (e) {
+      DebugLog.log('Update', '降级预检失败，放行: $e');
+      return null;
     }
   }
 
@@ -155,23 +188,35 @@ class UpdateInstaller {
         );
       }
 
-      // 安装目录 = 当前 exe 所在目录；解压后必须能在里面找到同名 exe。
+      // 安装目录 = 当前 exe 所在目录。
+      // 更新包里的可执行文件名可能与当前运行的不同：历史版本是 movie_app.exe，
+      // 新版本改为 罐子.exe。这里只校验包根目录存在 exe，实际文件名交给批处理
+      // 在运行时解析——避免把中文文件名写进 .bat（cmd 按 GBK 读 UTF-8 会乱码）。
       final exePath = Platform.resolvedExecutable;
       final installDir = File(exePath).parent.path;
-      final exeName = exePath.split(Platform.pathSeparator).last;
-      if (!File('${workRoot.path}${Platform.pathSeparator}$exeName').existsSync()) {
-        return InstallResult.failure(
+      final runningExeName = exePath.split(Platform.pathSeparator).last;
+      final payloadExes = workRoot
+          .listSync()
+          .whereType<File>()
+          .where((f) => f.path.toLowerCase().endsWith('.exe'))
+          .toList();
+      final hasSameName = payloadExes.any(
+        (f) =>
+            f.path.split(Platform.pathSeparator).last.toLowerCase() ==
+            runningExeName.toLowerCase(),
+      );
+      if (payloadExes.isEmpty || (payloadExes.length > 1 && !hasSameName)) {
+        return const InstallResult.failure(
           InstallFailure.payloadInvalid,
-          '更新包里没有 $exeName，请检查发布产物',
+          '更新包里没有可执行文件，请检查发布产物',
         );
       }
 
       final batPath =
           '${workRoot.parent.path}${Platform.pathSeparator}videocask_apply_update.bat';
       final script = _buildWindowsApplyScript(
-        payloadDir: workRoot.path,
-        installDir: installDir,
-        exeName: exeName,
+        payloadDirName: workRoot.path.split(Platform.pathSeparator).last,
+        processId: pid,
       );
       await File(batPath).writeAsString(script, flush: true);
 
@@ -193,34 +238,43 @@ class UpdateInstaller {
   /// 生成自替换批处理。
   ///
   /// 关键点：
-  /// 1. 必须先等 `movie_app.exe` 退出——运行中的 exe 被占用，robocopy 会跳过；
-  /// 2. 用 robocopy `/IS /IT` 强制覆盖同名文件（保留目录结构）；
-  /// 3. 重启新版本后再删除自身，避免删除失败。
+  /// 1. 先等**当前进程**退出——运行中的 exe 被占用，robocopy 会跳过。用 PID
+  ///    等待而不是按 IMAGENAME，避免中文 exe 名在 .bat 里乱码。
+  /// 2. 包内 exe 名由批处理在运行时从 `%SRC%\*.exe` 解析（历史版本是
+  ///    movie_app.exe，新版本是 罐子.exe），因此脚本本身保持纯 ASCII。
+  /// 3. 用 robocopy `/IS /IT` 强制覆盖同名文件（保留目录结构），并把改名前的
+  ///    旧 exe（如 movie_app.exe）删掉，避免新旧两个可执行文件并存。
+  /// 4. 重启新版本后再删除自身，避免删除失败。
   static String _buildWindowsApplyScript({
-    required String payloadDir,
-    required String installDir,
-    required String exeName,
+    required String payloadDirName,
+    required int processId,
   }) {
     final nl = '\r\n';
     return <String>[
       '@echo off',
       'setlocal',
-      'set "SRC=$payloadDir"',
-      'set "DST=$installDir"',
-      'set "EXE=$exeName"',
+      // %~dp0 = 本 .bat 所在目录（TEMP），载荷解压在同级的固定子目录。
+      'set "SRC=%~dp0$payloadDirName"',
+      // %CD% = 调用方传入的 workingDirectory，即 exe 所在安装目录。
+      'set "DST=%CD%"',
+      'set "EXE="',
+      'for %%f in ("%SRC%\\*.exe") do set "EXE=%%~nxf"',
+      'if not defined EXE goto :failed',
       // 最多等 60 秒，避免进程异常残留导致永远不覆盖。
       'for /l %%i in (1,1,60) do (',
-      '  tasklist /FI "IMAGENAME eq %EXE%" 2>nul | find /I "%EXE%" >nul',
+      '  tasklist /FI "PID eq $processId" /NH 2>nul | find "$processId" >nul',
       '  if errorlevel 1 goto :copy',
       '  timeout /t 1 /nobreak >nul',
       ')',
       ':copy',
       'robocopy "%SRC%" "%DST%" /E /IS /IT /NFL /NDL /NJH /NJS /NC /NS /NP >nul',
       'if errorlevel 8 goto :failed',
+      // 覆盖成功后清理改名前的旧 exe（如 movie_app.exe）。
+      'for %%f in ("%DST%\\*.exe") do if /I not "%%~nxf"=="%EXE%" del /f /q "%%~f" >nul 2>&1',
       'start "" /d "%DST%" "%DST%\\%EXE%"',
       'goto :cleanup',
       ':failed',
-      'echo 更新失败，未能覆盖文件。日志: %~dp0update_error.log',
+      'echo Update failed: could not overwrite files. See update_error.log',
       'robocopy "%SRC%" "%DST%" /E /IS /IT >"%~dp0update_error.log" 2>&1',
       'pause',
       ':cleanup',

@@ -26,6 +26,7 @@ import 'services/sync_service.dart';
 import 'l10n/app_localizations.dart';
 import 'widgets/material_app_deep_link_child.dart';
 import 'pages/settings/update_dialog.dart';
+import 'services/update/update_notifier.dart';
 import 'services/deep_link_stream_service.dart';
 import 'services/dlna_service.dart';
 import 'services/local_media_http_server.dart';
@@ -143,6 +144,8 @@ class _MovieAppState extends State<MovieApp> {
         });
         WidgetsBinding.instance.addPostFrameCallback((_) {
           unawaited(DeepLinkStreamService.instance.start());
+          // 初始化更新通知层（系统通知式后台下载），幂等。
+          unawaited(UpdateNotifier.instance.init());
           // 启动后延迟静默检查更新：只在新版本时弹窗，失败不打扰。
           // 放在首帧之后，避免和首页数据加载抢带宽。
           scheduleStartupUpdateCheck();

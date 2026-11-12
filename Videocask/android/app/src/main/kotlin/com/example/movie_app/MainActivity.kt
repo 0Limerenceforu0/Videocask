@@ -246,6 +246,60 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
+                    // 安装前的「降级拦截」：若设备上已装的 versionCode 比新包更高
+                    // （常见于残留了更高版本号的测试包），系统会报「已存在更高版本」且原因不明确。
+                    // 这里提前读出两者的 versionCode 并比较，给 Dart 层一个明确的引导文案，
+                    // 避免用户被系统错误提示搞懵。
+                    "verifyUpdateInstall" -> {
+                        val path = call.argument<String>("path")
+                        if (path.isNullOrBlank()) {
+                            result.error("BAD_ARGS", "缺少 APK 路径", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            val pm = packageManager
+                            val apkFile = File(path)
+                            if (!apkFile.exists()) {
+                                result.error("FILE_NOT_FOUND", "安装包不存在：$path", null)
+                                return@setMethodCallHandler
+                            }
+                            val apkInfo = pm.getPackageArchiveInfo(path, 0)
+                            val apkVc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                apkInfo?.longVersionCode ?: -1L
+                            } else {
+                                @Suppress("DEPRECATION")
+                                (apkInfo?.versionCode?.toLong() ?: -1L)
+                            }
+                            val installedInfo = try {
+                                pm.getPackageInfo(packageName, 0)
+                            } catch (_: Exception) {
+                                null
+                            }
+                            val installedVc = if (installedInfo != null) {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                    installedInfo.longVersionCode
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    installedInfo.versionCode.toLong()
+                                }
+                            } else -1L
+                            // 未安装过（installedVc<=0）或新包版本号更高才放行；否则视为降级，拦截。
+                            val allowed = installedVc <= 0L || apkVc > installedVc
+                            val map = HashMap<String, Any>()
+                            map["apkVersionCode"] = apkVc
+                            map["installedVersionCode"] = installedVc
+                            map["allowed"] = allowed
+                            result.success(map)
+                        } catch (e: Exception) {
+                            // 读取失败不应阻断安装，放行并由系统兜底。
+                            val map = HashMap<String, Any>()
+                            map["apkVersionCode"] = -1L
+                            map["installedVersionCode"] = -1L
+                            map["allowed"] = true
+                            result.success(map)
+                        }
+                    }
+
                     else -> result.notImplemented()
                 }
             }

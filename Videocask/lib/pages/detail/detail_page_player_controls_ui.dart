@@ -208,27 +208,63 @@ extension _DetailPagePlayerControlsUiExt on _DetailPageState {
       valueListenable: _playerModule.positionListenable,
       builder: (context, _, __) => LayoutBuilder(
         builder: (context, constraints) {
+          final w = constraints.maxWidth;
+
           Duration positionFromLocal(Offset local) {
-            final w = constraints.maxWidth;
             final dMs = _playerModule.duration.inMilliseconds;
             if (w <= 0 || dMs <= 0) return Duration.zero;
             final f = (local.dx / w).clamp(0.0, 1.0);
             return Duration(milliseconds: (dMs * f).round());
           }
 
-          void previewAt(Offset local) {
+          double clampedX(Offset local) => local.dx.clamp(0.0, w);
+
+          /// 悬停预览：只显示「所指位置的时间」，不移动播放头、绝不 seek。
+          void hoverPreview(Offset local) {
+            if (_progressPointerId != null) return;
+            final isFirstHover = _progressPreview.value == null;
+            final time = positionFromLocal(local);
+            _progressPreview.value = _ProgressPreview(
+              x: clampedX(local),
+              time: time,
+            );
+            // 只在「刚进入进度条」时记一条，避免鼠标移动把日志刷爆。
+            if (isFirstHover) {
+              DebugLog.log(
+                'Progress',
+                '进度条悬停预览: ${time.inSeconds}s（不移动播放头）',
+                flush: true,
+              );
+            }
+            // 控制栏与 playerSurface 是兄弟节点，鼠标落在进度条上不会触发
+            // 画面层的 pointer activity；这里主动续一次 3 秒隐藏计时，
+            // 否则气泡显示到一半控制栏就自动收起了。
+            _onPlayerPointerActivity();
+          }
+
+          /// 按下 / 长按 / 拖动预览：移动播放头 + 实时时间，但绝不 seek。
+          void scrubPreview(Offset local) {
             final newPos = positionFromLocal(local);
             _setState(() {
               _scrubbingProgress = true;
               _scrubPreviewPosition = newPos;
             });
+            _progressPreview.value = _ProgressPreview(
+              x: clampedX(local),
+              time: newPos,
+            );
             _scrubFastSeekThrottled(newPos);
           }
 
-          void commitSeek(Duration newPos, {required bool precise}) {
+          void clearPreview() => _progressPreview.value = null;
+
+          void commitSeek(Duration newPos) {
             _scrubFastSeekTimer?.cancel();
             _scrubFastSeekTarget = null;
-            if (_playerModule.currentPlayUrl == null) return;
+            if (_playerModule.currentPlayUrl == null) {
+              _setState(() => _scrubbingProgress = false);
+              return;
+            }
             // 统一走 coordinator seek：先更新 authoritative 再真正 seek，
             // 避免 seek 后回跳被 PlayheadAuthority 误判为 discontinuity。
             unawaited(
@@ -237,84 +273,199 @@ extension _DetailPagePlayerControlsUiExt on _DetailPageState {
                 _setState(() => _scrubbingProgress = false);
               }),
             );
-            _setState(() {
-              if (precise) _scrubbingProgress = false;
-            });
+          }
+
+          void beginScrub(Offset local, int pointerId) {
+            if (_progressPointerId != null) return;
+            _progressPointerId = pointerId;
+            _playerModule.hideTimer?.cancel();
+            scrubPreview(local);
+            DebugLog.log(
+              'Progress',
+              '进度条按下: 仅预览 ${_scrubPreviewPosition.inSeconds}s（不 seek）',
+              flush: true,
+            );
+          }
+
+          /// 松手才跳转：位置取 pointerUp 的坐标（可能已滑动到别处）。
+          void endScrub(Offset local, int pointerId) {
+            if (_progressPointerId != pointerId) return;
+            _progressPointerId = null;
+            final target = positionFromLocal(local);
+            _setState(() => _scrubPreviewPosition = target);
+            clearPreview();
+            DebugLog.log(
+              'Progress',
+              '进度条松手: 提交 seek ${target.inSeconds}s',
+              flush: true,
+            );
+            commitSeek(target);
+            _startHideTimer();
+          }
+
+          /// 手势被系统取消（来电 / 多指 / 滑出）：撤销预览，不跳转。
+          void cancelScrub(int pointerId) {
+            if (_progressPointerId != pointerId) return;
+            _progressPointerId = null;
+            _scrubFastSeekTimer?.cancel();
+            _scrubFastSeekTarget = null;
+            _setState(() => _scrubbingProgress = false);
+            clearPreview();
+            _startHideTimer();
           }
 
           return SizedBox(
             height: 22,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onHorizontalDragStart: (d) {
-                _playerModule.hideTimer?.cancel();
-                previewAt(d.localPosition);
+            child: MouseRegion(
+              onExit: (_) {
+                // 拖动中指针滑出进度条范围时保留气泡，松手 / 取消才收起。
+                if (_progressPointerId == null) clearPreview();
               },
-              onHorizontalDragUpdate: (d) => previewAt(d.localPosition),
-              onHorizontalDragEnd: (_) {
-                commitSeek(_scrubPreviewPosition, precise: true);
-                _startHideTimer();
-              },
-              onTapDown: (d) {
-                _playerModule.hideTimer?.cancel();
-                final target = positionFromLocal(d.localPosition);
-                _setState(() {
-                  _scrubbingProgress = true;
-                  _scrubPreviewPosition = target;
-                });
-                commitSeek(target, precise: true);
-                _startHideTimer();
-              },
-              child: Stack(
-                alignment: Alignment.centerLeft,
-                children: [
-                  Container(
-                    height: 4,
-                    margin: const EdgeInsets.symmetric(vertical: 9),
-                    decoration: BoxDecoration(
-                      color: Colors.white24,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  FractionallySizedBox(
-                    widthFactor: _bufferFraction(),
-                    child: Container(
-                      height: 4,
-                      margin: const EdgeInsets.symmetric(vertical: 9),
-                      decoration: BoxDecoration(
-                        color: Colors.white38,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  FractionallySizedBox(
-                    widthFactor: _timelineFraction(),
-                    child: Container(
-                      height: 4,
-                      margin: const EdgeInsets.symmetric(vertical: 9),
-                      decoration: BoxDecoration(
-                        color: detailAccentColor(context),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  Align(
-                    alignment: Alignment(_timelineFraction() * 2 - 1, 0),
-                    child: Container(
-                      width: 11,
-                      height: 11,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white,
-                        border: Border.all(
-                          color:
-                              detailAccentColor(context).withValues(alpha: 0.9),
-                          width: 1.5,
+              child: Listener(
+                behavior: HitTestBehavior.opaque,
+                // 桌面 / Web：鼠标悬停（未按下）显示所指位置的时间。
+                onPointerHover: (e) => hoverPreview(e.localPosition),
+                // 按下或长按：只预览不跳转；滑动时实时显示滑到的时间；
+                // 松手才 commitSeek，方便「按住后滑动确认位置再跳转」。
+                onPointerDown: (e) => beginScrub(e.localPosition, e.pointer),
+                onPointerMove: (e) {
+                  if (_progressPointerId == e.pointer) {
+                    scrubPreview(e.localPosition);
+                  }
+                },
+                onPointerUp: (e) => endScrub(e.localPosition, e.pointer),
+                onPointerCancel: (e) => cancelScrub(e.pointer),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  // 这些空回调只负责在手势竞技场里赢过 playerSurface 的
+                  // 「画面横向快进 / 长按倍速 / 单击切换播放」与控制栏 onTap。
+                  // 真正交互全由上面的 Listener 处理：长按超过 500ms 时
+                  // GestureDetector 的 tap 会被 cancel，但 Listener 的
+                  // pointerUp 不受影响，松手依旧正常跳转。
+                  onTap: () {},
+                  onTapDown: (_) {},
+                  onLongPressStart: (_) {},
+                  onLongPressEnd: (_) {},
+                  onHorizontalDragStart: (_) {},
+                  onHorizontalDragUpdate: (_) {},
+                  onHorizontalDragEnd: (_) {},
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    alignment: Alignment.centerLeft,
+                    children: [
+                      Container(
+                        height: 4,
+                        margin: const EdgeInsets.symmetric(vertical: 9),
+                        decoration: BoxDecoration(
+                          color: Colors.white24,
+                          borderRadius: BorderRadius.circular(2),
                         ),
                       ),
-                    ),
+                      FractionallySizedBox(
+                        widthFactor: _bufferFraction(),
+                        child: Container(
+                          height: 4,
+                          margin: const EdgeInsets.symmetric(vertical: 9),
+                          decoration: BoxDecoration(
+                            color: Colors.white38,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      FractionallySizedBox(
+                        widthFactor: _timelineFraction(),
+                        child: Container(
+                          height: 4,
+                          margin: const EdgeInsets.symmetric(vertical: 9),
+                          decoration: BoxDecoration(
+                            color: detailAccentColor(context),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      Align(
+                        alignment: Alignment(_timelineFraction() * 2 - 1, 0),
+                        child: Container(
+                          width: 11,
+                          height: 11,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white,
+                            border: Border.all(
+                              color: detailAccentColor(context)
+                                  .withValues(alpha: 0.9),
+                              width: 1.5,
+                            ),
+                          ),
+                        ),
+                      ),
+                      // 指针所在位置的细标记线（悬停 / 拖动都显示）。
+                      ValueListenableBuilder<_ProgressPreview?>(
+                        valueListenable: _progressPreview,
+                        builder: (context, preview, _) {
+                          if (preview == null) return const SizedBox.shrink();
+                          return Positioned(
+                            left: (preview.x - 1).clamp(
+                              0.0,
+                              (w - 2).clamp(0.0, double.infinity),
+                            ),
+                            top: 3,
+                            child: IgnorePointer(
+                              child: Container(
+                                width: 2,
+                                height: 16,
+                                color: Colors.white.withValues(alpha: 0.75),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                      // 跟随指针的时间气泡：显示「放在这里 / 滑到这里」的时间。
+                      ValueListenableBuilder<_ProgressPreview?>(
+                        valueListenable: _progressPreview,
+                        builder: (context, preview, _) {
+                          if (preview == null) return const SizedBox.shrink();
+                          const bubbleWidth = 72.0;
+                          final left = (preview.x - bubbleWidth / 2).clamp(
+                            0.0,
+                            (w - bubbleWidth).clamp(0.0, double.infinity),
+                          );
+                          return Positioned(
+                            left: left,
+                            bottom: 26,
+                            child: IgnorePointer(
+                              child: Container(
+                                width: bubbleWidth,
+                                alignment: Alignment.center,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.88),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  DetailVideoLayout.formatPlaybackDuration(
+                                    preview.time,
+                                  ),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    fontFeatures: [
+                                      FontFeature.tabularFigures(),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           );
@@ -607,7 +758,8 @@ extension _DetailPagePlayerControlsUiExt on _DetailPageState {
           // 重试等待期标题已经写了「正在自动重试（第 N 次）」，徽标再标一次是重复。
           attemptLabel: _playerModule.magnetRetrying
               ? ''
-              : l10n.detailMagnetAttemptLabel('${_playerModule.torrentAttempt}'),
+              : l10n
+                  .detailMagnetAttemptLabel('${_playerModule.torrentAttempt}'),
           onStop: _stopMagnetLoading,
           progressValue: value,
           indeterminate: value == null,

@@ -29,6 +29,13 @@ class TorrentPlayerService with ChangeNotifier {
   int _downloadSpeed = 0;
   int get downloadSpeed => _downloadSpeed;
 
+  /// 原生 download_rate 原值（Web 占位恒 0，与 IO 实现保持同形 API）。
+  /// 起流交接判据会读它，条件导出解析到本文件时必须存在。
+  int get nativeDownloadRate => 0;
+
+  /// 本轮种子已下载字节数（Web 占位恒 0，与 IO 实现保持同形 API）。
+  int get downloadedBytes => 0;
+
   /// Web 占位：没有播放种子，恒 null（与 IO 实现保持同形 API）。
   int? get currentTorrentId => null;
 

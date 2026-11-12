@@ -41,6 +41,69 @@
   避免年份/片名错配，新增对应单测。
 - 死代码清理与若干播放/字幕/播放列表细节修正。
 
+### 应用内更新改进
+
+- 后台下载升级为「系统通知式」：点「下载并更新」后即可关闭弹窗，下载在后台继续，
+  并在系统通知栏显示带进度条的实时进度；切到别的 App 也能看到，点通知可回到安装页。
+- 安装前新增「降级拦截」：若设备上已装版本的 versionCode 高于新包
+  （常见于残留了更高版本号的测试包），会明确提示「请先卸载旧版本」，
+  而非抛出含糊的「已存在更高版本」系统错误。
+
+### Windows 磁力播放修复
+
+- 修复 Windows 端磁力资源完全无法播放的问题：点击磁力后界面停在
+  「正在自动重试第 N 次 · 启动 P2P 引擎」并无限重试。
+  根因是 `libtorrent_flutter` 1.9.9 随包发布的 Windows 预编译 DLL
+  （`prebuilt/windows/x64/libtorrent_flutter.dll`）比其 Dart 绑定落后一个提交，
+  **未导出 `lt_set_log_path`**；而 Dart 侧在 `TorrentBridgeBindings` 构造函数里
+  急切 lookup 该符号，导致 `LibtorrentFlutter.init()` 直接抛
+  `Failed to lookup symbol 'lt_set_log_path'`，引擎永远初始化不起来。
+- 修法（纯 Dart、不动原生库）：用 `tool/patch_libtorrent_optional_logpath.py`
+  把该符号降级为「可选」——找不到时返回 null，`setNativeLogPath` 变为 no-op。
+  Android 的 `.so` 由源码重建、含该符号，行为不变。日志已验证
+  「P2P 引擎初始化成功」并可正常拉取 tracker。
+- 恢复 Windows 可执行文件名称为「罐子.exe」：此前修复构建改走了
+  `tool/build_windows_clean.py`，该链路缺少文件级改名步骤，产物退回了内部
+  工程名 `movie_app.exe`。现已在构建成功后自动改名；应用内更新也兼容
+  「旧包 `movie_app.exe` → 新包 `罐子.exe`」的迁移（覆盖成功后清理旧 exe），
+  老用户无需手动重装。
+
+### Windows 磁力播放稳定性（2026-11-12 补充修复，版本号不变）
+
+- 桌面启动参数深链失效：`main.dart` 原来从 `Platform.executableArguments` 读启动参数，
+  但 Flutter 桌面该值只含 Dart VM 参数，导致 `罐子.exe "magnet:?xt=…"` 从未生效
+  （`DeepLinkStreamService` 又只在 Android/iOS 启用）。现改为 `main([List<String> args])`
+  接收入口参数，桌面可用命令行/快捷方式一键打开磁力并自动起播，同时让全流程自动化回归成为可能。
+- 修复「起流后零数据」误判：`StreamInfo.bufferPct` 是原生预缓冲比例，Windows 上可能恒为
+  0%，而此时 `totalDone` 已有数 MB、差分速度 1MB/s。旧判据只看 `bufferPct <= 0`
+  就删种子冷重启，把健康的下载白扔一轮（本机 exe A/B 实测 Big Buck Bunny 第 1 轮因此重来，
+  第 2 轮才出画）。现要求 buffer / 差分速度 / 原生速率 / 已下载字节**全部为零**才判失败。
+- 修复种子数据目录清理：Windows 上 `deleteSync(recursive: true)` 常因流文件句柄未释放报
+  `errno=145 目录不是空的`，旧实现直接忽略导致残缺 piece 残留、下一轮 recheck 污染。
+  现改为重试 4 次 + 逐文件删除兜底 + 等待句柄释放。
+
+### 全端进度条交互（2026-11-12 补充，版本号不变）
+
+- 进度条（Android / Windows / Web 共用同一份 `_buildProgressBar()`）新增鼠标/指针交互：
+  - **悬停预览**：鼠标移到进度条上即显示「所指位置的时间」气泡，不移动播放头、绝不 seek。
+  - **按下 / 长按只预览不跳转**：按下后只更新气泡与时间，画面保持原位置；便于「按住后滑动确认位置再跳转」。
+  - **长按滑动实时预览**：按住并拖动时气泡实时显示「滑到的时间」。
+  - **松手才跳转**：手指/指针松开时才提交 seek（取松开瞬间的位置，可能已滑动到别处）；
+    手势被系统取消（来电 / 多指 / 滑出）则撤销预览、不跳转。
+  - 实现要点：`Listener` 的 `onPointerHover/Down/Move/Up/Cancel` 分别驱动
+    `hoverPreview / beginScrub / scrubPreview / endScrub / cancelScrub`；
+    拖动期间只走 `_scrubFastSeekThrottled`（仅存目标、节流回调不调用 seek），
+    真正 seek 仅在 `endScrub → commitSeek` 发生。气泡用 `ValueListenableBuilder`
+    局部重建，避免每 hover 整页 `setState`。
+
+### Windows 磁力播放 DLL 重建（2026-11-12 补充，版本号不变）
+
+- 重编 `libtorrent_flutter.dll`（MSVC + libtorrent 2.0.11 + boost 1.85，ABI v2 /
+  `TORRENT_NO_DEPRECATE`），移植此前仅 Android 端具备的两处原生补丁：
+  修复「播放中供数停滞 → 种子预取窗口下满被 `remove_torrent` → `torrent_handle`
+  失效 → 画面定格」的根因。本机 exe 200s 实测 `done` 持续供数至 101.5MB 不再冻结，
+  磁力起播后画面稳定出图。
+
 ## 1.1.8 (2026-11-10)
 
 > 本次为 Android + Windows + Web 三端一次性交付，版本 `1.1.8+68`。

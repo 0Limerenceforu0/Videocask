@@ -388,7 +388,8 @@ class DetailMagnetPlayback {
     // （它刻意不置 error，否则用户会被弹回详情页，见 _waitForStreamReady 复盘），
     // 表现就是黑屏 + 进度条 0%。这种「交接但零数据」必须在这里当失败处理，
     // 触发自动二次尝试，而不是把黑屏丢给用户。
-    final buffered = player.torrentService.bufferPct;
+    final svc = player.torrentService;
+    final buffered = svc.bufferPct;
     // 🔴 2026-11-08 真机（4080）二次定案 —— 这里**不能再因「缓冲偏薄」重试**：
     //
     // 上一版用 `handoverTooThin(<12%)` 把 buffer=6% 判失败并触发重试。但
@@ -403,15 +404,27 @@ class DetailMagnetPlayback {
     //
     // 结论：只有「一个字节都没有」才判失败并重试（死 swarm 才值得重新打洞）；
     // 缓冲偏薄只记日志，照常交接，由 mpv 读流 + 看门狗兜底。
-    if (buffered <= 0) {
+    //
+    // 🔴 2026-11-12 本机 exe 全自动 A/B 定案 —— 「一个字节都没有」**不能只看
+    // bufferPct**：`StreamInfo.bufferPct` 是原生预缓冲比例，Windows 上可能因
+    // streamUpdates 滞后恒为 0，而 `totalDone` 已经几 MB、差分速度 1MB/s。
+    // 实测 Big Buck Bunny 第一轮日志 `流已就绪: buffer=0%, speed=1026004 B/s`
+    // 被旧判据当成零数据，白白 stop() 删掉健康种子冷重启，第 2 轮才播出画。
+    // 现在要求 buffer / 差分速度 / 原生速率 / 已下载字节**全部为零**才判失败。
+    final speed = svc.downloadSpeed;
+    final nativeSpeed = svc.nativeDownloadRate;
+    final done = svc.downloadedBytes;
+    final hasIncomingData =
+        buffered > 0 || speed > 0 || nativeSpeed > 0 || done > 0;
+    if (!hasIncomingData) {
       DebugLog.log(
         'Magnet',
-        '起流后零缓冲 buffer=$buffered% '
-        '(${player.torrentService.metaWaitSeconds}s): '
-        'activePeers=${player.torrentService.activePeers} '
-        'neverConnected=${player.torrentService.handoverWithoutPeers} '
-        'seeds=${player.torrentService.seeds} '
-        'speed=${player.torrentService.downloadSpeed} B/s',
+        '起流后零数据 buffer=$buffered% speed=$speed B/s '
+        'native=$nativeSpeed B/s done=$done B '
+        '(${svc.metaWaitSeconds}s): '
+        'activePeers=${svc.activePeers} '
+        'neverConnected=${svc.handoverWithoutPeers} '
+        'seeds=${svc.seeds}',
         flush: true,
       );
       return MagnetAttemptResult.failed(
@@ -421,6 +434,14 @@ class DetailMagnetPlayback {
         // noFrame 的名额（noFrame 是「有数据但解不开」，两次就彻底放弃）。
         // 归到 weakSwarm 才有独立的、语义正确的重试上限。
         weakSwarm: true,
+      );
+    }
+    if (buffered <= 0) {
+      DebugLog.log(
+        'Magnet',
+        '缓冲比例仍为 0% 但已有数据流入: speed=$speed B/s '
+        'native=$nativeSpeed B/s done=$done B → 不删种子，照常交接',
+        flush: true,
       );
     }
     if (MagnetFirstFramePolicy.handoverTooThin(bufferPct: buffered)) {

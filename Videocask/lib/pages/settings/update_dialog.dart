@@ -1,12 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../config/app_navigator.dart';
-import '../../services/debug_log.dart';
+import '../../services/update/update_download_manager.dart';
 import '../../services/update/update_installer.dart';
 import '../../services/update/update_policy.dart';
 import '../../services/update/update_service.dart';
@@ -17,6 +16,10 @@ import '../../services/update/update_service.dart';
 /// - 启动静默检查只在新版本时弹窗，失败一声不响；
 /// - 手动检查一定会给反馈（最新 / 有新版 / 还没发版 / 网络失败）；
 /// - 强制更新（正文含 `[强制更新]`）时不可关闭、不可「稍后」。
+///
+/// 下载模型：弹窗只是「下载管理器」的**观察者**——下载任务由
+/// [UpdateDownloadManager] 这个单例持有，关掉弹窗下载照常继续，App 切到后台也能
+/// 在系统通知栏看到进度（用户要的「系统通知式后台下载」）。
 
 /// 手动检查更新（设置页入口）。
 Future<void> checkUpdateManually(BuildContext context) async {
@@ -89,7 +92,7 @@ void scheduleStartupUpdateCheck({
 /// 取根导航的 context（`appRootNavigatorKey` 与 go_router 共用同一个 key）。
 BuildContext? _rootContext() => appRootNavigatorKey.currentContext;
 
-/// 打开更新弹窗。
+/// 打开更新弹窗。若该版本已在后台下载中，弹窗会自动「接管」显示实时进度。
 Future<void> showUpdateDialog(
   BuildContext context,
   UpdateInfo info, {
@@ -124,7 +127,7 @@ class _CheckingDialog extends StatelessWidget {
   }
 }
 
-/// 更新弹窗主体。
+/// 更新弹窗主体（下载管理器的观察者）。
 class UpdateDialog extends StatefulWidget {
   const UpdateDialog({super.key, required this.info, required this.manual});
 
@@ -136,22 +139,56 @@ class UpdateDialog extends StatefulWidget {
 }
 
 class _UpdateDialogState extends State<UpdateDialog> {
-  _Phase _phase = _Phase.idle;
-  double _progress = 0;
-  String _statusText = '';
-  String? _error;
-  String? _downloadedPath;
+  late UpdateDownloadState _snap;
   String? _androidAbi;
-  CancelToken? _cancelToken;
+  bool _autoInstallTriggered = false;
 
   UpdateInfo get _info => widget.info;
-  bool get _busy => _phase == _Phase.downloading || _phase == _Phase.installing;
 
   @override
   void initState() {
     super.initState();
-    // ABI 提前取好：既用于显示准确体积，也保证「下载」按钮按下时无需再等平台通道。
+    _snap = UpdateDownloadManager.instance.state.value;
+    UpdateDownloadManager.instance.setDialogOpen(true);
+    UpdateDownloadManager.instance.state.addListener(_onManagerState);
     unawaited(_loadAbi());
+    // 若打开弹窗时该版本已在后台下载/就绪，立即同步到当前状态。
+    _maybeAutoInstall();
+  }
+
+  @override
+  void dispose() {
+    UpdateDownloadManager.instance.state.removeListener(_onManagerState);
+    UpdateDownloadManager.instance.setDialogOpen(false);
+    super.dispose();
+  }
+
+  void _onManagerState() {
+    final next = UpdateDownloadManager.instance.state.value;
+    if (!mounted) return;
+    setState(() => _snap = next);
+    _maybeAutoInstall();
+
+    // Windows 自替换：管理器已把状态置为 done，这里负责退出当前进程。
+    if (next.phase == DownloadPhase.done &&
+        next.platform == UpdatePlatform.windows) {
+      // 给批处理一点时间接管，再退出。
+      Future<void>.delayed(const Duration(milliseconds: 300), () {
+        // ignore: avoid_print
+        print('update: exiting for windows self-replace');
+        // 仅在确实仍在当前弹窗时退出，避免从通知路径误退出。
+        if (mounted) exit(0);
+      });
+    }
+  }
+
+  /// 下载完成且用户正看着弹窗 → 自动触发安装（体验连贯）。
+  /// 若用户已切到后台，则只留「点击安装」通知，由用户回来再装。
+  void _maybeAutoInstall() {
+    if (_snap.phase == DownloadPhase.readyToInstall && !_autoInstallTriggered) {
+      _autoInstallTriggered = true;
+      unawaited(UpdateDownloadManager.instance.install());
+    }
   }
 
   Future<void> _loadAbi() async {
@@ -160,140 +197,14 @@ class _UpdateDialogState extends State<UpdateDialog> {
     setState(() => _androidAbi = abi);
   }
 
-  @override
-  void dispose() {
-    _cancelToken?.cancel('dialog disposed');
-    super.dispose();
-  }
-
   Future<void> _startDownload() async {
-    final platform = UpdateService.instance.platform;
-    if (platform == UpdatePlatform.unsupported) {
-      setState(() {
-        _error = '当前平台不支持自动更新，请到 Release 页面手动下载。';
-        _phase = _Phase.failed;
-      });
-      return;
-    }
-
-    final abi = _androidAbi ?? await UpdateService.instance.androidAbi();
-    final asset = _info.assetFor(platform, androidAbi: abi);
-    if (asset == null) {
-      setState(() {
-        _error = '这个版本没有提供适合当前设备的安装包，请到 Release 页面手动选择。';
-        _phase = _Phase.failed;
-      });
-      return;
-    }
-
-    setState(() {
-      _phase = _Phase.downloading;
-      _progress = 0;
-      _statusText = '正在连接…';
-      _error = null;
-    });
-
-    try {
-      final dir = await UpdateInstaller.downloadDirectory();
-      final ext = platform == UpdatePlatform.android ? '.apk' : '.zip';
-      final savePath =
-          '${dir.path}${Platform.pathSeparator}videocask-update-${_info.version.label}$ext';
-      final token = CancelToken();
-      _cancelToken = token;
-
-      await UpdateService.instance.download(
-        url: asset.downloadUrl,
-        savePath: savePath,
-        cancelToken: token,
-        onProgress: (received, total) {
-          if (!mounted) return;
-          setState(() {
-            _progress = total <= 0 ? 0 : received / total;
-            _statusText = _progressLabel(received, total);
-          });
-        },
-      );
-
-      if (!mounted) return;
-      _downloadedPath = savePath;
-      setState(() {
-        _phase = _Phase.readyToInstall;
-        _progress = 1;
-        _statusText = '下载完成';
-      });
-      await _install();
-    } on DioException catch (e) {
-      if (CancelToken.isCancel(e)) return;
-      if (!mounted) return;
-      setState(() {
-        _phase = _Phase.failed;
-        _error = '下载失败：${e.message ?? e.type.name}';
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _phase = _Phase.failed;
-        _error = '下载失败：$e';
-      });
-    }
+    await UpdateDownloadManager.instance.start(_info, abi: _androidAbi);
   }
 
-  String _progressLabel(int received, int total) {
-    final mb = received / (1024 * 1024);
-    if (total <= 0) return '已下载 ${mb.toStringAsFixed(1)} MB';
-    final totalMb = total / (1024 * 1024);
-    return '${mb.toStringAsFixed(1)} / ${totalMb.toStringAsFixed(1)} MB';
-  }
+  void _cancel() => UpdateDownloadManager.instance.cancel();
 
   Future<void> _install() async {
-    final path = _downloadedPath;
-    if (path == null) return;
-    final platform = UpdateService.instance.platform;
-
-    if (platform == UpdatePlatform.android) {
-      final allowed = await UpdateInstaller.canInstallPackages();
-      if (!allowed) {
-        if (!mounted) return;
-        setState(() {
-          _phase = _Phase.failed;
-          _error = '需要「安装未知应用」权限才能完成更新。';
-        });
-        return;
-      }
-    }
-
-    setState(() {
-      _phase = _Phase.installing;
-      _statusText = platform == UpdatePlatform.windows ? '正在准备替换文件…' : '正在调起安装器…';
-      _error = null;
-    });
-
-    final result = await UpdateInstaller.install(path, platform: platform);
-    if (!mounted) return;
-
-    if (!result.ok) {
-      setState(() {
-        _phase = _Phase.failed;
-        _error = result.message;
-      });
-      return;
-    }
-
-    if (platform == UpdatePlatform.windows) {
-      // 批处理已经启动并在等本进程退出，这里只给用户一句提示再退出。
-      setState(() {
-        _phase = _Phase.done;
-        _statusText = '应用即将退出，随后自动替换并重启。';
-      });
-      await Future<void>.delayed(const Duration(seconds: 2));
-      exit(0);
-      return;
-    }
-
-    setState(() {
-      _phase = _Phase.done;
-      _statusText = '已调起系统安装器，请按提示完成安装。';
-    });
+    await UpdateDownloadManager.instance.install();
   }
 
   Future<void> _openPermissionSettings() async {
@@ -302,7 +213,10 @@ class _UpdateDialogState extends State<UpdateDialog> {
 
   void _later() {
     if (_info.isMandatory) return;
-    unawaited(UpdateService.instance.skipBuild(_info.version.build));
+    // 只在「还没开始下载」时点稍后才有意义；下载中关弹窗是后台继续，不算跳过。
+    if (_snap.phase == DownloadPhase.idle) {
+      unawaited(UpdateService.instance.skipBuild(_info.version.build));
+    }
     Navigator.of(context).pop();
   }
 
@@ -311,9 +225,13 @@ class _UpdateDialogState extends State<UpdateDialog> {
     final current = UpdateService.instance.currentVersion();
     final mandatory = _info.isMandatory;
     final theme = Theme.of(context);
+    final snap = _snap;
+    final busy = snap.busy;
+    final hasError = snap.phase == DownloadPhase.failed && snap.error != null;
 
     return PopScope(
-      canPop: !mandatory && !_busy,
+      // 后台下载：允许在下载中点关闭（下载继续在后台跑）；强制更新仍可拦截。
+      canPop: !mandatory && snap.phase != DownloadPhase.installing,
       child: AlertDialog(
         titlePadding: const EdgeInsets.fromLTRB(24, 20, 12, 0),
         title: Row(
@@ -321,10 +239,12 @@ class _UpdateDialogState extends State<UpdateDialog> {
             Icon(Icons.system_update, color: theme.colorScheme.primary),
             const SizedBox(width: 10),
             Expanded(child: Text(mandatory ? '发现重要更新' : '发现新版本')),
-            if (!mandatory && !_busy)
+            if (!mandatory && !busy)
               IconButton(
                 icon: const Icon(Icons.close),
-                tooltip: '稍后再说',
+                tooltip: _snap.phase == DownloadPhase.downloading
+                    ? '后台继续下载'
+                    : '稍后再说',
                 onPressed: _later,
               ),
           ],
@@ -354,26 +274,33 @@ class _UpdateDialogState extends State<UpdateDialog> {
                   constraints: const BoxConstraints(maxHeight: 220),
                   child: SingleChildScrollView(
                     child: Text(
-                      _info.notes.replaceAll('[强制更新]', '').replaceAll(
-                            '[mandatory]',
-                            '',
-                          ),
+                      _info.notes
+                          .replaceAll('[强制更新]', '')
+                          .replaceAll('[mandatory]', ''),
                       style: theme.textTheme.bodySmall?.copyWith(height: 1.5),
                     ),
                   ),
                 ),
               ],
-              if (_busy || _phase == _Phase.readyToInstall) ...[
+              if (busy || snap.phase == DownloadPhase.readyToInstall) ...[
                 const SizedBox(height: 18),
                 LinearProgressIndicator(
-                  value: _phase == _Phase.downloading && _progress > 0
-                      ? _progress
+                  value: snap.phase == DownloadPhase.downloading && snap.progress > 0
+                      ? snap.progress
                       : null,
                 ),
                 const SizedBox(height: 8),
-                Text(_statusText, style: theme.textTheme.bodySmall),
+                Text(snap.statusText, style: theme.textTheme.bodySmall),
+                if (snap.phase == DownloadPhase.downloading)
+                  Text(
+                    '（可关闭此弹窗，下载将在后台继续，进度见系统通知）',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.textTheme.bodySmall?.color?.withValues(alpha: 0.6),
+                      fontSize: 11,
+                    ),
+                  ),
               ],
-              if (_error != null) ...[
+              if (hasError) ...[
                 const SizedBox(height: 14),
                 Container(
                   width: double.infinity,
@@ -383,17 +310,17 @@ class _UpdateDialogState extends State<UpdateDialog> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    _error!,
+                    snap.error!,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.error,
                     ),
                   ),
                 ),
               ],
-              if (_phase == _Phase.done) ...[
+              if (snap.phase == DownloadPhase.done) ...[
                 const SizedBox(height: 14),
                 Text(
-                  _statusText,
+                  snap.statusText,
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.primary,
                   ),
@@ -403,7 +330,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
           ),
         ),
         actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        actions: _buildActions(mandatory),
+        actions: _buildActions(mandatory, snap),
       ),
     );
   }
@@ -432,8 +359,8 @@ class _UpdateDialogState extends State<UpdateDialog> {
 
   static String _two(int v) => v < 10 ? '0$v' : '$v';
 
-  List<Widget> _buildActions(bool mandatory) {
-    if (_phase == _Phase.done) {
+  List<Widget> _buildActions(bool mandatory, UpdateDownloadState snap) {
+    if (snap.phase == DownloadPhase.done) {
       return [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
@@ -441,37 +368,33 @@ class _UpdateDialogState extends State<UpdateDialog> {
         ),
       ];
     }
-    if (_busy) {
+    if (snap.busy) {
       return [
-        if (_phase == _Phase.downloading)
+        if (snap.phase == DownloadPhase.downloading)
           TextButton(
-            onPressed: () {
-              _cancelToken?.cancel('用户取消');
-              setState(() {
-                _phase = _Phase.idle;
-                _statusText = '';
-                _progress = 0;
-              });
-            },
+            onPressed: _cancel,
             child: const Text('取消'),
           ),
       ];
     }
-    if (_phase == _Phase.failed) {
+    if (snap.phase == DownloadPhase.failed) {
       return [
-        if (_error != null && _error!.contains('权限'))
+        if (snap.error != null && snap.error!.contains('权限'))
           TextButton(
             onPressed: _openPermissionSettings,
             child: const Text('去授权'),
           ),
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('关闭')),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
+        ),
         FilledButton(
           onPressed: _retry,
           child: const Text('重试'),
         ),
       ];
     }
-    if (_phase == _Phase.readyToInstall) {
+    if (snap.phase == DownloadPhase.readyToInstall) {
       return [
         FilledButton(onPressed: _install, child: const Text('立即安装')),
       ];
@@ -487,12 +410,10 @@ class _UpdateDialogState extends State<UpdateDialog> {
 
   void _retry() {
     // 已经下载好就直接重试安装，否则重新下载。
-    if (_downloadedPath != null) {
+    if (_snap.downloadedPath != null) {
       unawaited(_install());
     } else {
       unawaited(_startDownload());
     }
   }
 }
-
-enum _Phase { idle, downloading, readyToInstall, installing, done, failed }

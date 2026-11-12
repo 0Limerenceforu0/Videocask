@@ -169,6 +169,17 @@ class DetailPage extends StatefulWidget {
   State<DetailPage> createState() => _DetailPageState();
 }
 
+/// 进度条指针预览气泡的数据：局部 x 坐标 + 该位置对应的时间点。
+///
+/// 单独用 [ValueNotifier] 驱动气泡，鼠标每帧移动只重建这一小块，
+/// 不会把整页 setState 一遍（进度条本来就是 200ms 高频更新的热点）。
+class _ProgressPreview {
+  const _ProgressPreview({required this.x, required this.time});
+
+  final double x;
+  final Duration time;
+}
+
 class _DetailPageState extends State<DetailPage>
     with RouteAware, WidgetsBindingObserver {
   /// 供拆分出去的 extension 间接调用：在 extension 内直接调用 [setState] 会被
@@ -204,8 +215,18 @@ class _DetailPageState extends State<DetailPage>
   int _desktopRouteIndex = 0;
 
   /// 详情页进度条拖动：仅更新 UI，不触发 mpv seek。
+  ///
+  /// 2026-11-12 用户要求：鼠标悬停要显示所指位置的时间；按下/长按只预览，
+  /// 松手才真正跳转（方便「按住后滑动确认位置」），拖动过程实时显示滑到的时间。
+  /// 三端共用这一份实现：桌面/Web 走 hover，移动端走 pointer down/move/up。
   bool _scrubbingProgress = false;
   Duration _scrubPreviewPosition = Duration.zero;
+
+  /// 进度条预览气泡（null = 隐藏）。
+  final ValueNotifier<_ProgressPreview?> _progressPreview = ValueNotifier(null);
+
+  /// 当前按住进度条的 pointer id；多指时只认第一根，避免第二根手指误触发跳转。
+  int? _progressPointerId;
 
   Timer? _scrubFastSeekTimer;
   Duration? _scrubFastSeekTarget;
@@ -491,6 +512,7 @@ class _DetailPageState extends State<DetailPage>
     _routeFallbackTimer?.cancel();
     _fullscreenOrientation.dispose();
     _scrubFastSeekTimer?.cancel();
+    _progressPreview.dispose();
 
     final wasFullScreen = _playerModule.isFullScreen;
     if (_isDesktopPlatform && wasFullScreen) {
@@ -545,97 +567,98 @@ class _DetailPageState extends State<DetailPage>
       focusNode: _keyboardFocusNode,
       autofocus: true,
       child: PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, result) {
-        if (didPop) return;
-        if (_playerModule.isFullScreen) {
-          unawaited(_toggleFullScreen());
-          return;
-        }
-        unawaited(_leaveDetailPage());
-      },
-      child: Scaffold(
-        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-        floatingActionButton: (displayMovie != null && !_playerModule.isFullScreen)
-            ? Padding(
-                // 用 Scaffold FAB 系统承载，天然避让 SnackBar / 底部弹层；
-                // 底部加安全区内边距，等价于原来的 safeAreaBottom + 16。
-                // 「回到顶部」与「下载」包在同一个盒子里，作为一个整体同步移动。
-                padding:
-                    EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    if (_showDetailScrollToTop)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: PlayerOverlayIconButton(
-                          icon: Icons.vertical_align_top_rounded,
-                          tooltip: l10n.homeScrollToTopTooltip,
-                          onTap: _scrollDetailContentToTop,
-                          iconSize: 22,
-                          padding: 12,
-                        ),
+        canPop: false,
+        onPopInvokedWithResult: (didPop, result) {
+          if (didPop) return;
+          if (_playerModule.isFullScreen) {
+            unawaited(_toggleFullScreen());
+            return;
+          }
+          unawaited(_leaveDetailPage());
+        },
+        child: Scaffold(
+          backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+          floatingActionButton:
+              (displayMovie != null && !_playerModule.isFullScreen)
+                  ? Padding(
+                      // 用 Scaffold FAB 系统承载，天然避让 SnackBar / 底部弹层；
+                      // 底部加安全区内边距，等价于原来的 safeAreaBottom + 16。
+                      // 「回到顶部」与「下载」包在同一个盒子里，作为一个整体同步移动。
+                      padding: EdgeInsets.only(
+                          bottom: MediaQuery.paddingOf(context).bottom),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          if (_showDetailScrollToTop)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: PlayerOverlayIconButton(
+                                icon: Icons.vertical_align_top_rounded,
+                                tooltip: l10n.homeScrollToTopTooltip,
+                                onTap: _scrollDetailContentToTop,
+                                iconSize: 22,
+                                padding: 12,
+                              ),
+                            ),
+                          if (!kIsWeb && !_isMagnetDetailEntry)
+                            DetailPlayerCacheFab(
+                              movieId: displayMovie!.id,
+                              sourceId: _detailSourceId(displayMovie),
+                              episodeIndex: _playerModule.currentEpisodeIndex,
+                              placement: DetailCacheFabPlacement.pageCorner,
+                              isFullScreen: false,
+                              bottomOffset: 0,
+                              onTap: () {
+                                _openCachePanel(displayMovie);
+                              },
+                            ),
+                        ],
                       ),
-                    if (!kIsWeb && !_isMagnetDetailEntry)
-                      DetailPlayerCacheFab(
-                        movieId: displayMovie!.id,
-                        sourceId: _detailSourceId(displayMovie),
-                        episodeIndex: _playerModule.currentEpisodeIndex,
-                        placement: DetailCacheFabPlacement.pageCorner,
-                        isFullScreen: false,
-                        bottomOffset: 0,
-                        onTap: () {
-                          _openCachePanel(displayMovie);
-                        },
-                      ),
-                  ],
-                ),
-              )
-            : null,
-        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-        body: showShimmer
-            ? const DetailShimmer()
-            : showError
-                ? Column(
-                    children: [
-                      // 返回按钮（错误页也能返回）
-                      AppBar(
-                        backgroundColor:
-                            Theme.of(context).scaffoldBackgroundColor,
-                        elevation: 0,
-                        leading: IconButton(
-                          icon: Icon(
-                            Icons.arrow_back,
-                            color: Theme.of(context).colorScheme.onSurface,
+                    )
+                  : null,
+          floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+          body: showShimmer
+              ? const DetailShimmer()
+              : showError
+                  ? Column(
+                      children: [
+                        // 返回按钮（错误页也能返回）
+                        AppBar(
+                          backgroundColor:
+                              Theme.of(context).scaffoldBackgroundColor,
+                          elevation: 0,
+                          leading: IconButton(
+                            icon: Icon(
+                              Icons.arrow_back,
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                            onPressed: () {
+                              if (_playerModule.isFullScreen) {
+                                unawaited(_toggleFullScreen());
+                              } else {
+                                unawaited(_leaveDetailPage());
+                              }
+                            },
                           ),
-                          onPressed: () {
-                            if (_playerModule.isFullScreen) {
-                              unawaited(_toggleFullScreen());
-                            } else {
-                              unawaited(_leaveDetailPage());
-                            }
-                          },
                         ),
-                      ),
-                      Expanded(
-                        child: app_widgets.ErrorWidget(
-                          message: movieProvider.errorMessage.isEmpty
-                              ? l10n.detailLoadError
-                              : movieProvider.errorMessage,
-                          messageColor: Theme.of(context)
-                              .textTheme
-                              .bodyMedium
-                              ?.color
-                              ?.withValues(alpha: 0.75),
-                          iconColor: Theme.of(context).colorScheme.error,
-                          onRetry: _loadData,
+                        Expanded(
+                          child: app_widgets.ErrorWidget(
+                            message: movieProvider.errorMessage.isEmpty
+                                ? l10n.detailLoadError
+                                : movieProvider.errorMessage,
+                            messageColor: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.color
+                                ?.withValues(alpha: 0.75),
+                            iconColor: Theme.of(context).colorScheme.error,
+                            onRetry: _loadData,
+                          ),
                         ),
-                      ),
-                    ],
-                  )
-                : _buildMainLayout(displayMovie!),
+                      ],
+                    )
+                  : _buildMainLayout(displayMovie!),
         ),
       ),
     );

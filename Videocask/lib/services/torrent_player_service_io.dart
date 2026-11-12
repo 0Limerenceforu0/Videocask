@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Directory, HttpClient, Platform;
+import 'dart:io' show Directory, File, HttpClient, Platform;
 import 'package:flutter/foundation.dart';
 
 import 'package:flutter/widgets.dart';
@@ -75,6 +75,13 @@ class TorrentPlayerService with ChangeNotifier {
   int _lastTotalDone = -1;
   DateTime? _lastSpeedSampleAt;
 
+  /// 本轮种子已下载字节数（-1 视为 0）。
+  ///
+  /// 起流交接判据要用它：`StreamInfo.bufferPct` 是原生预缓冲比例，Windows
+  /// 上常出现「buffer=0% 但 totalDone 已经几 MB、速度 1MB/s」——只看
+  /// bufferPct 会把健康下载误判成零数据（2026-11-12 本机 exe 实测）。
+  int get downloadedBytes => _lastTotalDone > 0 ? _lastTotalDone : 0;
+
   /// 上传速度同样以差分算（原生 upload_rate 同一字段通路）。
   int _lastTotalUploaded = -1;
 
@@ -119,11 +126,16 @@ class TorrentPlayerService with ChangeNotifier {
   String _diagStream = '-';
   int _diagReadHead = -1;
 
-  /// 正在播的文件 index（供「供数停滞兜底」重新放行该文件下载优先级）。
+  /// 正在播的文件 index（原生索引，诊断日志用）。
   int _currentPlayFileIndex = -1;
 
-  /// 供数停滞兜底：最后一次看到的 totalDone 与时刻。
+  /// 供数停滞诊断：最后一次看到的 totalDone / readHead 与时刻。
+  ///
+  /// [readHead] 也纳入判据：只有「已下载量」和「流读取头」**同时**静止 20s
+  /// 才算真断供。若只是 mpv 在消化已缓冲数据（done 不动但 readHead 推进），
+  /// 不应误报停滞。这里**只记录，不改控制流**。
   int _stallDoneSnapshot = -1;
+  int _stallHeadSnapshot = -1;
   DateTime? _stallDoneAt;
   bool _stallLogged = false;
 
@@ -454,7 +466,7 @@ class TorrentPlayerService with ChangeNotifier {
 
     // 上一次残留的残缺数据会让 libtorrent 反复 recheck、并把坏 piece 交给 mpv
     // （见 [_wipeTorrentDataDir] 的实测说明）。必须在 add 之前清掉。
-    _wipeTorrentDataDir();
+    await _wipeTorrentDataDir();
 
     _setState(TorrentPlayState.fetchingMeta, '');
     _metaWaitSeconds = 0;
@@ -467,12 +479,13 @@ class TorrentPlayerService with ChangeNotifier {
     _lastSpeedSampleAt = null;
     _downloadSpeed = 0;
     _uploadSpeed = 0;
-    // 诊断快照 / 兜底状态随新种子复位。
+    // 诊断快照 / 停滞状态随新种子复位。
     _diagTorrent = '-';
     _diagStream = '-';
     _diagReadHead = -1;
     _currentPlayFileIndex = -1;
     _stallDoneSnapshot = -1;
+    _stallHeadSnapshot = -1;
     _stallDoneAt = null;
     _stallLogged = false;
 
@@ -493,8 +506,8 @@ class TorrentPlayerService with ChangeNotifier {
       DebugLog.log(
         'Magnet',
         'addMagnet 成功: torrentId=$_currentTorrentId, '
-        'tracker=${_countTrackers(enhancedMagnet)} 个（含补充）, '
-        'btih=${_btihOf(magnetUri)}',
+            'tracker=${_countTrackers(enhancedMagnet)} 个（含补充）, '
+            'btih=${_btihOf(magnetUri)}',
         flush: true,
       );
 
@@ -625,15 +638,15 @@ class TorrentPlayerService with ChangeNotifier {
       DebugLog.log(
         'Magnet',
         'stat: state=${_state.name} speed=${_formatBytes(_downloadSpeed)}/s '
-        'up=${_formatBytes(_uploadSpeed)}/s '
-        '(native=${_formatBytes(_nativeDownloadRate)}/s) '
-        'done=${_formatBytes(_lastTotalDone < 0 ? 0 : _lastTotalDone)} '
-        'progress=${(_downloadProgress * 100).toStringAsFixed(1)}% '
-        'peers=$_peers seeds=$_seeds activePeers=$_activePeers buf=$_bufferPct% '
-        'stage=$_streamStage metaWait=${_metaWaitSeconds}s '
-        '| torrent=$_diagTorrent stream=$_diagStream readHead=$_diagReadHead '
-        'tid=$_currentTorrentId files=${_files.length} '
-        'file=$_currentPlayFileIndex',
+            'up=${_formatBytes(_uploadSpeed)}/s '
+            '(native=${_formatBytes(_nativeDownloadRate)}/s) '
+            'done=${_formatBytes(_lastTotalDone < 0 ? 0 : _lastTotalDone)} '
+            'progress=${(_downloadProgress * 100).toStringAsFixed(1)}% '
+            'peers=$_peers seeds=$_seeds activePeers=$_activePeers buf=$_bufferPct% '
+            'stage=$_streamStage metaWait=${_metaWaitSeconds}s '
+            '| torrent=$_diagTorrent stream=$_diagStream readHead=$_diagReadHead '
+            'tid=$_currentTorrentId files=${_files.length} '
+            'file=$_currentPlayFileIndex',
         flush: true,
       );
       if (_state == TorrentPlayState.playing) _logDeliveryStall();
@@ -645,22 +658,33 @@ class TorrentPlayerService with ChangeNotifier {
     _statsTimer = null;
   }
 
-  /// 供数停滞观察（仅诊断，不改控制流）。
+  /// 供数停滞观察（**仅诊断，不改控制流**）。
   ///
-  /// ⚠️ 这里**故意不调 `setFilePriorities`**：`prioritize_files()` 是异步的，
+  /// 🔴 别再在这里加 `setFilePriorities` / `resumeTorrent` 之类的「纯 Dart 兜底」：
+  /// 2026-11-12 已实现并实测证伪（恢复动作执行 3 次，done/readHead 三分钟
+  /// 零增长）。真因是旧 Windows 预编译 DLL 在 head/tail 预取窗口下满后判
+  /// `finished` → tracker `stopped` → `remove_torrent`，`tid` handle 已失效，
+  /// 原生 `handles.find(id)` / `is_valid()` 直接让这些调用变成空操作。
+  /// 已通过**重编 Windows `libtorrent_flutter.dll` 移植原生补丁**治本，
+  /// 见 `_build/native/win-bridge/`。
+  ///
+  /// ⚠️ 也不要用 `prioritize_files()` 去「抢救」：`prioritize_files()` 是异步的，
   /// 会把 `startStream` 精心设好的「头部 top_priority + 紧 deadline」整体冲掉，
-  /// 退回 rarest-first 随机下载 —— 实测（6086/6087）反而让 mpv 连容器都解析
-  /// 不出来（`Failed to recognize file format`、`readHead` 恒 0）。
-  /// 源码 `playFile` 上方那段注释警告的就是这件事，别再用它「兜底」。
+  /// 退回 rarest-first 随机下载 —— Android 实测（6086/6087）反而让 mpv 连容器
+  /// 都解析不出来（`Failed to recognize file format`、`readHead` 恒 0）。
   void _logDeliveryStall() {
     final done = _lastTotalDone;
+    final head = _diagReadHead;
     final now = DateTime.now();
-    final since = _stallDoneAt;
-    if (done != _stallDoneSnapshot) {
+    // done 或 readHead 任一在动 = 数据仍在流动（可能是 mpv 消化已缓冲数据），
+    // 重置计时，不误报停滞。
+    if (done != _stallDoneSnapshot || head != _stallHeadSnapshot) {
       _stallDoneSnapshot = done;
+      _stallHeadSnapshot = head;
       _stallDoneAt = now;
       return;
     }
+    final since = _stallDoneAt;
     if (since == null || now.difference(since) < const Duration(seconds: 20)) {
       return;
     }
@@ -668,7 +692,7 @@ class TorrentPlayerService with ChangeNotifier {
     _stallLogged = true;
     DebugLog.log(
       'Magnet',
-      '供数停滞 20s: done=$done readHead=$_diagReadHead '
+      '供数停滞 20s: done=$done readHead=$head '
           'peers=$_activePeers buf=$_bufferPct%（仅记录，不干预调度）',
       flush: true,
     );
@@ -676,9 +700,8 @@ class TorrentPlayerService with ChangeNotifier {
     // 只有这里能看到「种子被暂停 / 文件错误 / 校验失败」这类真正原因。
     try {
       final alerts = _engine.recentAlertLines;
-      final tail = alerts.length > 40
-          ? alerts.sublist(alerts.length - 40)
-          : alerts;
+      final tail =
+          alerts.length > 40 ? alerts.sublist(alerts.length - 40) : alerts;
       DebugLog.log(
         'Magnet',
         'libtorrent 告警(${alerts.length} 条, 末 40): ${tail.join(' ⏎ ')}',
@@ -746,7 +769,7 @@ class TorrentPlayerService with ChangeNotifier {
       DebugLog.log(
         'Magnet',
         '元数据就绪: ${_files.length} 个文件, '
-        '最大=${_files.first.name}(${_files.first.size}B)',
+            '最大=${_files.first.name}(${_files.first.size}B)',
         flush: true,
       );
     }
@@ -809,8 +832,9 @@ class TorrentPlayerService with ChangeNotifier {
       _bufferPct = 0;
       _etaSeconds = -1;
       _currentPlayFileIndex = fileIndex;
-      // 新的流 = 新的供数周期，兜底状态全部复位。
+      // 新的流 = 新的供数周期，停滞诊断状态复位。
       _stallDoneSnapshot = -1;
+      _stallHeadSnapshot = -1;
       _stallDoneAt = null;
       _stallLogged = false;
 
@@ -818,7 +842,7 @@ class TorrentPlayerService with ChangeNotifier {
       DebugLog.log(
         'Magnet',
         'startStream 成功: fileIndex=$fileIndex, streamId=${streamInfo.id}, '
-        'url=${streamInfo.url}',
+            'url=${streamInfo.url}',
         flush: true,
       );
 
@@ -905,7 +929,8 @@ class TorrentPlayerService with ChangeNotifier {
       return _streamUrl;
     } catch (e) {
       debugPrint('TorrentPlayerService: 启动流失败 - $e');
-      DebugLog.log('Magnet', 'startStream 失败: fileIndex=$fileIndex, $e', flush: true);
+      DebugLog.log('Magnet', 'startStream 失败: fileIndex=$fileIndex, $e',
+          flush: true);
       _setState(TorrentPlayState.error, '启动播放流失败: $e');
       return null;
     }
@@ -987,7 +1012,7 @@ class TorrentPlayerService with ChangeNotifier {
             DebugLog.log(
               'Magnet',
               '流已就绪: buffer=$_bufferPct%, elapsed=${elapsed.inSeconds}s, '
-              'seeds=$_seeds, peers=$_peers, speed=$_downloadSpeed',
+                  'seeds=$_seeds, peers=$_peers, speed=$_downloadSpeed',
               flush: true,
             );
             return;
@@ -1019,9 +1044,9 @@ class TorrentPlayerService with ChangeNotifier {
           DebugLog.log(
             'Magnet',
             '弱 swarm 早止损: activePeers=$_activePeers '
-            'speed=$_downloadSpeed B/s buffer=$_bufferPct% '
-            '已等 ${elapsed.inSeconds}s '
-            '(确认窗口 ${MagnetWeakSwarmPolicy.confirmWindow.inSeconds}s)',
+                'speed=$_downloadSpeed B/s buffer=$_bufferPct% '
+                '已等 ${elapsed.inSeconds}s '
+                '(确认窗口 ${MagnetWeakSwarmPolicy.confirmWindow.inSeconds}s)',
             flush: true,
           );
           return;
@@ -1074,9 +1099,9 @@ class TorrentPlayerService with ChangeNotifier {
     DebugLog.log(
       'Magnet',
       '缓冲超时但仍交接: seeds=$_seeds peers=$_peers '
-      'activePeers=$_activePeers maxActivePeers=$_maxActivePeers '
-      'speed=$_downloadSpeed B/s buffer=$_bufferPct% '
-      'neverConnected=${_isDeadSwarm()}',
+          'activePeers=$_activePeers maxActivePeers=$_maxActivePeers '
+          'speed=$_downloadSpeed B/s buffer=$_bufferPct% '
+          'neverConnected=${_isDeadSwarm()}',
       flush: true,
     );
   }
@@ -1144,7 +1169,7 @@ class TorrentPlayerService with ChangeNotifier {
       DebugLog.log(
         'Magnet',
         '首次发现 swarm: activePeers=$_activePeers, '
-        'progress=${(t.progress * 100).toStringAsFixed(1)}%',
+            'progress=${(t.progress * 100).toStringAsFixed(1)}%',
         flush: true,
       );
     }
@@ -1199,7 +1224,8 @@ class TorrentPlayerService with ChangeNotifier {
         // 算出来就是一个永远到不了 0 的假 ETA（真机实锤：恒显「ETA 10s」，
         // 实际等了五分钟）。用缓存窗口做分母，bufferPct 涨 → 缺口降 → ETA
         // 真正收敛。
-        final totalBytes = _streamCacheBytes > 0 ? _streamCacheBytes : _totalSize;
+        final totalBytes =
+            _streamCacheBytes > 0 ? _streamCacheBytes : _totalSize;
         final needBytes = (totalBytes * (target - _bufferPct)) ~/ 100;
         _etaSeconds = (needBytes / _downloadSpeed).clamp(0, 9999).toInt();
       } else {
@@ -1255,6 +1281,11 @@ class TorrentPlayerService with ChangeNotifier {
     _metaWaitSeconds = 0;
     _metaLogged = false;
     _swarmLogged = false;
+    _stallDoneSnapshot = -1;
+    _stallHeadSnapshot = -1;
+    _stallDoneAt = null;
+    _stallLogged = false;
+    _currentPlayFileIndex = -1;
     _setState(TorrentPlayState.idle, '');
   }
 
@@ -1357,19 +1388,48 @@ class TorrentPlayerService with ChangeNotifier {
   ///
   /// 这两条现象在 6083~6086 四个包里全部复现过。磁力本来就是从头播，没有
   /// 跨会话续传的价值，每次起播前清干净最稳，顺带解决临时目录无限增长。
-  void _wipeTorrentDataDir() {
-    try {
-      final dir = Directory(_resolveSavePath());
-      if (dir.existsSync()) {
+  Future<void> _wipeTorrentDataDir() async {
+    // 🔴 2026-11-12 本机 exe 实测：Windows 上 `deleteSync(recursive: true)`
+    // 常报 `FileSystemException: 目录不是空的 (errno=145)` —— 上一轮的本地流
+    // HTTP server / libtorrent 文件句柄刚释放，目录还没真正可删。旧实现直接
+    // catch 忽略，残缺 piece 留在原地，下一轮 add 就会 recheck / 污染。
+    // 改为：重试 + 每次重试前逐文件删掉没被占用的文件 + 短暂等待句柄释放。
+    final dir = Directory(_resolveSavePath());
+    if (!dir.existsSync()) return;
+
+    for (var attempt = 1; attempt <= 4; attempt++) {
+      try {
         dir.deleteSync(recursive: true);
         DebugLog.log(
           'Magnet',
-          '已清空种子数据目录（避免 recheck / 残缺 piece 污染）',
+          attempt == 1
+              ? '已清空种子数据目录（避免 recheck / 残缺 piece 污染）'
+              : '已清空种子数据目录（第 $attempt 次重试成功）',
           flush: true,
         );
+        return;
+      } catch (e) {
+        if (attempt == 4) {
+          DebugLog.log(
+            'Magnet',
+            '清空种子数据目录失败（已重试 $attempt 次，忽略）: $e',
+            flush: true,
+          );
+          return;
+        }
+        // 逐文件兜底：先删没被占用的文件，仍占用的留给下一轮。
+        try {
+          final entries = dir.listSync(recursive: true, followLinks: false);
+          for (final entity in entries) {
+            if (entity is File) {
+              try {
+                entity.deleteSync();
+              } catch (_) {}
+            }
+          }
+        } catch (_) {}
+        await Future<void>.delayed(Duration(milliseconds: 120 * attempt));
       }
-    } catch (e) {
-      DebugLog.log('Magnet', '清空种子数据目录失败（忽略）: $e', flush: true);
     }
   }
 

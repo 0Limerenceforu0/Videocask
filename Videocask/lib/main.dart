@@ -16,7 +16,15 @@ import 'services/subtitle_ai_service.dart';
 import 'utils/web_splash_stub.dart'
     if (dart.library.js_interop) 'utils/web_splash_web.dart' as web_splash;
 
-void main() async {
+/// 桌面端把 `windows/runner/main.cpp` 里 `set_dart_entrypoint_arguments` 传进来的
+/// 启动参数交给 [args]（Flutter 会调用带参数的 main）。
+///
+/// 🔴 不能只读 `Platform.executableArguments`：在 Flutter 桌面它返回的是 **Dart VM
+/// 的参数**，不包含应用命令行参数，所以 `PendingDeepLink.registerFromArguments`
+/// 一直拿到空数组 —— 注释里写的「桌面端用启动参数传 magnet 链接」实际从未生效，
+/// 自动化冒烟也因此无法一键起播。这里优先用入口参数，VM 参数只作兜底。
+/// 可选位置参数保证 Web / 移动端引擎调用无参 `main()` 时仍可编译运行。
+void main([List<String> args = const <String>[]]) async {
   WidgetsFlutterBinding.ensureInitialized();
 
   ErrorHandler().init();
@@ -37,7 +45,8 @@ void main() async {
   }
 
   if (!kIsWeb) {
-    PendingDeepLink.registerFromArguments(Platform.executableArguments);
+    final startupArgs = args.isNotEmpty ? args : Platform.executableArguments;
+    PendingDeepLink.registerFromArguments(startupArgs);
   }
 
   // 触发 SubtitleAiService 单例，自动注册在线 / 离线(sherpa_onnx) / 浏览器三种后端。

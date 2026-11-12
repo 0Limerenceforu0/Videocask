@@ -108,6 +108,10 @@ dependencies:
   file_picker: ^10.3.8
   screen_brightness: ^2.1.7
 
+  # 应用内更新的「系统通知式后台下载」：下载中在通知栏显示带进度条的通知，
+  # 切到别的 App 也能看到；点通知回到安装页。仅 Android 用通知，其它平台走现有弹窗。
+  flutter_local_notifications: ^17.2.4
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
