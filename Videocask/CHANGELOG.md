@@ -9,6 +9,43 @@
 > ⚠️ 早期本文件写的「打包一次升一次」是错的，指的是「全部打包给我」的交付动作，
 > 不是任意一次打包。
 
+## 1.1.10 (2026-11-12)
+
+> 本次为 Android + Windows + Web 三端一次性交付，版本 `1.1.10+70`。
+> 1.1.9 已发布过一轮（Windows 端已单独替换过资产），本次是把进度条交互与
+> Windows 磁力原生修复带到三端，并整体重打。
+
+### 全端进度条交互
+
+- 进度条统一支持「悬停 / 按住预览」：鼠标悬停即刻显示所指位置的时间气泡；
+  按住（触摸为长按）只移动气泡、不触发跳转；按住滑动时气泡时间随指针/手指实时更新；
+  松手才真正 seek；指针滑出进度条或手势被系统取消时放弃本次跳转并清理气泡，
+  不会误跳到别的位置。
+- 拖动过程中的快速 seek 只走节流回调做预览，真正的 `commitSeek` 只发生在松手，
+  避免拖动途中反复 seek 造成的卡顿与进度回弹。
+
+### Windows 磁力播放
+
+- 重新编译 Windows 原生播放桥（`libtorrent_flutter.dll`），去掉上游默认的
+  `stop_when_ready` 行为：此前元数据/预取窗口满后 torrent 会进入 `finished` 状态并
+  `announce stopped`，随后被移除，表现为「播着播着不再下载、拖进度条不动、换集失效」。
+  重建后供数在播放全程持续，`readHead` 与 `done` 正常推进。
+- 修复 Windows 启动时 `LibtorrentFlutter.init()` 因预编译 DLL 缺少 `lt_set_log_path`
+  导出而直接失败（磁力引擎永远起不来、界面无限重试）。新增
+  `tool/patch_libtorrent_optional_logpath.py`，在构建前幂等地把该符号降级为可选。
+- 桌面端深链修复：`main()` 改为接收命令行参数（`main([List<String> args])`），
+  Windows 下 `罐子.exe "magnet:?xt=..."` 可一键起播；此前误读
+  `Platform.executableArguments`（只有 VM 参数），深链从未生效。
+- 磁力起播交接判据修正：改为 `buffer / downloadSpeed / nativeDownloadRate /
+  downloadedBytes` 全为 0 才判定「零数据」，避免把健康下载（1MB/s）误杀后删种重启。
+
+### 应用内更新
+
+- 下载改为系统通知式后台下载（单例 `UpdateDownloadManager`）：更新弹窗可关闭而下载继续，
+  通知栏显示进度，点通知直接回到安装页。
+- 安装前增加版本校验（原生 `verifyUpdateInstall` + Dart `downgradeBlocked`）：
+  已装版本高于新包时明确提示「请先卸载旧版本（含测试包）」，不再含糊报「已存在更高版本」。
+
 ## 1.1.9 (2026-11-11)
 
 > 本次为 Android + Windows + Web 三端一次性交付，版本 `1.1.9+69`。
