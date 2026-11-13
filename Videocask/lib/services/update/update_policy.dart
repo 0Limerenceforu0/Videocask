@@ -71,7 +71,8 @@ class AppVersion implements Comparable<AppVersion> {
   bool sameAs(AppVersion other) => compareTo(other) == 0;
 
   /// `1.1.8` / `1.1.8+68`
-  String get label => build == null ? '$major.$minor.$patch' : '$major.$minor.$patch+$build';
+  String get label =>
+      build == null ? '$major.$minor.$patch' : '$major.$minor.$patch+$build';
 
   @override
   String toString() => label;
@@ -249,18 +250,33 @@ ReleaseAsset? _pickAndroid(List<ReleaseAsset> assets, String? androidAbi) {
 /// 是否需要向用户提示更新。
 ///
 /// - 远程版本不比本地新 → 不提示；
-/// - 强制更新 → 即使已跳过也提示；
-/// - 用户跳过的正是这个构建 → 不提示（避免每天骚扰）。
+/// - 强制更新 → 即使已提示过也提示（强更必须拦住）；
+/// - **同一个版本已经提示过 → 不再提示**。判断依据是 [promptedVersion]（三段号，
+///   忽略 `+build`），它在弹窗真正展示前就落盘，因此用户点「稍后」、点关闭按钮、
+///   点右上角 ×、按 Esc 还是直接杀进程，都不会在下次启动时再次被提醒；
+///   下一个新版本发布时仍会各提醒一次。
+/// - [skippedBuild] 是旧版「稍后」的记录，保留以兼容已升级用户的本地数据。
 bool shouldPromptUpdate({
   required AppVersion current,
   required AppVersion latest,
   required bool mandatory,
   int? skippedBuild,
+  String? promptedVersion,
 }) {
   if (!latest.isNewerThan(current)) return false;
   if (mandatory) return true;
+  if (promptedVersion != null && promptedVersion == versionKey(latest)) {
+    return false;
+  }
   return skippedBuild == null || skippedBuild != (latest.build ?? 0);
 }
+
+/// 版本号的三段核心（忽略 `+build`），用于「该版本是否已提示过」的持久化比较。
+///
+/// 不能用 [AppVersion.label]：远程 tag 通常不带 `+build`，而本地注入的构建号
+/// 可能存在，两者字符串不相等会把「已提示」误判成「没提示」。
+String versionKey(AppVersion version) =>
+    '${version.major}.${version.minor}.${version.patch}';
 
 /// 版本变化的简短描述，用于弹窗标题。
 String describeVersionChange(AppVersion current, AppVersion latest) =>

@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../debug_log.dart';
+import '../download_storage.dart';
 import 'update_policy.dart';
 
 /// 安装失败原因（UI 据此给不同的引导文案）。
@@ -49,11 +50,27 @@ class UpdateInstaller {
 
   static const MethodChannel _channel = MethodChannel('videocask/update');
 
-  /// 下载目录：Android 用应用私有 cache（FileProvider 可共享，免存储权限），
-  /// Windows 用临时目录（更新完即可丢弃）。
+  /// 下载目录。
+  ///
+  /// - Android：应用私有 cache（FileProvider 可共享，免存储权限）；下载完成后再
+  ///   另存一份到公共 `Download/罐子`，卸载后仍可手动安装。
+  /// - 桌面端：跟随用户在设置里指定的下载目录（未指定则系统「下载」目录），
+  ///   安装包留在用户能直接找到的位置。
   static Future<Directory> downloadDirectory() async {
-    final base = await getTemporaryDirectory();
-    final dir = Directory('${base.path}${Platform.pathSeparator}videocask_updates');
+    if (!kIsWeb && Platform.isAndroid) {
+      final base = await getTemporaryDirectory();
+      final dir = Directory(
+        '${base.path}${Platform.pathSeparator}videocask_updates',
+      );
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      return dir;
+    }
+    final root = await DownloadStorage.resolveWorkingRoot();
+    final dir = Directory(
+      '${root.path}${Platform.pathSeparator}videocask_updates',
+    );
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }

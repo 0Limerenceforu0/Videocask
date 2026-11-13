@@ -304,6 +304,49 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
+            // 下载落盘到系统公共目录：卸载应用后文件仍在，且能被相册 / 文件管理器发现。
+            // - kind=video    → Movies/<subDir>（相册、视频播放器可见）
+            // - kind=download → Download/<subDir>（文件管理器可见，APK 可直接点开安装）
+            // 大文件复制可能耗时几十秒，必须放后台线程，避免卡住主线程。
+            MethodChannel(messenger, "videocask/storage").setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "publishFile" -> {
+                        val srcPath = call.argument<String>("path")
+                        val name = call.argument<String>("name")
+                        val kind = call.argument<String>("kind") ?: "download"
+                        val subDir = call.argument<String>("subDir") ?: "罐子"
+                        val mimeType = call.argument<String>("mimeType")
+                        if (srcPath.isNullOrBlank() || name.isNullOrBlank()) {
+                            result.error("BAD_ARGS", "缺少文件路径或文件名", null)
+                            return@setMethodCallHandler
+                        }
+                        Thread {
+                            try {
+                                val dest = publishToPublicDir(
+                                    this,
+                                    srcPath,
+                                    name,
+                                    kind,
+                                    subDir,
+                                    mimeType,
+                                )
+                                runOnUiThread { result.success(dest) }
+                            } catch (e: Exception) {
+                                runOnUiThread {
+                                    result.error(
+                                        "PUBLISH_FAILED",
+                                        e.message ?: "写入公共目录失败",
+                                        null,
+                                    )
+                                }
+                            }
+                        }.start()
+                    }
+
+                    else -> result.notImplemented()
+                }
+            }
+
             // ===== 硬件音量键 / 系统设置变化回写 Dart（多数设备经 VOLUME_CHANGED_ACTION）。
             val volumeEvents = EventChannel(messenger, "videocask/volumeEvents")
             var volumeSink: EventChannel.EventSink? = null
@@ -427,4 +470,102 @@ private fun exportToDownloads(context: MainActivity, srcPath: String, name: Stri
         displayPath = target.absolutePath
     }
     return displayPath
+}
+
+/**
+ * 把 [srcPath] 复制进系统公共目录，返回用户可见的存放位置描述。
+ *
+ * 之所以要「下载到私有目录 → 再复制到公共目录」而不是直接写公共路径：
+ * libtorrent 只会按文件路径写盘，而 Android 10+ 的分区存储不允许应用直接
+ * 用 File API 往公共媒体目录写别人的文件。走 MediaStore 插入 + 输出流复制，
+ * 既不需要任何存储权限，文件也会真正进入媒体库（相册 / 文件管理器可见），
+ * 卸载应用后依然保留。
+ *
+ * @param kind "video" → Movies/<subDir>（相册可见）；"download" → Download/<subDir>（可直接点开安装）
+ */
+private fun publishToPublicDir(
+    context: Context,
+    srcPath: String,
+    name: String,
+    kind: String,
+    subDir: String,
+    mimeType: String?,
+): String {
+    val src = File(srcPath)
+    if (!src.exists() || !src.isFile) throw IOException("source file not found: $srcPath")
+    val resolver = context.contentResolver
+    val mime = mimeType?.takeIf { it.isNotBlank() } ?: guessMimeType(name)
+    val isVideo = kind == "video"
+    val baseDir = if (isVideo) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_DOWNLOADS
+    val relative = "$baseDir/$subDir"
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val collection = if (isVideo) {
+            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, relative)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(collection, values)
+            ?: throw IOException("MediaStore insert failed")
+        try {
+            val out = resolver.openOutputStream(uri)
+                ?: throw IOException("open MediaStore output failed")
+            out.use { target ->
+                src.inputStream().use { it.copyTo(target) }
+            }
+            val done = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+            resolver.update(uri, done, null, null)
+        } catch (e: Exception) {
+            // 半成品要从媒体库里删掉，否则相册会留下 0 字节或残缺条目。
+            runCatching { resolver.delete(uri, null, null) }
+            throw e
+        }
+        return "$relative/$name"
+    }
+
+    // Android 9 及以下：写公共目录需要 WRITE_EXTERNAL_STORAGE；没授权就退到应用外部目录，
+    // 保证「能落地」优先，路径会在返回值里如实告知。
+    val granted = context.checkPermission(
+        android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
+        android.os.Process.myPid(),
+        android.os.Process.myUid(),
+    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    val publicDir = Environment.getExternalStoragePublicDirectory(baseDir)
+    val target = if (granted) {
+        File(File(publicDir, subDir), name)
+    } else {
+        val fallbackBase = context.getExternalFilesDir(baseDir) ?: context.filesDir
+        File(File(fallbackBase, subDir), name)
+    }
+    target.parentFile?.mkdirs()
+    src.inputStream().use { input ->
+        target.outputStream().use { output -> input.copyTo(output) }
+    }
+    return target.absolutePath
+}
+
+/** 按扩展名猜 MIME：MediaStore 靠它决定进「视频」还是「下载」分类，猜错会不显示。 */
+private fun guessMimeType(name: String): String {
+    val ext = name.substringAfterLast('.', "").lowercase()
+    return when (ext) {
+        "mp4", "m4v" -> "video/mp4"
+        "mkv" -> "video/x-matroska"
+        "avi" -> "video/x-msvideo"
+        "mov" -> "video/quicktime"
+        "wmv" -> "video/x-ms-wmv"
+        "flv" -> "video/x-flv"
+        "ts" -> "video/mp2t"
+        "webm" -> "video/webm"
+        "rmvb", "rm" -> "video/vnd.rn-realvideo"
+        "m2ts" -> "video/mp2t"
+        "apk" -> "application/vnd.android.package-archive"
+        "zip" -> "application/zip"
+        else -> "application/octet-stream"
+    }
 }

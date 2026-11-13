@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 
 import '../../config/app_navigator.dart';
 import '../../pages/settings/update_dialog.dart';
+import '../debug_log.dart';
+import '../download_storage.dart';
 import 'update_installer.dart';
 import 'update_notifier.dart';
 import 'update_policy.dart';
@@ -187,6 +189,10 @@ class UpdateDownloadManager {
         title: '更新已下载完成',
         text: '点击安装 v${info.version.label}',
       );
+      // Android：再存一份到公共「下载」目录，卸载应用后仍能从文件管理器找到安装包。
+      if (platform == UpdatePlatform.android) {
+        unawaited(_publishPackage(savePath, info.version.label));
+      }
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
         // 用户取消：回到初始态（通知已撤），不报错。
@@ -277,6 +283,27 @@ class UpdateDownloadManager {
     _cancelToken = null;
     unawaited(UpdateNotifier.instance.cancel());
     _reset();
+  }
+
+  /// 把安装包另存一份到公共「下载」目录：
+  /// 应用被卸载后，用户仍能在文件管理器里找到安装包并直接点开安装。
+  /// 失败不影响已经在私有目录里的安装包，仅记录日志。
+  Future<void> _publishPackage(String path, String versionLabel) async {
+    try {
+      final dest = await DownloadStorage.publish(
+        sourcePath: path,
+        name: '罐子_v$versionLabel.apk',
+        isVideo: false,
+      );
+      DebugLog.log('Update', '安装包已保存到公共目录: $dest');
+      if (state.value.downloadedPath == path) {
+        state.value = state.value.copyWith(
+          statusText: '下载完成，安装包同时保存在 $dest',
+        );
+      }
+    } catch (e) {
+      DebugLog.log('Update', '安装包保存到公共目录失败: $e');
+    }
   }
 
   /// 通知被点击：重开更新弹窗（它自己会显示当前进度 / 安装按钮）。

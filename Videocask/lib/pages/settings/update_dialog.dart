@@ -33,7 +33,8 @@ Future<void> checkUpdateManually(BuildContext context) async {
     ),
   );
 
-  final result = await UpdateService.instance.checkForUpdate(forceRefresh: true);
+  final result =
+      await UpdateService.instance.checkForUpdate(forceRefresh: true);
   if (!context.mounted) return;
   Navigator.of(context, rootNavigator: true).pop(); // 关掉 loading
 
@@ -63,6 +64,10 @@ Future<void> checkUpdateManually(BuildContext context) async {
 /// 启动后的静默检查：只在有新版本时弹窗，任何失败都静默。
 ///
 /// 由 [scheduleStartupUpdateCheck] 延迟调用，避免和首屏加载抢带宽。
+///
+/// 「同一版本只提醒一次」：弹窗**展示前**就把该版本记为已提示。用户无论点
+/// 「稍后」、点关闭、点右上角 ×、按 Esc 还是直接杀进程，下次启动都不会再被
+/// 同一个版本打扰；下一个新版本发布时仍会提醒一次。
 Future<void> runStartupUpdateCheck() async {
   final result = await UpdateService.instance.checkForUpdate();
   if (!result.hasUpdate) return;
@@ -73,11 +78,15 @@ Future<void> runStartupUpdateCheck() async {
     latest: info.version,
     mandatory: info.isMandatory,
     skippedBuild: UpdateService.instance.skippedBuild(),
+    promptedVersion: UpdateService.instance.promptedVersion(),
   );
   if (!shouldPrompt) return;
 
   final context = _rootContext();
   if (context == null || !context.mounted) return;
+  // 先落盘、再弹窗：宁可这一次没弹成（例如页面正在切换），也不要每次启动都骚扰。
+  await UpdateService.instance.markVersionPrompted(info.version);
+  if (!context.mounted) return;
   await showUpdateDialog(context, info, manual: false);
 }
 
@@ -201,7 +210,8 @@ class _UpdateDialogState extends State<UpdateDialog> {
     await UpdateDownloadManager.instance.start(_info, abi: _androidAbi);
   }
 
-  void _cancel() => UpdateDownloadManager.instance.cancel();
+  /// 中止下载（桌面端入口；Android 走通知栏的「取消下载」动作）。
+  void _cancelDownload() => UpdateDownloadManager.instance.cancel();
 
   Future<void> _install() async {
     await UpdateDownloadManager.instance.install();
@@ -265,7 +275,8 @@ class _UpdateDialogState extends State<UpdateDialog> {
               Text(
                 _subtitle(),
                 style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.textTheme.bodySmall?.color?.withValues(alpha: 0.7),
+                  color:
+                      theme.textTheme.bodySmall?.color?.withValues(alpha: 0.7),
                 ),
               ),
               if (_info.notes.trim().isNotEmpty) ...[
@@ -285,7 +296,8 @@ class _UpdateDialogState extends State<UpdateDialog> {
               if (busy || snap.phase == DownloadPhase.readyToInstall) ...[
                 const SizedBox(height: 18),
                 LinearProgressIndicator(
-                  value: snap.phase == DownloadPhase.downloading && snap.progress > 0
+                  value: snap.phase == DownloadPhase.downloading &&
+                          snap.progress > 0
                       ? snap.progress
                       : null,
                 ),
@@ -293,9 +305,14 @@ class _UpdateDialogState extends State<UpdateDialog> {
                 Text(snap.statusText, style: theme.textTheme.bodySmall),
                 if (snap.phase == DownloadPhase.downloading)
                   Text(
-                    '（可关闭此弹窗，下载将在后台继续，进度见系统通知）',
+                    // 桌面端没有下载通知（UpdateNotifier 只在 Android 弹），别把它写死进文案。
+                    (!kIsWeb &&
+                            defaultTargetPlatform == TargetPlatform.android)
+                        ? '（可关闭此弹窗，下载将在后台继续，进度见系统通知；需要中止请点通知里的「取消下载」）'
+                        : '（可关闭此弹窗，下载将在后台继续；需要中止请点「取消下载」）',
                     style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.textTheme.bodySmall?.color?.withValues(alpha: 0.6),
+                      color: theme.textTheme.bodySmall?.color
+                          ?.withValues(alpha: 0.6),
                       fontSize: 11,
                     ),
                   ),
@@ -369,11 +386,22 @@ class _UpdateDialogState extends State<UpdateDialog> {
       ];
     }
     if (snap.busy) {
+      // Android 有系统通知栏承载「取消下载」，弹窗里只留「关闭」，避免两个按钮语义打架。
+      // 桌面端 UpdateNotifier 不弹通知（没有取消入口），因此仍保留一个「取消下载」，
+      // 否则下载开始后用户没有任何中止手段。
+      if (snap.phase != DownloadPhase.downloading) return const [];
+      final hasNotificationBar =
+          !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
       return [
-        if (snap.phase == DownloadPhase.downloading)
+        if (!hasNotificationBar)
           TextButton(
-            onPressed: _cancel,
-            child: const Text('取消'),
+            onPressed: _cancelDownload,
+            child: const Text('取消下载'),
+          ),
+        if (!mandatory)
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('关闭'),
           ),
       ];
     }

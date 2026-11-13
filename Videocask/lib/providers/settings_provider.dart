@@ -274,6 +274,19 @@ class SettingsProvider extends ChangeNotifier {
   /// 仅WiFi缓存
   bool get onlyWifiCache => _onlyWifiCache;
 
+  /// 下载目录（桌面端自定义；空串表示跟随系统「下载」目录，移动端恒为空）
+  String _downloadDir = '';
+
+  /// 下载目录
+  String get downloadDir => _downloadDir;
+
+  /// 设置下载目录；传空串表示恢复系统默认目录。
+  Future<void> setDownloadDir(String path) async {
+    _downloadDir = path.trim();
+    await _storage.saveSetting('download_dir_override', _downloadDir);
+    notifyListeners();
+  }
+
   /// WebDAV是否已连接
   bool _webdavConnected = false;
 
@@ -435,6 +448,8 @@ class SettingsProvider extends ChangeNotifier {
     }
     _defaultQuality =
         _storage.getSetting(AppConstants.keyDefaultQuality) ?? '自动';
+    // 桌面端自定义下载目录（移动端/Web 恒为空，由 DownloadStorage 决定实际位置）。
+    _downloadDir = _storage.getSetting('download_dir_override') ?? '';
     // HLS master playlist 的变体选择读的是静态值，启动时就要同步。
     M3u8PlaylistResolver.preferredQuality = _defaultQuality;
     // 旧版有「硬件解码」布尔总开关 + 「硬解档位」两套控件，语义冲突。

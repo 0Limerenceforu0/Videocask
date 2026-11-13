@@ -98,8 +98,11 @@ void main() {
         name: 'videocask-android-x86_64-v1.1.8.apk',
         downloadUrl: 'https://x/c.apk',
       ),
-      ReleaseAsset(name: 'videocask-windows-x64-v1.1.8.zip', downloadUrl: 'https://x/d.zip'),
-      ReleaseAsset(name: 'videocask-web-v1.1.8.zip', downloadUrl: 'https://x/e.zip'),
+      ReleaseAsset(
+          name: 'videocask-windows-x64-v1.1.8.zip',
+          downloadUrl: 'https://x/d.zip'),
+      ReleaseAsset(
+          name: 'videocask-web-v1.1.8.zip', downloadUrl: 'https://x/e.zip'),
     ];
 
     test('Android 精确命中设备 abi', () {
@@ -108,7 +111,8 @@ void main() {
           assets: assets,
           platform: UpdatePlatform.android,
           androidAbi: 'armeabi-v7a',
-        )!.name,
+        )!
+            .name,
         'videocask-android-armeabi-v7a-v1.1.8.apk',
       );
     });
@@ -119,13 +123,15 @@ void main() {
           assets: assets,
           platform: UpdatePlatform.android,
           androidAbi: 'mips',
-        )!.name,
+        )!
+            .name,
         'videocask-android-arm64-v1.1.8.apk',
       );
     });
 
     test('Windows 只挑 windows 的 zip，不会拿到 apk', () {
-      final picked = pickAsset(assets: assets, platform: UpdatePlatform.windows)!;
+      final picked =
+          pickAsset(assets: assets, platform: UpdatePlatform.windows)!;
       expect(picked.name, 'videocask-windows-x64-v1.1.8.zip');
     });
 
@@ -140,7 +146,8 @@ void main() {
       expect(
         pickAsset(
           assets: const [
-            ReleaseAsset(name: 'videocask-android-arm64-v1.1.8.apk', downloadUrl: 'u'),
+            ReleaseAsset(
+                name: 'videocask-android-arm64-v1.1.8.apk', downloadUrl: 'u'),
           ],
           platform: UpdatePlatform.windows,
         ),
@@ -160,21 +167,25 @@ void main() {
           assets: legacy,
           platform: UpdatePlatform.android,
           androidAbi: 'arm64-v8a',
-        )!.name,
+        )!
+            .name,
         '罐子_android_arm64_v1.1.7.apk',
       );
     });
 
     test('不带 abi 的通用 apk 作为兜底', () {
       const generic = [
-        ReleaseAsset(name: 'videocask-android-v1.1.8.apk', downloadUrl: 'https://x/g.apk'),
+        ReleaseAsset(
+            name: 'videocask-android-v1.1.8.apk',
+            downloadUrl: 'https://x/g.apk'),
       ];
       expect(
         pickAsset(
           assets: generic,
           platform: UpdatePlatform.android,
           androidAbi: 'arm64-v8a',
-        )!.name,
+        )!
+            .name,
         'videocask-android-v1.1.8.apk',
       );
     });
@@ -243,6 +254,49 @@ void main() {
         ),
         isTrue,
       );
+    });
+
+    test('该版本已提示过（包括用户直接关掉弹窗）就不再提示', () {
+      expect(
+        shouldPromptUpdate(
+          current: current,
+          latest: AppVersion.tryParse('1.1.8')!,
+          mandatory: false,
+          promptedVersion: '1.1.8',
+        ),
+        isFalse,
+      );
+    });
+
+    test('提示过旧版本不影响新版本各提醒一次', () {
+      expect(
+        shouldPromptUpdate(
+          current: current,
+          latest: AppVersion.tryParse('1.1.9')!,
+          mandatory: false,
+          promptedVersion: '1.1.8',
+        ),
+        isTrue,
+      );
+    });
+
+    test('强制更新无视已提示记录', () {
+      expect(
+        shouldPromptUpdate(
+          current: current,
+          latest: AppVersion.tryParse('1.1.8')!,
+          mandatory: true,
+          promptedVersion: '1.1.8',
+        ),
+        isTrue,
+      );
+    });
+  });
+
+  group('versionKey', () {
+    test('忽略 tag 前缀与 +build，只比三段号', () {
+      expect(versionKey(AppVersion.tryParse('v1.1.10')!), '1.1.10');
+      expect(versionKey(AppVersion.tryParse('1.1.10+70')!), '1.1.10');
     });
   });
 }

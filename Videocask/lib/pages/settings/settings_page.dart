@@ -275,6 +275,16 @@ class SettingsPage extends StatelessWidget {
           onTap: () => AppRoutes.toCacheManager(context),
         ),
         _buildBiliDivider(colors),
+        _buildBiliSettingItem(
+          context,
+          colors,
+          icon: Icons.folder_open_outlined,
+          iconBgColor: const Color(0xFFFFB74D),
+          title: '下载位置',
+          value: _downloadLocationLabel(context),
+          onTap: () => unawaited(_chooseDownloadDirectory(context)),
+        ),
+        _buildBiliDivider(colors),
         _buildBiliSwitchItem(
           context,
           colors,
@@ -1334,6 +1344,59 @@ class SettingsPage extends StatelessWidget {
           ),
       ],
     );
+  }
+
+  /// 「下载位置」一行显示的目标：桌面端显示用户选的目录，移动端显示固定公共目录。
+  static String _downloadLocationLabel(BuildContext context) {
+    if (kIsWeb) return '由浏览器决定';
+    final platform = defaultTargetPlatform;
+    if (platform == TargetPlatform.android) return 'Download/罐子（安装包）';
+    if (platform == TargetPlatform.iOS) return '应用内目录';
+    final custom = context.select<SettingsProvider, String>(
+      (s) => s.downloadDir,
+    );
+    return custom.trim().isEmpty ? '系统「下载」目录' : custom;
+  }
+
+  /// 桌面端选目录；Android 说明固定的公共目录位置；Web 说明浏览器限制。
+  static Future<void> _chooseDownloadDirectory(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (kIsWeb) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('浏览器不允许网页指定保存路径，请在浏览器设置里修改下载目录')),
+      );
+      return;
+    }
+    final platform = defaultTargetPlatform;
+    if (platform == TargetPlatform.android) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            '应用更新安装包会保存到文件管理「Download/罐子」，卸载应用后安装包依然保留，'
+            '可直接在文件管理器里找到并安装',
+          ),
+          duration: Duration(seconds: 5),
+        ),
+      );
+      return;
+    }
+    if (platform == TargetPlatform.iOS) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('iOS 上的下载内容保存在应用内目录')),
+      );
+      return;
+    }
+    try {
+      final picked = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: '选择下载目录',
+      );
+      if (picked == null || picked.trim().isEmpty) return;
+      if (!context.mounted) return;
+      await context.read<SettingsProvider>().setDownloadDir(picked);
+      messenger.showSnackBar(SnackBar(content: Text('下载位置已改为 $picked')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('选择目录失败：$e')));
+    }
   }
 
   /// 导出数据：写成文件放进系统「下载」目录，不再塞进剪贴板。

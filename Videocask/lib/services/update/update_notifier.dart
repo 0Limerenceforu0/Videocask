@@ -25,6 +25,9 @@ class UpdateNotifier {
   static const String _channelDesc = '下载并安装新版本';
   static const String _icon = '@mipmap/ic_launcher';
 
+  /// 通知栏「取消下载」动作的 id，[init] 的回调据此区分「点通知主体」与「点动作按钮」。
+  static const String cancelActionId = 'videocask_update_cancel';
+
   bool _initialized = false;
 
   /// 初始化插件并注册「通知点击」回调。幂等，可多次调用。
@@ -70,6 +73,15 @@ class UpdateNotifier {
         playSound: false,
         enableVibration: false,
         icon: _icon,
+        // 中止下载的唯一入口放在通知栏：弹窗里只保留「关闭」，两者不再混淆。
+        actions: const <AndroidNotificationAction>[
+          AndroidNotificationAction(
+            cancelActionId,
+            '取消下载',
+            showsUserInterface: false,
+            cancelNotification: true,
+          ),
+        ],
       ),
     );
     await _plugin.show(_notifyId, title, text, details,
@@ -126,6 +138,11 @@ class UpdateNotifier {
   }
 
   void _onTap(NotificationResponse response) {
+    // 通知栏「取消下载」动作：真正中止下载并撤掉通知。
+    if (response.actionId == cancelActionId) {
+      UpdateDownloadManager.instance.cancel();
+      return;
+    }
     UpdateDownloadManager.instance.onNotificationTap();
   }
 }

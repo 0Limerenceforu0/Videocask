@@ -75,6 +75,9 @@ class UpdateService {
   /// 用户点「稍后」时记住跳过的构建号，同一构建不再反复弹。
   static const String _skippedBuildKey = 'update_skipped_build';
 
+  /// 已经向用户提示过更新的版本（三段号）。同一版本只提醒一次。
+  static const String _promptedVersionKey = 'update_prompted_version';
+
   // ==================== 平台通道 ====================
 
   static const MethodChannel _channel = MethodChannel('videocask/update');
@@ -154,7 +157,7 @@ class UpdateService {
       DebugLog.log(
         'Update',
         '检查更新: 远程 ${info.version.label} tag=${info.tagName} '
-        '资产=${info.assets.map((a) => a.name).join(",")}',
+            '资产=${info.assets.map((a) => a.name).join(",")}',
       );
       return _evaluate(info, current);
     } on DioException catch (e) {
@@ -324,8 +327,28 @@ class UpdateService {
   }
 
   int? skippedBuild() {
-    final value = StorageService().getIntSetting(_skippedBuildKey, defaultValue: -1);
+    final value =
+        StorageService().getIntSetting(_skippedBuildKey, defaultValue: -1);
     return value < 0 ? null : value;
+  }
+
+  /// 记录「该版本已经提醒过」。写入后启动检查不再对同一版本弹窗。
+  ///
+  /// 存的是三段号（见 [versionKey]），不存构建号：远程 tag 一般不带 `+build`，
+  /// 存构建号会在未注入 `APP_BUILD_NUMBER` 的平台上退化成 0，判断不稳定。
+  Future<void> markVersionPrompted(AppVersion version) async {
+    await StorageService().saveSetting(
+      _promptedVersionKey,
+      versionKey(version),
+    );
+  }
+
+  /// 上一次已提醒过的版本（三段号）；从未提醒过返回 null。
+  String? promptedVersion() {
+    final value = StorageService().getSetting(_promptedVersionKey);
+    if (value == null) return null;
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
   }
 
   // ==================== 下载 ====================
@@ -390,7 +413,8 @@ class UpdateService {
         final target = File(savePath);
         if (await target.exists()) await target.delete();
         await file.rename(savePath);
-        DebugLog.log('Update', '下载成功: $savePath (${await File(savePath).length()} 字节)');
+        DebugLog.log(
+            'Update', '下载成功: $savePath (${await File(savePath).length()} 字节)');
         return candidate;
       } on DioException catch (e) {
         lastError = e;
